@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package vectorizer
@@ -16,13 +16,13 @@ import (
 	"fmt"
 
 	"github.com/go-openapi/strfmt"
-	"github.com/semi-technologies/weaviate/entities/additional"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/modulecapabilities"
-	"github.com/semi-technologies/weaviate/entities/moduletools"
-	"github.com/semi-technologies/weaviate/entities/schema/crossref"
-	"github.com/semi-technologies/weaviate/entities/search"
-	"github.com/semi-technologies/weaviate/modules/ref2vec-centroid/config"
+	"github.com/weaviate/weaviate/entities/additional"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/modulecapabilities"
+	"github.com/weaviate/weaviate/entities/moduletools"
+	"github.com/weaviate/weaviate/entities/schema/crossref"
+	"github.com/weaviate/weaviate/entities/search"
+	"github.com/weaviate/weaviate/modules/ref2vec-centroid/config"
 )
 
 type calcFn func(vecs ...[]float32) ([]float32, error)
@@ -49,26 +49,25 @@ func New(cfg moduletools.ClassConfig, findFn modulecapabilities.FindObjectFn) *V
 	return v
 }
 
-func (v *Vectorizer) Object(ctx context.Context, obj *models.Object) error {
+func (v *Vectorizer) Object(ctx context.Context, obj *models.Object) ([]float32, error) {
 	props := v.config.ReferenceProperties()
 
 	refVecs, err := v.referenceVectorSearch(ctx, obj, props)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if len(refVecs) == 0 {
 		obj.Vector = nil
-		return nil
+		return nil, nil
 	}
 
 	vec, err := v.calcFn(refVecs...)
 	if err != nil {
-		return fmt.Errorf("calculate vector: %w", err)
+		return nil, fmt.Errorf("calculate vector: %w", err)
 	}
 
-	obj.Vector = vec
-	return nil
+	return vec, nil
 }
 
 func (v *Vectorizer) referenceVectorSearch(ctx context.Context,
@@ -80,7 +79,7 @@ func (v *Vectorizer) referenceVectorSearch(ctx context.Context,
 	// use the ids from parent's beacons to find the referenced objects
 	beacons := beaconsForVectorization(props, refProps)
 	for _, beacon := range beacons {
-		res, err := v.findReferenceObject(ctx, beacon)
+		res, err := v.findReferenceObject(ctx, beacon, obj.Tenant)
 		if err != nil {
 			return nil, err
 		}
@@ -96,14 +95,14 @@ func (v *Vectorizer) referenceVectorSearch(ctx context.Context,
 	return refVecs, nil
 }
 
-func (v *Vectorizer) findReferenceObject(ctx context.Context, beacon strfmt.URI) (res *search.Result, err error) {
+func (v *Vectorizer) findReferenceObject(ctx context.Context, beacon strfmt.URI, tenant string) (res *search.Result, err error) {
 	ref, err := crossref.Parse(beacon.String())
 	if err != nil {
 		return nil, fmt.Errorf("parse beacon %q: %w", beacon, err)
 	}
 
 	res, err = v.findObjectFn(ctx, ref.Class, ref.TargetID,
-		search.SelectProperties{}, additional.Properties{})
+		search.SelectProperties{}, additional.Properties{}, tenant)
 	if err != nil || res == nil {
 		if err == nil {
 			err = fmt.Errorf("not found")
@@ -124,7 +123,7 @@ func beaconsForVectorization(allProps map[string]interface{},
 		if _, ok := targetRefProps[prop]; ok {
 			switch refs := val.(type) {
 			case []interface{}:
-				// due to the fix introduced in https://github.com/semi-technologies/weaviate/pull/2320,
+				// due to the fix introduced in https://github.com/weaviate/weaviate/pull/2320,
 				// MultipleRef's can appear as empty []interface{} when no actual refs are provided for
 				// an object's reference property.
 				//

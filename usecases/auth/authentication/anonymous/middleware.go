@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package anonymous
@@ -16,7 +16,7 @@ import (
 	"strings"
 
 	"github.com/go-openapi/runtime"
-	"github.com/semi-technologies/weaviate/usecases/config"
+	"github.com/weaviate/weaviate/usecases/config"
 )
 
 // Client for anonymous access
@@ -34,7 +34,7 @@ func New(cfg config.Config) *Client {
 // disabled. This middleware should run after all previous middlewares.
 func (c *Client) Middleware(next http.Handler) http.Handler {
 	if c.config.Enabled {
-		// Anonymous Access is allowd, this means we don't have to validate any
+		// Anonymous Access is allowed, this means we don't have to validate any
 		// further, let's just return the original middleware stack
 
 		return next
@@ -44,7 +44,7 @@ func (c *Client) Middleware(next http.Handler) http.Handler {
 		if hasBearerAuth(r) {
 			// if an OIDC-Header is present we can be sure that the OIDC
 			// Authenticator has already validated the token, so we don't have to do
-			// anything and cann call the next handler.
+			// anything and can call the next handler.
 			next.ServeHTTP(w, r)
 			return
 		}

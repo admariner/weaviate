@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package modulecapabilities
@@ -15,20 +15,24 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/semi-technologies/weaviate/entities/moduletools"
+	"github.com/weaviate/weaviate/entities/moduletools"
 )
 
 type ModuleType string
 
 const (
-	Backup        ModuleType = "Backup"
-	Extension     ModuleType = "Extension"
-	Img2Vec       ModuleType = "Img2Vec"
-	Multi2Vec     ModuleType = "Multi2Vec"
-	Ref2Vec       ModuleType = "Ref2Vec"
-	Text2MultiVec ModuleType = "Text2MultiVec"
-	Text2Text     ModuleType = "Text2Text"
-	Text2Vec      ModuleType = "Text2Vec"
+	Backup              ModuleType = "Backup"
+	Extension           ModuleType = "Extension"
+	Img2Vec             ModuleType = "Img2Vec"
+	Multi2Vec           ModuleType = "Multi2Vec"
+	Ref2Vec             ModuleType = "Ref2Vec"
+	Text2MultiVec       ModuleType = "Text2MultiVec"
+	Text2TextGenerative ModuleType = "Text2TextGenerative"
+	Text2TextSummarize  ModuleType = "Text2TextSummarize"
+	Text2TextReranker   ModuleType = "Text2TextReranker"
+	Text2TextNER        ModuleType = "Text2TextNER"
+	Text2TextQnA        ModuleType = "Text2TextQnA"
+	Text2Vec            ModuleType = "Text2Vec"
 )
 
 type Module interface {

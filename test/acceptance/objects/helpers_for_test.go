@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package test
@@ -15,10 +15,10 @@ import (
 	"testing"
 
 	"github.com/go-openapi/strfmt"
-	"github.com/semi-technologies/weaviate/client/objects"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/test/helper"
-	testhelper "github.com/semi-technologies/weaviate/test/helper"
+	"github.com/weaviate/weaviate/client/objects"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/test/helper"
+	testhelper "github.com/weaviate/weaviate/test/helper"
 )
 
 func assertCreateObject(t *testing.T, className string, schema map[string]interface{}) strfmt.UUID {
@@ -40,12 +40,13 @@ func assertCreateObject(t *testing.T, className string, schema map[string]interf
 	return objectID
 }
 
-func assertCreateObjectWithID(t *testing.T, className string, id strfmt.UUID, schema map[string]interface{}) {
+func assertCreateObjectWithID(t *testing.T, className, tenant string, id strfmt.UUID, schema map[string]interface{}) {
 	params := objects.NewObjectsCreateParams().WithBody(
 		&models.Object{
 			ID:         id,
 			Class:      className,
 			Properties: schema,
+			Tenant:     tenant,
 		})
 
 	resp, err := helper.Client(t).Objects.ObjectsCreate(params, nil)
@@ -56,6 +57,18 @@ func assertCreateObjectWithID(t *testing.T, className string, id strfmt.UUID, sc
 
 func assertGetObject(t *testing.T, uuid strfmt.UUID) *models.Object {
 	getResp, err := helper.Client(t).Objects.ObjectsGet(objects.NewObjectsGetParams().WithID(uuid), nil)
+
+	var object *models.Object
+
+	helper.AssertRequestOk(t, getResp, err, func() {
+		object = getResp.Payload
+	})
+
+	return object
+}
+
+func assertGetObjectWithClass(t *testing.T, uuid strfmt.UUID, class string) *models.Object {
+	getResp, err := helper.Client(t).Objects.ObjectsClassGet(objects.NewObjectsClassGetParams().WithID(uuid).WithClassName(class), nil)
 
 	var object *models.Object
 

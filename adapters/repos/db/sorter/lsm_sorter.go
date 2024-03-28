@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package sorter
@@ -17,16 +17,16 @@ import (
 	"fmt"
 
 	"github.com/pkg/errors"
-	"github.com/semi-technologies/weaviate/adapters/repos/db/helpers"
-	"github.com/semi-technologies/weaviate/adapters/repos/db/lsmkv"
-	"github.com/semi-technologies/weaviate/entities/filters"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	"github.com/semi-technologies/weaviate/entities/storobj"
+	"github.com/weaviate/weaviate/adapters/repos/db/helpers"
+	"github.com/weaviate/weaviate/adapters/repos/db/lsmkv"
+	"github.com/weaviate/weaviate/entities/filters"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/storobj"
 )
 
 type LSMSorter interface {
 	Sort(ctx context.Context, limit int, sort []filters.Sort) ([]uint64, error)
-	SortDocIDs(ctx context.Context, limit int, sort []filters.Sort, ids []uint64) ([]uint64, error)
+	SortDocIDs(ctx context.Context, limit int, sort []filters.Sort, ids helpers.AllowList) ([]uint64, error)
 	SortDocIDsAndDists(ctx context.Context, limit int, sort []filters.Sort,
 		ids []uint64, dists []float32) ([]uint64, []float32, error)
 }
@@ -60,8 +60,8 @@ func (s *lsmSorter) Sort(ctx context.Context, limit int, sort []filters.Sort) ([
 	return helper.getSorted(ctx)
 }
 
-func (s *lsmSorter) SortDocIDs(ctx context.Context, limit int, sort []filters.Sort, ids []uint64) ([]uint64, error) {
-	helper, err := s.createHelper(sort, validateLimit(limit, len(ids)))
+func (s *lsmSorter) SortDocIDs(ctx context.Context, limit int, sort []filters.Sort, ids helpers.AllowList) ([]uint64, error) {
+	helper, err := s.createHelper(sort, validateLimit(limit, ids.Len()))
 	if err != nil {
 		return nil, err
 	}
@@ -120,11 +120,12 @@ func (h *lsmSorterHelper) getSorted(ctx context.Context) ([]uint64, error) {
 	return h.creator.extractDocIDs(sorter.getSorted()), nil
 }
 
-func (h *lsmSorterHelper) getSortedDocIDs(ctx context.Context, docIDs []uint64) ([]uint64, error) {
+func (h *lsmSorterHelper) getSortedDocIDs(ctx context.Context, docIDs helpers.AllowList) ([]uint64, error) {
 	sorter := newInsertSorter(h.comparator, h.limit)
 	docIDBytes := make([]byte, 8)
+	it := docIDs.Iterator()
 
-	for _, docID := range docIDs {
+	for docID, ok := it.Next(); ok; docID, ok = it.Next() {
 		binary.LittleEndian.PutUint64(docIDBytes, docID)
 		objData, err := h.bucket.GetBySecondary(0, docIDBytes)
 		if err != nil {

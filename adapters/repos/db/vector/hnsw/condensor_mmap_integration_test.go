@@ -4,36 +4,36 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package hnsw
 
 import (
-	"math/rand"
 	"os"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/entities/cyclemanager"
 )
 
 func TestMmapCondensor(t *testing.T) {
 	t.Skip() // TODO
 
-	rand.Seed(time.Now().UnixNano())
 	rootPath := t.TempDir()
 
 	logger, _ := test.NewNullLogger()
-	uncondensed, err := NewCommitLogger(rootPath, "uncondensed", 0, logger)
+	uncondensed, err := NewCommitLogger(rootPath, "uncondensed", logger,
+		cyclemanager.NewCallbackGroupNoop())
 	require.Nil(t, err)
 
-	perfect, err := NewCommitLogger(rootPath, "perfect", 0, logger)
+	perfect, err := NewCommitLogger(rootPath, "perfect", logger,
+		cyclemanager.NewCallbackGroupNoop())
 	require.Nil(t, err)
 
 	t.Run("add redundant data to the original log", func(t *testing.T) {
@@ -138,10 +138,11 @@ func TestMmapCondensor(t *testing.T) {
 
 // func TestCondensorWithoutEntrypoint(t *testing.T) {
 // 	rand.Seed(time.Now().UnixNano())
-// 	rootPath := t.TmpDir()
+// 	rootPath := t.TempDir()
 
 // 	logger, _ := test.NewNullLogger()
-// 	uncondensed, err := NewCommitLogger(rootPath, "uncondensed", 0, logger)
+// 	uncondensed, err := NewCommitLogger(rootPath, "uncondensed", logger,
+// 		cyclemanager.NewCallbackGroupNoop())
 // 	require.Nil(t, err)
 
 // 	t.Run("add data, but do not set an entrypoint", func(t *testing.T) {

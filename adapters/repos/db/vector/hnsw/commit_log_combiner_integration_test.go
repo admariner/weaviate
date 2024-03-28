@@ -4,18 +4,16 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package hnsw
 
 import (
-	"math/rand"
 	"os"
 	"testing"
-	"time"
 
 	"github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/assert"
@@ -28,7 +26,6 @@ func Test_CommitlogCombiner(t *testing.T) {
 	// about what should be appended, the actual condensing will be taken care of
 	// by the condensor
 
-	rand.Seed(time.Now().UnixNano())
 	rootPath := t.TempDir()
 	logger, _ := test.NewNullLogger()
 
@@ -52,7 +49,7 @@ func Test_CommitlogCombiner(t *testing.T) {
 	})
 
 	t.Run("run combiner", func(t *testing.T) {
-		err := NewCommitLogCombiner(rootPath, id, threshold, logger).Do()
+		_, err := NewCommitLogCombiner(rootPath, id, threshold, logger).Do()
 		require.Nil(t, err)
 	})
 

@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package distancer
@@ -52,4 +52,17 @@ func (d CosineDistanceProvider) Type() string {
 
 func (d CosineDistanceProvider) New(a []float32) Distancer {
 	return &CosineDistance{a: a}
+}
+
+func (d CosineDistanceProvider) Step(x, y []float32) float32 {
+	var sum float32
+	for i := range x {
+		sum += x[i] * y[i]
+	}
+
+	return sum
+}
+
+func (d CosineDistanceProvider) Wrap(x float32) float32 {
+	return 1 - x
 }

@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package objects
@@ -16,11 +16,14 @@ import (
 	"fmt"
 
 	"github.com/go-openapi/strfmt"
-	"github.com/semi-technologies/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/additional"
+	"github.com/weaviate/weaviate/entities/models"
 )
 
-// HeadObject check object's existence in the conncected DB
-func (m *Manager) HeadObject(ctx context.Context, principal *models.Principal, class string, id strfmt.UUID) (bool, *Error) {
+// HeadObject check object's existence in the connected DB
+func (m *Manager) HeadObject(ctx context.Context, principal *models.Principal, class string,
+	id strfmt.UUID, repl *additional.ReplicationProperties, tenant string,
+) (bool, *Error) {
 	path := fmt.Sprintf("objects/%s", id)
 	if class != "" {
 		path = fmt.Sprintf("objects/%s/%s", class, id)
@@ -38,9 +41,14 @@ func (m *Manager) HeadObject(ctx context.Context, principal *models.Principal, c
 	m.metrics.HeadObjectInc()
 	defer m.metrics.HeadObjectDec()
 
-	ok, err := m.vectorRepo.Exists(ctx, class, id)
+	ok, err := m.vectorRepo.Exists(ctx, class, id, repl, tenant)
 	if err != nil {
-		return false, &Error{"repo.exists", StatusInternalServerError, err}
+		switch err.(type) {
+		case ErrMultiTenancy:
+			return false, &Error{"repo.exists", StatusUnprocessableEntity, err}
+		default:
+			return false, &Error{"repo.exists", StatusInternalServerError, err}
+		}
 	}
 	return ok, nil
 }

@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package sorter
@@ -15,8 +15,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/semi-technologies/weaviate/entities/schema"
 	"github.com/stretchr/testify/assert"
+	"github.com/weaviate/weaviate/entities/schema"
 )
 
 func TestDataTypesHelper(t *testing.T) {
@@ -29,9 +29,7 @@ func TestDataTypesHelper(t *testing.T) {
 			propName string
 			expected []string
 		}{
-			{"stringProp", []string{string(schema.DataTypeString)}},
 			{"textProp", []string{string(schema.DataTypeText)}},
-			{"stringPropArray", []string{string(schema.DataTypeStringArray)}},
 			{"textPropArray", []string{string(schema.DataTypeTextArray)}},
 			{"intProp", []string{string(schema.DataTypeInt)}},
 			{"numberProp", []string{string(schema.DataTypeNumber)}},
@@ -58,9 +56,7 @@ func TestDataTypesHelper(t *testing.T) {
 			propName string
 			expected schema.DataType
 		}{
-			{"stringProp", schema.DataTypeString},
 			{"textProp", schema.DataTypeText},
-			{"stringPropArray", schema.DataTypeStringArray},
 			{"textPropArray", schema.DataTypeTextArray},
 			{"intProp", schema.DataTypeInt},
 			{"numberProp", schema.DataTypeNumber},

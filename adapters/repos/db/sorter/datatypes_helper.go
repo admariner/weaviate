@@ -4,17 +4,17 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package sorter
 
 import (
-	"github.com/semi-technologies/weaviate/entities/filters"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/filters"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
 )
 
 type dataTypesHelper struct {
@@ -37,7 +37,7 @@ func (h *dataTypesHelper) getStrings(propName string) []string {
 
 func (h *dataTypesHelper) find(propName string) []string {
 	if propName == filters.InternalPropID || propName == filters.InternalPropBackwardsCompatID {
-		return []string{string(schema.DataTypeString)}
+		return schema.DataTypeText.PropString()
 	}
 	if propName == filters.InternalPropCreationTimeUnix || propName == filters.InternalPropLastUpdateTimeUnix {
 		return []string{string(schema.DataTypeInt)}

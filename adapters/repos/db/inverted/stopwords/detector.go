@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package stopwords
@@ -14,8 +14,9 @@ package stopwords
 import (
 	"sync"
 
+	"github.com/weaviate/weaviate/entities/models"
+
 	"github.com/pkg/errors"
-	"github.com/semi-technologies/weaviate/entities/schema"
 )
 
 type StopwordDetector interface {
@@ -27,7 +28,7 @@ type Detector struct {
 	stopwords map[string]struct{}
 }
 
-func NewDetectorFromConfig(config schema.StopwordConfig) (*Detector, error) {
+func NewDetectorFromConfig(config models.StopwordConfig) (*Detector, error) {
 	d, err := NewDetectorFromPreset(config.Preset)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to create new detector from config")

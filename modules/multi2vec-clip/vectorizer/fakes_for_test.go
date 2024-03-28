@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package vectorizer
@@ -14,7 +14,7 @@ package vectorizer
 import (
 	"context"
 
-	"github.com/semi-technologies/weaviate/modules/multi2vec-clip/ent"
+	"github.com/weaviate/weaviate/modules/multi2vec-clip/ent"
 )
 
 type builder struct {
@@ -66,10 +66,18 @@ func (c fakeClassConfig) Property(propName string) map[string]interface{} {
 	return c.config
 }
 
+func (f fakeClassConfig) Tenant() string {
+	return ""
+}
+
+func (f fakeClassConfig) TargetVector() string {
+	return ""
+}
+
 type fakeClient struct{}
 
 func (c *fakeClient) Vectorize(ctx context.Context,
-	texts, images []string,
+	texts, images []string, config ent.VectorizationConfig,
 ) (*ent.VectorizationResult, error) {
 	result := &ent.VectorizationResult{
 		TextVectors:  [][]float32{{1.0, 2.0, 3.0, 4.0, 5.0}},

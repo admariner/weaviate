@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package objects
@@ -17,8 +17,9 @@ import (
 	"fmt"
 
 	"github.com/go-openapi/strfmt"
-	"github.com/semi-technologies/weaviate/entities/additional"
-	"github.com/semi-technologies/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/additional"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema/crossref"
 )
 
 // DeleteReferenceInput represents required inputs to delete a reference from an existing object.
@@ -33,20 +34,36 @@ type DeleteReferenceInput struct {
 	Reference models.SingleRef
 }
 
-func (m *Manager) DeleteObjectReference(
-	ctx context.Context,
-	principal *models.Principal,
-	input *DeleteReferenceInput,
+func (m *Manager) DeleteObjectReference(ctx context.Context, principal *models.Principal,
+	input *DeleteReferenceInput, repl *additional.ReplicationProperties, tenant string,
 ) *Error {
 	m.metrics.DeleteReferenceInc()
 	defer m.metrics.DeleteReferenceDec()
 
 	deprecatedEndpoint := input.Class == ""
-	res, err := m.getObjectFromRepo(ctx, input.Class, input.ID, additional.Properties{}, nil)
+	beacon, err := crossref.Parse(input.Reference.Beacon.String())
+	if err != nil {
+		return &Error{"cannot parse beacon", StatusBadRequest, err}
+	}
+	if input.Class != "" && beacon.Class == "" {
+		toClass, toBeacon, replace, err := m.autodetectToClass(ctx, principal, input.Class, input.Property, beacon)
+		if err != nil {
+			return err
+		}
+		if replace {
+			input.Reference.Class = toClass
+			input.Reference.Beacon = toBeacon
+		}
+	}
+
+	res, err := m.getObjectFromRepo(ctx, input.Class, input.ID,
+		additional.Properties{}, nil, tenant)
 	if err != nil {
 		errnf := ErrNotFound{}
 		if errors.As(err, &errnf) {
 			return &Error{"source object", StatusNotFound, err}
+		} else if errors.As(err, &ErrMultiTenancy{}) {
+			return &Error{"source object", StatusUnprocessableEntity, err}
 		}
 		return &Error{"source object", StatusInternalServerError, err}
 	}
@@ -67,10 +84,14 @@ func (m *Manager) DeleteObjectReference(
 		if deprecatedEndpoint { // for backward comp reasons
 			return &Error{"bad inputs deprecated", StatusNotFound, err}
 		}
+		if errors.As(err, &ErrMultiTenancy{}) {
+			return &Error{"bad inputs", StatusUnprocessableEntity, err}
+		}
 		return &Error{"bad inputs", StatusBadRequest, err}
 	}
 
 	obj := res.Object()
+	obj.Tenant = tenant
 	ok, errmsg := removeReference(obj, input.Property, &input.Reference)
 	if errmsg != "" {
 		return &Error{errmsg, StatusInternalServerError, nil}
@@ -80,12 +101,12 @@ func (m *Manager) DeleteObjectReference(
 	}
 	obj.LastUpdateTimeUnix = m.timeSource.Now()
 
-	err = m.vectorRepo.PutObject(ctx, obj, res.Vector)
+	err = m.vectorRepo.PutObject(ctx, obj, res.Vector, res.Vectors, repl)
 	if err != nil {
 		return &Error{"repo.putobject", StatusInternalServerError, err}
 	}
 
-	if err := m.updateRefVector(ctx, principal, input.Class, input.ID); err != nil {
+	if err := m.updateRefVector(ctx, principal, input.Class, input.ID, tenant); err != nil {
 		return &Error{"update ref vector", StatusInternalServerError, err}
 	}
 

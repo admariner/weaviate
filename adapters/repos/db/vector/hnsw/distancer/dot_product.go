@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package distancer
@@ -75,4 +75,17 @@ func (d DotProductProvider) Type() string {
 
 func (d DotProductProvider) New(a []float32) Distancer {
 	return &DotProduct{a: a}
+}
+
+func (d DotProductProvider) Step(x, y []float32) float32 {
+	var sum float32
+	for i := range x {
+		sum += x[i] * y[i]
+	}
+
+	return sum
+}
+
+func (d DotProductProvider) Wrap(x float32) float32 {
+	return -x
 }

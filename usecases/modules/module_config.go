@@ -4,39 +4,57 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package modules
 
 import (
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
 )
 
 type ClassBasedModuleConfig struct {
-	class      *models.Class
-	moduleName string
+	class        *models.Class
+	moduleName   string
+	tenant       string
+	targetVector string
 }
 
 func NewClassBasedModuleConfig(class *models.Class,
-	moduleName string,
+	moduleName, tenant, targetVector string,
 ) *ClassBasedModuleConfig {
 	return &ClassBasedModuleConfig{
-		class:      class,
-		moduleName: moduleName,
+		class:        class,
+		moduleName:   moduleName,
+		tenant:       tenant,
+		targetVector: targetVector,
 	}
+}
+
+func NewCrossClassModuleConfig() *ClassBasedModuleConfig {
+	// explicitly setting tenant to "" in order to flag that a cross class search
+	// is being done without a tenant context
+	return &ClassBasedModuleConfig{tenant: ""}
 }
 
 func (cbmc *ClassBasedModuleConfig) Class() map[string]interface{} {
 	return cbmc.ClassByModuleName(cbmc.moduleName)
 }
 
+func (cbmc *ClassBasedModuleConfig) Tenant() string {
+	return cbmc.tenant
+}
+
+func (cbmc *ClassBasedModuleConfig) TargetVector() string {
+	return cbmc.targetVector
+}
+
 func (cbmc *ClassBasedModuleConfig) ClassByModuleName(moduleName string) map[string]interface{} {
 	defaultConf := map[string]interface{}{}
-	asMap, ok := cbmc.class.ModuleConfig.(map[string]interface{})
+	asMap, ok := cbmc.getModuleConfig().(map[string]interface{})
 	if !ok {
 		return defaultConf
 	}
@@ -52,6 +70,16 @@ func (cbmc *ClassBasedModuleConfig) ClassByModuleName(moduleName string) map[str
 	}
 
 	return asMap
+}
+
+func (cbmc *ClassBasedModuleConfig) getModuleConfig() interface{} {
+	if cbmc.targetVector != "" {
+		if vectorConfig, ok := cbmc.class.VectorConfig[cbmc.targetVector]; ok {
+			return vectorConfig.Vectorizer
+		}
+		return nil
+	}
+	return cbmc.class.ModuleConfig
 }
 
 func (cbmc *ClassBasedModuleConfig) Property(propName string) map[string]interface{} {

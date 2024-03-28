@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package test
@@ -21,15 +21,17 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
-	"github.com/semi-technologies/weaviate/entities/backup"
-	"github.com/semi-technologies/weaviate/entities/moduletools"
-	mod "github.com/semi-technologies/weaviate/modules/backup-gcs"
-	"github.com/semi-technologies/weaviate/test/docker"
-	moduleshelper "github.com/semi-technologies/weaviate/test/helper/modules"
 	"github.com/sirupsen/logrus"
 	logrustest "github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/entities/backup"
+	"github.com/weaviate/weaviate/entities/moduletools"
+	mod "github.com/weaviate/weaviate/modules/backup-gcs"
+	"github.com/weaviate/weaviate/test/docker"
+	moduleshelper "github.com/weaviate/weaviate/test/helper/modules"
+	ubak "github.com/weaviate/weaviate/usecases/backup"
+	"github.com/weaviate/weaviate/usecases/config"
 )
 
 func Test_GCSBackend_Backup(t *testing.T) {
@@ -39,14 +41,14 @@ func Test_GCSBackend_Backup(t *testing.T) {
 		t.Fatal(errors.Wrapf(err, "cannot start"))
 	}
 
-	require.Nil(t, os.Setenv(envGCSEndpoint, compose.GetGCS().URI()))
+	t.Setenv(envGCSEndpoint, compose.GetGCS().URI())
 
 	t.Run("store backup meta", moduleLevelStoreBackupMeta)
 	t.Run("copy objects", moduleLevelCopyObjects)
 	t.Run("copy files", moduleLevelCopyFiles)
 
 	if err := compose.Terminate(ctx); err != nil {
-		t.Fatal(errors.Wrapf(err, "failed to terminte test containers"))
+		t.Fatal(errors.Wrapf(err, "failed to terminate test containers"))
 	}
 }
 
@@ -61,19 +63,19 @@ func moduleLevelStoreBackupMeta(t *testing.T) {
 	projectID := "project-id"
 	endpoint := os.Getenv(envGCSEndpoint)
 	metadataFilename := "backup.json"
+	gcsUseAuth := "false"
 
-	t.Run("setup env", func(t *testing.T) {
-		require.Nil(t, os.Setenv(envGCSEndpoint, endpoint))
-		require.Nil(t, os.Setenv(envGCSStorageEmulatorHost, endpoint))
-		require.Nil(t, os.Setenv(envGCSCredentials, ""))
-		require.Nil(t, os.Setenv(envGCSProjectID, projectID))
-		require.Nil(t, os.Setenv(envGCSBucket, bucketName))
-
-		moduleshelper.CreateGCSBucket(testCtx, t, projectID, bucketName)
-	})
+	t.Log("setup env")
+	t.Setenv(envGCSEndpoint, endpoint)
+	t.Setenv(envGCSStorageEmulatorHost, endpoint)
+	t.Setenv(envGCSCredentials, "")
+	t.Setenv(envGCSProjectID, projectID)
+	t.Setenv(envGCSBucket, bucketName)
+	t.Setenv(envGCSUseAuth, gcsUseAuth)
+	moduleshelper.CreateGCSBucket(testCtx, t, projectID, bucketName)
 
 	t.Run("store backup meta in gcs", func(t *testing.T) {
-		require.Nil(t, os.Setenv("BACKUP_GCS_BUCKET", bucketName))
+		t.Setenv("BACKUP_GCS_BUCKET", bucketName)
 		gcs := mod.New()
 		err := gcs.Init(testCtx, newFakeModuleParams(dataDir))
 		require.Nil(t, err)
@@ -100,7 +102,8 @@ func moduleLevelStoreBackupMeta(t *testing.T) {
 						Name: className,
 					},
 				},
-				Status: string(backup.Started),
+				Status:  string(backup.Started),
+				Version: ubak.Version,
 			}
 
 			b, err := json.Marshal(desc)
@@ -127,6 +130,7 @@ func moduleLevelStoreBackupMeta(t *testing.T) {
 			assert.Empty(t, meta.Error)
 			assert.Len(t, meta.Classes, 1)
 			assert.Equal(t, meta.Classes[0].Name, className)
+			assert.Equal(t, meta.Version, ubak.Version)
 			assert.Nil(t, meta.Classes[0].Error)
 		})
 	})
@@ -142,29 +146,29 @@ func moduleLevelCopyObjects(t *testing.T) {
 	bucketName := "bucket"
 	projectID := "project-id"
 	endpoint := os.Getenv(envGCSEndpoint)
+	gcsUseAuth := "false"
 
-	t.Run("setup env", func(t *testing.T) {
-		require.Nil(t, os.Setenv(envGCSEndpoint, endpoint))
-		require.Nil(t, os.Setenv(envGCSStorageEmulatorHost, endpoint))
-		require.Nil(t, os.Setenv(envGCSCredentials, ""))
-		require.Nil(t, os.Setenv(envGCSProjectID, projectID))
-		require.Nil(t, os.Setenv(envGCSBucket, bucketName))
-
-		moduleshelper.CreateGCSBucket(testCtx, t, projectID, bucketName)
-	})
+	t.Log("setup env")
+	t.Setenv(envGCSEndpoint, endpoint)
+	t.Setenv(envGCSStorageEmulatorHost, endpoint)
+	t.Setenv(envGCSCredentials, "")
+	t.Setenv(envGCSProjectID, projectID)
+	t.Setenv(envGCSBucket, bucketName)
+	t.Setenv(envGCSUseAuth, gcsUseAuth)
+	moduleshelper.CreateGCSBucket(testCtx, t, projectID, bucketName)
 
 	t.Run("copy objects", func(t *testing.T) {
-		require.Nil(t, os.Setenv("BACKUP_GCS_BUCKET", bucketName))
+		t.Setenv("BACKUP_GCS_BUCKET", bucketName)
 		gcs := mod.New()
 		err := gcs.Init(testCtx, newFakeModuleParams(dataDir))
 		require.Nil(t, err)
 
-		t.Run("put object to backet", func(t *testing.T) {
+		t.Run("put object to bucket", func(t *testing.T) {
 			err := gcs.PutObject(testCtx, backupID, key, []byte("hello"))
 			assert.Nil(t, err)
 		})
 
-		t.Run("get object from backet", func(t *testing.T) {
+		t.Run("get object from bucket", func(t *testing.T) {
 			meta, err := gcs.GetObject(testCtx, backupID, key)
 			assert.Nil(t, err)
 			assert.Equal(t, []byte("hello"), meta)
@@ -179,19 +183,19 @@ func moduleLevelCopyFiles(t *testing.T) {
 	dataDir := t.TempDir()
 	key := "moduleLevelCopyFiles"
 	backupID := "backup_id"
-	bucketName := "backet"
+	bucketName := "bucket"
 	projectID := "project-id"
 	endpoint := os.Getenv(envGCSEndpoint)
+	gcsUseAuth := "false"
 
-	t.Run("setup env", func(t *testing.T) {
-		require.Nil(t, os.Setenv(envGCSEndpoint, endpoint))
-		require.Nil(t, os.Setenv(envGCSStorageEmulatorHost, endpoint))
-		require.Nil(t, os.Setenv(envGCSCredentials, ""))
-		require.Nil(t, os.Setenv(envGCSProjectID, projectID))
-		require.Nil(t, os.Setenv(envGCSBucket, bucketName))
-
-		moduleshelper.CreateGCSBucket(testCtx, t, projectID, bucketName)
-	})
+	t.Log("setup env")
+	t.Setenv(envGCSEndpoint, endpoint)
+	t.Setenv(envGCSStorageEmulatorHost, endpoint)
+	t.Setenv(envGCSCredentials, "")
+	t.Setenv(envGCSProjectID, projectID)
+	t.Setenv(envGCSBucket, bucketName)
+	t.Setenv(envGCSUseAuth, gcsUseAuth)
+	moduleshelper.CreateGCSBucket(testCtx, t, projectID, bucketName)
 
 	t.Run("copy files", func(t *testing.T) {
 		fpaths := moduleshelper.CreateTestFiles(t, dataDir)
@@ -200,7 +204,7 @@ func moduleLevelCopyFiles(t *testing.T) {
 		require.Nil(t, err)
 		require.NotNil(t, expectedContents)
 
-		require.Nil(t, os.Setenv("BACKUP_GCS_BUCKET", bucketName))
+		t.Setenv("BACKUP_GCS_BUCKET", bucketName)
 		gcs := mod.New()
 		err = gcs.Init(testCtx, newFakeModuleParams(dataDir))
 		require.Nil(t, err)
@@ -235,6 +239,7 @@ func moduleLevelCopyFiles(t *testing.T) {
 type fakeModuleParams struct {
 	logger   logrus.FieldLogger
 	provider fakeStorageProvider
+	config   config.Config
 }
 
 func newFakeModuleParams(dataPath string) *fakeModuleParams {
@@ -255,6 +260,10 @@ func (f *fakeModuleParams) GetAppState() interface{} {
 
 func (f *fakeModuleParams) GetLogger() logrus.FieldLogger {
 	return f.logger
+}
+
+func (f *fakeModuleParams) GetConfig() config.Config {
+	return f.config
 }
 
 type fakeStorageProvider struct {

@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package modules
@@ -18,12 +18,12 @@ import (
 
 	"github.com/go-openapi/strfmt"
 	"github.com/google/uuid"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/modulecapabilities"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	"github.com/semi-technologies/weaviate/entities/vectorindex/hnsw"
 	"github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/assert"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/modulecapabilities"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/vectorindex/hnsw"
 )
 
 func TestProvider_ValidateVectorizer(t *testing.T) {
@@ -157,7 +157,7 @@ func TestProvider_UpdateVector(t *testing.T) {
 		class := models.Class{
 			Class: className,
 			ModuleConfig: map[string]interface{}{
-				modName: struct{}{},
+				modName: map[string]interface{}{},
 			},
 			VectorIndexConfig: hnsw.UserConfig{},
 		}
@@ -174,7 +174,7 @@ func TestProvider_UpdateVector(t *testing.T) {
 		p.SetSchemaGetter(&fakeSchemaGetter{sch})
 
 		obj := &models.Object{Class: className, ID: newUUID()}
-		err := p.UpdateVector(ctx, obj, &class, nil, repo.Object, logger)
+		err := p.UpdateVector(ctx, obj, &class, repo.Object, logger)
 		assert.Nil(t, err)
 	})
 
@@ -202,7 +202,7 @@ func TestProvider_UpdateVector(t *testing.T) {
 		p.SetSchemaGetter(&fakeSchemaGetter{sch})
 
 		obj := &models.Object{Class: className, ID: newUUID()}
-		err := p.UpdateVector(ctx, obj, class, nil, repo.Object, logger)
+		err := p.UpdateVector(ctx, obj, class, repo.Object, logger)
 		assert.Nil(t, err)
 	})
 
@@ -221,8 +221,8 @@ func TestProvider_UpdateVector(t *testing.T) {
 		p.SetSchemaGetter(&fakeSchemaGetter{schema.Schema{}})
 
 		obj := &models.Object{Class: "Other Class", ID: newUUID()}
-		err := p.UpdateVector(ctx, obj, class, nil, repo.Object, logger)
-		expectedErr := fmt.Sprintf("class %v not present", obj.Class)
+		err := p.UpdateVector(ctx, obj, class, repo.Object, logger)
+		expectedErr := fmt.Sprintf("no moduleconfig for class %v present", class.Class)
 		assert.EqualError(t, err, expectedErr)
 	})
 
@@ -249,7 +249,8 @@ func TestProvider_UpdateVector(t *testing.T) {
 		p.SetSchemaGetter(&fakeSchemaGetter{sch})
 
 		obj := &models.Object{Class: className, ID: newUUID()}
-		err := p.UpdateVector(ctx, obj, class, nil, repo.Object, logger)
+
+		err := p.UpdateVector(ctx, obj, class, repo.Object, logger)
 		expectedErr := "vector index config (struct {}) is not of type HNSW, " +
 			"but objects manager is restricted to HNSW"
 		assert.EqualError(t, err, expectedErr)

@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package schema
@@ -15,15 +15,16 @@ import (
 	"context"
 	"testing"
 
-	"github.com/go-openapi/strfmt"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	"github.com/semi-technologies/weaviate/usecases/config"
-	"github.com/semi-technologies/weaviate/usecases/scaler"
-	"github.com/semi-technologies/weaviate/usecases/sharding"
 	"github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/usecases/cluster"
+	"github.com/weaviate/weaviate/usecases/config"
+	"github.com/weaviate/weaviate/usecases/scaler"
+	"github.com/weaviate/weaviate/usecases/schema/migrate"
+	"github.com/weaviate/weaviate/usecases/sharding"
 )
 
 // TODO: These tests don't match the overall testing style in Weaviate.
@@ -44,7 +45,11 @@ func (n *NilMigrator) UpdateClass(ctx context.Context, className string, newClas
 	return nil
 }
 
-func (n *NilMigrator) GetShardsStatus(ctx context.Context, className string) (map[string]string, error) {
+func (n *NilMigrator) GetShardsQueueSize(ctx context.Context, className, tenant string) (map[string]int64, error) {
+	return nil, nil
+}
+
+func (n *NilMigrator) GetShardsStatus(ctx context.Context, className, tenant string) (map[string]string, error) {
 	return nil, nil
 }
 
@@ -54,6 +59,18 @@ func (n *NilMigrator) UpdateShardStatus(ctx context.Context, className, shardNam
 
 func (n *NilMigrator) AddProperty(ctx context.Context, className string, prop *models.Property) error {
 	return nil
+}
+
+func (n *NilMigrator) NewTenants(ctx context.Context, class *models.Class, creates []*migrate.CreateTenantPayload) (commit func(success bool), err error) {
+	return func(bool) {}, nil
+}
+
+func (n *NilMigrator) UpdateTenants(ctx context.Context, class *models.Class, updates []*migrate.UpdateTenantPayload) (commit func(success bool), err error) {
+	return func(bool) {}, nil
+}
+
+func (n *NilMigrator) DeleteTenants(ctx context.Context, class *models.Class, tenants []string) (commit func(success bool), err error) {
+	return func(bool) {}, nil
 }
 
 func (n *NilMigrator) UpdateProperty(ctx context.Context, className string, propName string, newName *string) error {
@@ -68,11 +85,27 @@ func (n *NilMigrator) DropProperty(ctx context.Context, className string, propNa
 	return nil
 }
 
-func (n *NilMigrator) ValidateVectorIndexConfigUpdate(ctx context.Context, old, updated schema.VectorIndexConfig) error {
+func (n *NilMigrator) ValidateVectorIndexConfigUpdate(ctx context.Context,
+	old, updated schema.VectorIndexConfig,
+) error {
 	return nil
 }
 
-func (n *NilMigrator) UpdateVectorIndexConfig(ctx context.Context, className string, updated schema.VectorIndexConfig) error {
+func (n *NilMigrator) UpdateVectorIndexConfig(ctx context.Context, className string,
+	updated schema.VectorIndexConfig,
+) error {
+	return nil
+}
+
+func (n *NilMigrator) ValidateVectorIndexConfigsUpdate(ctx context.Context,
+	old, updated map[string]schema.VectorIndexConfig,
+) error {
+	return nil
+}
+
+func (n *NilMigrator) UpdateVectorIndexConfigs(ctx context.Context, className string,
+	updated map[string]schema.VectorIndexConfig,
+) error {
 	return nil
 }
 
@@ -88,11 +121,22 @@ func (n *NilMigrator) RecalculateVectorDimensions(ctx context.Context) error {
 	return nil
 }
 
+func (n *NilMigrator) InvertedReindex(ctx context.Context, taskNames ...string) error {
+	return nil
+}
+
+func (n *NilMigrator) AdjustFilterablePropSettings(ctx context.Context) error {
+	return nil
+}
+
+func (n *NilMigrator) RecountProperties(ctx context.Context) error {
+	return nil
+}
+
 var schemaTests = []struct {
 	name string
 	fn   func(*testing.T, *Manager)
 }{
-	{name: "UpdateMeta", fn: testUpdateMeta},
 	{name: "AddObjectClass", fn: testAddObjectClass},
 	{name: "AddObjectClassWithExplicitVectorizer", fn: testAddObjectClassExplicitVectorizer},
 	{name: "AddObjectClassWithImplicitVectorizer", fn: testAddObjectClassImplicitVectorizer},
@@ -107,23 +151,6 @@ var schemaTests = []struct {
 	{name: "DropProperty", fn: testDropProperty},
 }
 
-func testUpdateMeta(t *testing.T, lsm *Manager) {
-	t.Parallel()
-	schema, err := lsm.GetSchema(nil)
-	require.Nil(t, err)
-
-	assert.Equal(t, schema.Objects.Maintainer, strfmt.Email(""))
-	assert.Equal(t, schema.Objects.Name, "")
-
-	assert.Nil(t, lsm.UpdateMeta(context.Background(), "http://new/context", "person@example.org", "somename"))
-
-	schema, err = lsm.GetSchema(nil)
-	require.Nil(t, err)
-
-	assert.Equal(t, schema.Objects.Maintainer, strfmt.Email("person@example.org"))
-	assert.Equal(t, schema.Objects.Name, "somename")
-}
-
 func testAddObjectClass(t *testing.T, lsm *Manager) {
 	t.Parallel()
 
@@ -133,8 +160,9 @@ func testAddObjectClass(t *testing.T, lsm *Manager) {
 	err := lsm.AddClass(context.Background(), nil, &models.Class{
 		Class: "Car",
 		Properties: []*models.Property{{
-			DataType: []string{"string"},
-			Name:     "dummy",
+			DataType:     schema.DataTypeText.PropString(),
+			Tokenization: models.PropertyTokenizationWhitespace,
+			Name:         "dummy",
 		}},
 		VectorIndexConfig: map[string]interface{}{
 			"dummy": "this should be parsed",
@@ -170,8 +198,9 @@ func testAddObjectClassExplicitVectorizer(t *testing.T, lsm *Manager) {
 		VectorIndexType: "hnsw",
 		Class:           "Car",
 		Properties: []*models.Property{{
-			DataType: []string{"string"},
-			Name:     "dummy",
+			DataType:     schema.DataTypeText.PropString(),
+			Tokenization: models.PropertyTokenizationWhitespace,
+			Name:         "dummy",
 		}},
 	})
 
@@ -196,8 +225,9 @@ func testAddObjectClassImplicitVectorizer(t *testing.T, lsm *Manager) {
 	err := lsm.AddClass(context.Background(), nil, &models.Class{
 		Class: "Car",
 		Properties: []*models.Property{{
-			DataType: []string{"string"},
-			Name:     "dummy",
+			DataType:     schema.DataTypeText.PropString(),
+			Tokenization: models.PropertyTokenizationWhitespace,
+			Name:         "dummy",
 		}},
 	})
 
@@ -222,8 +252,9 @@ func testAddObjectClassWrongVectorizer(t *testing.T, lsm *Manager) {
 		Class:      "Car",
 		Vectorizer: "vectorizer-5000000",
 		Properties: []*models.Property{{
-			DataType: []string{"string"},
-			Name:     "dummy",
+			DataType:     schema.DataTypeText.PropString(),
+			Tokenization: models.PropertyTokenizationWhitespace,
+			Name:         "dummy",
 		}},
 	})
 
@@ -242,8 +273,9 @@ func testAddObjectClassWrongIndexType(t *testing.T, lsm *Manager) {
 		Class:           "Car",
 		VectorIndexType: "vector-index-2-million",
 		Properties: []*models.Property{{
-			DataType: []string{"string"},
-			Name:     "dummy",
+			DataType:     schema.DataTypeText.PropString(),
+			Tokenization: models.PropertyTokenizationWhitespace,
+			Name:         "dummy",
 		}},
 	})
 
@@ -341,10 +373,14 @@ func testCantAddSameClassTwiceDifferentKinds(t *testing.T, lsm *Manager) {
 func testAddPropertyDuringCreation(t *testing.T, lsm *Manager) {
 	t.Parallel()
 
+	vFalse := false
+	vTrue := true
+
 	var properties []*models.Property = []*models.Property{
 		{
-			Name:     "color",
-			DataType: []string{"string"},
+			Name:         "color",
+			DataType:     schema.DataTypeText.PropString(),
+			Tokenization: models.PropertyTokenizationWhitespace,
 			ModuleConfig: map[string]interface{}{
 				"text2vec-contextionary": map[string]interface{}{
 					"vectorizePropertyName": true,
@@ -352,9 +388,11 @@ func testAddPropertyDuringCreation(t *testing.T, lsm *Manager) {
 			},
 		},
 		{
-			Name:          "colorRaw",
-			DataType:      []string{"string"},
-			IndexInverted: pointerToFalse(),
+			Name:            "colorRaw1",
+			DataType:        schema.DataTypeText.PropString(),
+			Tokenization:    models.PropertyTokenizationWhitespace,
+			IndexFilterable: &vFalse,
+			IndexSearchable: &vFalse,
 			ModuleConfig: map[string]interface{}{
 				"text2vec-contextionary": map[string]interface{}{
 					"skip": true,
@@ -362,8 +400,45 @@ func testAddPropertyDuringCreation(t *testing.T, lsm *Manager) {
 			},
 		},
 		{
-			Name:     "content",
-			DataType: []string{"string"},
+			Name:            "colorRaw2",
+			DataType:        schema.DataTypeText.PropString(),
+			Tokenization:    models.PropertyTokenizationWhitespace,
+			IndexFilterable: &vTrue,
+			IndexSearchable: &vFalse,
+			ModuleConfig: map[string]interface{}{
+				"text2vec-contextionary": map[string]interface{}{
+					"skip": true,
+				},
+			},
+		},
+		{
+			Name:            "colorRaw3",
+			DataType:        schema.DataTypeText.PropString(),
+			Tokenization:    models.PropertyTokenizationWhitespace,
+			IndexFilterable: &vFalse,
+			IndexSearchable: &vTrue,
+			ModuleConfig: map[string]interface{}{
+				"text2vec-contextionary": map[string]interface{}{
+					"skip": true,
+				},
+			},
+		},
+		{
+			Name:            "colorRaw4",
+			DataType:        schema.DataTypeText.PropString(),
+			Tokenization:    models.PropertyTokenizationWhitespace,
+			IndexFilterable: &vTrue,
+			IndexSearchable: &vTrue,
+			ModuleConfig: map[string]interface{}{
+				"text2vec-contextionary": map[string]interface{}{
+					"skip": true,
+				},
+			},
+		},
+		{
+			Name:         "content",
+			DataType:     schema.DataTypeText.PropString(),
+			Tokenization: models.PropertyTokenizationWhitespace,
 			ModuleConfig: map[string]interface{}{
 				"text2vec-contextionary": map[string]interface{}{
 					"vectorizePropertyName": false,
@@ -371,8 +446,9 @@ func testAddPropertyDuringCreation(t *testing.T, lsm *Manager) {
 			},
 		},
 		{
-			Name:     "allDefault",
-			DataType: []string{"string"},
+			Name:         "allDefault",
+			DataType:     schema.DataTypeText.PropString(),
+			Tokenization: models.PropertyTokenizationWhitespace,
 		},
 	}
 
@@ -384,18 +460,16 @@ func testAddPropertyDuringCreation(t *testing.T, lsm *Manager) {
 
 	objectClasses := testGetClasses(lsm)
 	require.Len(t, objectClasses, 1)
-	require.Len(t, objectClasses[0].Properties, 4)
+	require.Len(t, objectClasses[0].Properties, 7)
 	assert.Equal(t, objectClasses[0].Properties[0].Name, "color")
-	assert.Equal(t, objectClasses[0].Properties[0].DataType, []string{"string"})
+	assert.Equal(t, objectClasses[0].Properties[0].DataType, schema.DataTypeText.PropString())
 
 	assert.True(t, lsm.IndexedInverted("Car", "color"), "color should be indexed")
-	assert.False(t, lsm.IndexedInverted("Car", "colorRaw"), "color should not be indexed")
+	assert.False(t, lsm.IndexedInverted("Car", "colorRaw1"), "colorRaw1 should not be indexed")
+	assert.True(t, lsm.IndexedInverted("Car", "colorRaw2"), "colorRaw2 should be indexed")
+	assert.True(t, lsm.IndexedInverted("Car", "colorRaw3"), "colorRaw3 should be indexed")
+	assert.True(t, lsm.IndexedInverted("Car", "colorRaw4"), "colorRaw4 should be indexed")
 	assert.True(t, lsm.IndexedInverted("Car", "allDefault"), "allDefault should be indexed")
-}
-
-func pointerToFalse() *bool {
-	b := false
-	return &b
 }
 
 func testAddInvalidPropertyDuringCreation(t *testing.T, lsm *Manager) {
@@ -427,7 +501,7 @@ func testAddInvalidPropertyWithEmptyDataTypeDuringCreation(t *testing.T, lsm *Ma
 }
 
 func testDropProperty(t *testing.T, lsm *Manager) {
-	// TODO: https://github.com/semi-technologies/weaviate/issues/973
+	// TODO: https://github.com/weaviate/weaviate/issues/973
 	// Remove skip
 
 	t.Skip()
@@ -435,7 +509,7 @@ func testDropProperty(t *testing.T, lsm *Manager) {
 	t.Parallel()
 
 	var properties []*models.Property = []*models.Property{
-		{Name: "color", DataType: []string{"string"}},
+		{Name: "color", DataType: schema.DataTypeText.PropString(), Tokenization: models.PropertyTokenizationWhitespace},
 	}
 
 	err := lsm.AddClass(context.Background(), nil, &models.Class{
@@ -466,6 +540,7 @@ func TestSchema(t *testing.T) {
 			// to reduce boilerplate in each separate test.
 			t.Run(testCase.name, func(t *testing.T) {
 				sm := newSchemaManager()
+				sm.StartServing(context.Background()) // will also mark tx manager as ready
 				testCase.fn(t, sm)
 			})
 		}
@@ -486,11 +561,13 @@ func newSchemaManager() *Manager {
 		dummyConfig, dummyParseVectorConfig, // only option for now
 		vectorizerValidator, dummyValidateInvertedConfig,
 		&fakeModuleConfig{}, &fakeClusterState{hosts: []string{"node1"}},
-		&fakeTxClient{}, &fakeScaleOutManager{},
+		&fakeTxClient{}, &fakeTxPersistence{}, &fakeScaleOutManager{},
 	)
 	if err != nil {
 		panic(err.Error())
 	}
+
+	sm.StartServing(context.Background()) // will also mark tx manager as ready
 
 	return sm
 }
@@ -520,7 +597,7 @@ func Test_ParseVectorConfigOnDiskLoad(t *testing.T) {
 	logger, _ := test.NewNullLogger()
 
 	repo := newFakeRepo()
-	repo.schema = &State{
+	repo.schema = State{
 		ObjectSchema: &models.Schema{
 			Classes: []*models.Class{{
 				Class:             "Foo",
@@ -534,7 +611,7 @@ func Test_ParseVectorConfigOnDiskLoad(t *testing.T) {
 		dummyParseVectorConfig, // only option for now
 		&fakeVectorizerValidator{}, dummyValidateInvertedConfig,
 		&fakeModuleConfig{}, &fakeClusterState{hosts: []string{"node1"}},
-		&fakeTxClient{}, &fakeScaleOutManager{},
+		&fakeTxClient{}, &fakeTxPersistence{}, &fakeScaleOutManager{},
 	)
 	require.Nil(t, err)
 
@@ -542,6 +619,52 @@ func Test_ParseVectorConfigOnDiskLoad(t *testing.T) {
 	assert.Equal(t, fakeVectorConfig{
 		raw: "parse me, i should be in some sort of an object",
 	}, classes[0].VectorIndexConfig)
+}
+
+func Test_ExtendSchemaWithExistingPropName(t *testing.T) {
+	logger, _ := test.NewNullLogger()
+
+	repo := newFakeRepo()
+	repo.schema = State{
+		ObjectSchema: &models.Schema{
+			Classes: []*models.Class{{
+				Class:             "Foo",
+				VectorIndexConfig: "parse me, i should be in some sort of an object",
+				VectorIndexType:   "hnsw", // will always be set when loading from disk
+				Properties: []*models.Property{{
+					Name:         "my_prop",
+					DataType:     schema.DataTypeText.PropString(),
+					Tokenization: models.PropertyTokenizationWhitespace,
+				}},
+			}},
+		},
+	}
+	sm, err := NewManager(&NilMigrator{}, repo, logger, &fakeAuthorizer{},
+		config.Config{DefaultVectorizerModule: config.VectorizerModuleNone},
+		dummyParseVectorConfig, // only option for now
+		&fakeVectorizerValidator{}, dummyValidateInvertedConfig,
+		&fakeModuleConfig{}, &fakeClusterState{hosts: []string{"node1"}},
+		&fakeTxClient{}, &fakeTxPersistence{}, &fakeScaleOutManager{},
+	)
+	require.Nil(t, err)
+
+	// exactly identical name
+	err = sm.AddClassProperty(context.Background(), nil, "Foo", &models.Property{
+		Name:     "my_prop",
+		DataType: []string{"int"},
+	})
+
+	require.NotNil(t, err)
+	assert.Contains(t, err.Error(), "conflict for property")
+
+	// identical if case insensitive
+	err = sm.AddClassProperty(context.Background(), nil, "Foo", &models.Property{
+		Name:     "mY_pROp",
+		DataType: []string{"int"},
+	})
+
+	require.NotNil(t, err)
+	assert.Contains(t, err.Error(), "conflict for property")
 }
 
 type fakeScaleOutManager struct{}
@@ -553,4 +676,51 @@ func (f *fakeScaleOutManager) Scale(ctx context.Context,
 }
 
 func (f *fakeScaleOutManager) SetSchemaManager(sm scaler.SchemaManager) {
+}
+
+// does nothing as these do not involve crashes
+type fakeTxPersistence struct{}
+
+func (f *fakeTxPersistence) StoreTx(ctx context.Context,
+	tx *cluster.Transaction,
+) error {
+	return nil
+}
+
+func (f *fakeTxPersistence) DeleteTx(ctx context.Context,
+	txID string,
+) error {
+	return nil
+}
+
+func (f *fakeTxPersistence) IterateAll(ctx context.Context,
+	cb func(tx *cluster.Transaction),
+) error {
+	return nil
+}
+
+type fakeBroadcaster struct {
+	openErr       error
+	commitErr     error
+	abortErr      error
+	abortCalledId string
+}
+
+func (f *fakeBroadcaster) BroadcastTransaction(ctx context.Context,
+	tx *cluster.Transaction,
+) error {
+	return f.openErr
+}
+
+func (f *fakeBroadcaster) BroadcastAbortTransaction(ctx context.Context,
+	tx *cluster.Transaction,
+) error {
+	f.abortCalledId = tx.ID
+	return f.abortErr
+}
+
+func (f *fakeBroadcaster) BroadcastCommitTransaction(ctx context.Context,
+	tx *cluster.Transaction,
+) error {
+	return f.commitErr
 }

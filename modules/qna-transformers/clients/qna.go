@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package clients
@@ -18,11 +18,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/pkg/errors"
-	"github.com/semi-technologies/weaviate/entities/additional"
-	"github.com/semi-technologies/weaviate/modules/qna-transformers/ent"
 	"github.com/sirupsen/logrus"
+	"github.com/weaviate/weaviate/entities/additional"
+	"github.com/weaviate/weaviate/modules/qna-transformers/ent"
 )
 
 type qna struct {
@@ -31,15 +32,15 @@ type qna struct {
 	logger     logrus.FieldLogger
 }
 
-func New(origin string, logger logrus.FieldLogger) *qna {
+func New(origin string, timeout time.Duration, logger logrus.FieldLogger) *qna {
 	return &qna{
 		origin:     origin,
-		httpClient: &http.Client{},
+		httpClient: &http.Client{Timeout: timeout},
 		logger:     logger,
 	}
 }
 
-func (v *qna) Answer(ctx context.Context,
+func (q *qna) Answer(ctx context.Context,
 	text, question string,
 ) (*ent.AnswerResult, error) {
 	body, err := json.Marshal(answersInput{
@@ -50,13 +51,13 @@ func (v *qna) Answer(ctx context.Context,
 		return nil, errors.Wrapf(err, "marshal body")
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", v.url("/answers/"),
+	req, err := http.NewRequestWithContext(ctx, "POST", q.url("/answers/"),
 		bytes.NewReader(body))
 	if err != nil {
 		return nil, errors.Wrap(err, "create POST request")
 	}
 
-	res, err := v.httpClient.Do(req)
+	res, err := q.httpClient.Do(req)
 	if err != nil {
 		return nil, errors.Wrap(err, "send POST request")
 	}
@@ -86,8 +87,8 @@ func (v *qna) Answer(ctx context.Context,
 	}, nil
 }
 
-func (v *qna) url(path string) string {
-	return fmt.Sprintf("%s%s", v.origin, path)
+func (q *qna) url(path string) string {
+	return fmt.Sprintf("%s%s", q.origin, path)
 }
 
 type answersInput struct {

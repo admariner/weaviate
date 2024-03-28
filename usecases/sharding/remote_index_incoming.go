@@ -4,27 +4,29 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package sharding
 
 import (
 	"context"
+	"fmt"
 	"io"
 
 	"github.com/go-openapi/strfmt"
 	"github.com/pkg/errors"
-	"github.com/semi-technologies/weaviate/entities/additional"
-	"github.com/semi-technologies/weaviate/entities/aggregation"
-	"github.com/semi-technologies/weaviate/entities/filters"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	"github.com/semi-technologies/weaviate/entities/search"
-	"github.com/semi-technologies/weaviate/entities/searchparams"
-	"github.com/semi-technologies/weaviate/entities/storobj"
-	"github.com/semi-technologies/weaviate/usecases/objects"
+	"github.com/weaviate/weaviate/entities/additional"
+	"github.com/weaviate/weaviate/entities/aggregation"
+	"github.com/weaviate/weaviate/entities/filters"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/search"
+	"github.com/weaviate/weaviate/entities/searchparams"
+	"github.com/weaviate/weaviate/entities/storobj"
+	"github.com/weaviate/weaviate/usecases/objects"
+	"github.com/weaviate/weaviate/usecases/replica"
 )
 
 type RemoteIncomingRepo interface {
@@ -50,22 +52,30 @@ type RemoteIndexIncomingRepo interface {
 	IncomingMultiGetObjects(ctx context.Context, shardName string,
 		ids []strfmt.UUID) ([]*storobj.Object, error)
 	IncomingSearch(ctx context.Context, shardName string,
-		vector []float32, distance float32, limit int, filters *filters.LocalFilter,
-		keywordRanking *searchparams.KeywordRanking, sort []filters.Sort,
-		additional additional.Properties) ([]*storobj.Object, []float32, error)
+		vector []float32, targetVector string, distance float32, limit int,
+		filters *filters.LocalFilter, keywordRanking *searchparams.KeywordRanking,
+		sort []filters.Sort, cursor *filters.Cursor, groupBy *searchparams.GroupBy,
+		additional additional.Properties,
+	) ([]*storobj.Object, []float32, error)
 	IncomingAggregate(ctx context.Context, shardName string,
 		params aggregation.Params) (*aggregation.Result, error)
-	IncomingFindDocIDs(ctx context.Context, shardName string,
-		filters *filters.LocalFilter) ([]uint64, error)
+
+	IncomingFindUUIDs(ctx context.Context, shardName string,
+		filters *filters.LocalFilter) ([]strfmt.UUID, error)
 	IncomingDeleteObjectBatch(ctx context.Context, shardName string,
-		docIDs []uint64, dryRun bool) objects.BatchSimpleObjects
+		uuids []strfmt.UUID, dryRun bool) objects.BatchSimpleObjects
+	IncomingGetShardQueueSize(ctx context.Context, shardName string) (int64, error)
 	IncomingGetShardStatus(ctx context.Context, shardName string) (string, error)
 	IncomingUpdateShardStatus(ctx context.Context, shardName, targetStatus string) error
+	IncomingOverwriteObjects(ctx context.Context, shard string,
+		vobjects []*objects.VObject) ([]replica.RepairResponse, error)
+	IncomingDigestObjects(ctx context.Context, shardName string,
+		ids []strfmt.UUID) (result []replica.RepairResponse, err error)
 
 	// Scale-Out Replication POC
 	IncomingFilePutter(ctx context.Context, shardName,
 		filePath string) (io.WriteCloser, error)
-	IncomingCreateShard(ctx context.Context, shardName string) error
+	IncomingCreateShard(ctx context.Context, className string, shardName string) error
 	IncomingReinitShard(ctx context.Context, shardName string) error
 }
 
@@ -171,9 +181,9 @@ func (rii *RemoteIndexIncoming) MultiGetObjects(ctx context.Context, indexName,
 }
 
 func (rii *RemoteIndexIncoming) Search(ctx context.Context, indexName, shardName string,
-	vector []float32, distance float32, limit int, filters *filters.LocalFilter,
-	keywordRanking *searchparams.KeywordRanking, sort []filters.Sort,
-	additional additional.Properties,
+	vector []float32, targetVector string, distance float32, limit int, filters *filters.LocalFilter,
+	keywordRanking *searchparams.KeywordRanking, sort []filters.Sort, cursor *filters.Cursor,
+	groupBy *searchparams.GroupBy, additional additional.Properties,
 ) ([]*storobj.Object, []float32, error) {
 	index := rii.repo.GetIndexForIncoming(schema.ClassName(indexName))
 	if index == nil {
@@ -181,7 +191,7 @@ func (rii *RemoteIndexIncoming) Search(ctx context.Context, indexName, shardName
 	}
 
 	return index.IncomingSearch(
-		ctx, shardName, vector, distance, limit, filters, keywordRanking, sort, additional)
+		ctx, shardName, vector, targetVector, distance, limit, filters, keywordRanking, sort, cursor, groupBy, additional)
 }
 
 func (rii *RemoteIndexIncoming) Aggregate(ctx context.Context, indexName, shardName string,
@@ -195,19 +205,19 @@ func (rii *RemoteIndexIncoming) Aggregate(ctx context.Context, indexName, shardN
 	return index.IncomingAggregate(ctx, shardName, params)
 }
 
-func (rii *RemoteIndexIncoming) FindDocIDs(ctx context.Context, indexName, shardName string,
+func (rii *RemoteIndexIncoming) FindUUIDs(ctx context.Context, indexName, shardName string,
 	filters *filters.LocalFilter,
-) ([]uint64, error) {
+) ([]strfmt.UUID, error) {
 	index := rii.repo.GetIndexForIncoming(schema.ClassName(indexName))
 	if index == nil {
 		return nil, errors.Errorf("local index %q not found", indexName)
 	}
 
-	return index.IncomingFindDocIDs(ctx, shardName, filters)
+	return index.IncomingFindUUIDs(ctx, shardName, filters)
 }
 
 func (rii *RemoteIndexIncoming) DeleteObjectBatch(ctx context.Context, indexName, shardName string,
-	docIDs []uint64, dryRun bool,
+	uuids []strfmt.UUID, dryRun bool,
 ) objects.BatchSimpleObjects {
 	index := rii.repo.GetIndexForIncoming(schema.ClassName(indexName))
 	if index == nil {
@@ -215,7 +225,18 @@ func (rii *RemoteIndexIncoming) DeleteObjectBatch(ctx context.Context, indexName
 		return objects.BatchSimpleObjects{objects.BatchSimpleObject{Err: err}}
 	}
 
-	return index.IncomingDeleteObjectBatch(ctx, shardName, docIDs, dryRun)
+	return index.IncomingDeleteObjectBatch(ctx, shardName, uuids, dryRun)
+}
+
+func (rii *RemoteIndexIncoming) GetShardQueueSize(ctx context.Context,
+	indexName, shardName string,
+) (int64, error) {
+	index := rii.repo.GetIndexForIncoming(schema.ClassName(indexName))
+	if index == nil {
+		return 0, errors.Errorf("local index %q not found", indexName)
+	}
+
+	return index.IncomingGetShardQueueSize(ctx, shardName)
 }
 
 func (rii *RemoteIndexIncoming) GetShardStatus(ctx context.Context,
@@ -259,7 +280,7 @@ func (rii *RemoteIndexIncoming) CreateShard(ctx context.Context,
 		return errors.Errorf("local index %q not found", indexName)
 	}
 
-	return index.IncomingCreateShard(ctx, shardName)
+	return index.IncomingCreateShard(ctx, indexName, shardName)
 }
 
 func (rii *RemoteIndexIncoming) ReInitShard(ctx context.Context,
@@ -271,4 +292,26 @@ func (rii *RemoteIndexIncoming) ReInitShard(ctx context.Context,
 	}
 
 	return index.IncomingReinitShard(ctx, shardName)
+}
+
+func (rii *RemoteIndexIncoming) OverwriteObjects(ctx context.Context,
+	indexName, shardName string, vobjects []*objects.VObject,
+) ([]replica.RepairResponse, error) {
+	index := rii.repo.GetIndexForIncoming(schema.ClassName(indexName))
+	if index == nil {
+		return nil, fmt.Errorf("local index %q not found", indexName)
+	}
+
+	return index.IncomingOverwriteObjects(ctx, shardName, vobjects)
+}
+
+func (rii *RemoteIndexIncoming) DigestObjects(ctx context.Context,
+	indexName, shardName string, ids []strfmt.UUID,
+) ([]replica.RepairResponse, error) {
+	index := rii.repo.GetIndexForIncoming(schema.ClassName(indexName))
+	if index == nil {
+		return nil, fmt.Errorf("local index %q not found", indexName)
+	}
+
+	return index.IncomingDigestObjects(ctx, shardName, ids)
 }

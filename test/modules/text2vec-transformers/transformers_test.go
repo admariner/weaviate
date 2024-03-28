@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package test
@@ -15,10 +15,10 @@ import (
 	"os"
 	"testing"
 
-	"github.com/semi-technologies/weaviate/test/helper"
-	graphqlhelper "github.com/semi-technologies/weaviate/test/helper/graphql"
-	"github.com/semi-technologies/weaviate/test/helper/sample-schema/books"
 	"github.com/stretchr/testify/assert"
+	"github.com/weaviate/weaviate/test/helper"
+	graphqlhelper "github.com/weaviate/weaviate/test/helper/graphql"
+	"github.com/weaviate/weaviate/test/helper/sample-schema/books"
 )
 
 func Test_T2VTransformers(t *testing.T) {
@@ -41,7 +41,7 @@ func Test_T2VTransformers(t *testing.T) {
 					Books(
 						nearText: {
 							concepts: ["Frank Herbert"]
-							distance: 0.7
+							distance: 0.3
 						}
 					){
 						title

@@ -4,17 +4,17 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package sorter
 
 import (
-	"github.com/semi-technologies/weaviate/entities/filters"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	"github.com/semi-technologies/weaviate/entities/storobj"
+	"github.com/weaviate/weaviate/entities/filters"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/storobj"
 )
 
 type Sorter interface {
@@ -70,7 +70,7 @@ func (h *objectsSorterHelper) sort(objects []*storobj.Object, distances []float3
 	sorter := newDefaultSorter(h.comparator, count)
 
 	for i := range objects {
-		payload := object_distance_payload{o: objects[i]}
+		payload := objectDistancePayload{o: objects[i]}
 		if withDistances {
 			payload.d = distances[i]
 		}
@@ -88,7 +88,7 @@ func (h *objectsSorterHelper) sort(objects []*storobj.Object, distances []float3
 		if i >= slice {
 			return true
 		}
-		p := payload.(object_distance_payload)
+		p := payload.(objectDistancePayload)
 		objects[i] = p.o
 		if withDistances {
 			distances[i] = p.d
@@ -103,7 +103,7 @@ func (h *objectsSorterHelper) sort(objects []*storobj.Object, distances []float3
 	return objects[:slice], distances, nil
 }
 
-type object_distance_payload struct {
+type objectDistancePayload struct {
 	o *storobj.Object
 	d float32
 }

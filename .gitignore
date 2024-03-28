@@ -3,7 +3,6 @@ nightly/*
 dist/*
 dist
 nightly
-dist
 
 # ignore confectionary files
 contextionary/contextionary.vocab
@@ -69,7 +68,8 @@ node_modules
 .!
 
 # IDE files
-.idea
+.idea/
+.vscode/
 
 # Local files
 _local
@@ -77,8 +77,6 @@ _local
 # Remove weave files
 weave-current.json
 weave-current-discovery.json
-.vscode/
-
 
 # local nodes folders
 graphqlapi/prototype/node_modules/
@@ -89,6 +87,7 @@ graphqlapi/prototype/node_modules/
 docker-compose/runtime-stable/data
 docker-compose/runtime-unstable/data
 c.out
+/cmd/weaviate-server/build_artifacts/
 
 esbackups/
 **/testdata/
@@ -105,3 +104,11 @@ benchmark_results_*.json
 
 # local credentials
 creds.json
+
+# VSCode
+cmd/weaviate-server/__debug_bin*
+
+# python test
+.venv
+**/__pycache__
+*.pyc

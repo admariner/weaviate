@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package hnsw
@@ -14,15 +14,27 @@ package hnsw
 import (
 	"context"
 	"testing"
+	"time"
 
-	"github.com/semi-technologies/weaviate/adapters/repos/db/vector/hnsw/distancer"
-	ent "github.com/semi-technologies/weaviate/entities/vectorindex/hnsw"
-	testhelper "github.com/semi-technologies/weaviate/test/helper"
+	"github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/adapters/repos/db/vector/hnsw/distancer"
+	"github.com/weaviate/weaviate/adapters/repos/db/vector/testinghelpers"
+	"github.com/weaviate/weaviate/entities/cyclemanager"
+	ent "github.com/weaviate/weaviate/entities/vectorindex/hnsw"
+	testhelper "github.com/weaviate/weaviate/test/helper"
 )
 
 func TestPeriodicTombstoneRemoval(t *testing.T) {
+	logger, _ := test.NewNullLogger()
+	cleanupIntervalSeconds := 1
+	tombstoneCallbacks := cyclemanager.NewCallbackGroup("tombstone", logger, 1)
+	tombstoneCleanupCycle := cyclemanager.NewManager(
+		cyclemanager.NewFixedTicker(time.Duration(cleanupIntervalSeconds)*time.Second),
+		tombstoneCallbacks.CycleCallback, logger)
+	tombstoneCleanupCycle.Start()
+
 	index, err := New(Config{
 		RootPath:              "doesnt-matter-as-committlogger-is-mocked-out",
 		ID:                    "automatic-tombstone-removal",
@@ -30,10 +42,11 @@ func TestPeriodicTombstoneRemoval(t *testing.T) {
 		DistanceProvider:      distancer.NewCosineDistanceProvider(),
 		VectorForIDThunk:      testVectorForID,
 	}, ent.UserConfig{
-		CleanupIntervalSeconds: 1,
+		CleanupIntervalSeconds: cleanupIntervalSeconds,
 		MaxConnections:         30,
 		EFConstruction:         128,
-	})
+	}, tombstoneCallbacks, cyclemanager.NewCallbackGroupNoop(),
+		cyclemanager.NewCallbackGroupNoop(), testinghelpers.NewDummyStore(t))
 	index.PostStartup()
 
 	require.Nil(t, err)
@@ -71,6 +84,9 @@ func TestPeriodicTombstoneRemoval(t *testing.T) {
 	})
 
 	if err := index.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := tombstoneCleanupCycle.StopAndWait(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 }

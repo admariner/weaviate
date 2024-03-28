@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package test
@@ -16,9 +16,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/semi-technologies/weaviate/test/docker"
-	"github.com/semi-technologies/weaviate/test/helper/journey"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/test/docker"
+	"github.com/weaviate/weaviate/test/helper/journey"
 )
 
 const (
@@ -41,13 +41,13 @@ func Test_BackupJourney(t *testing.T) {
 
 		defer func() {
 			if err := compose.Terminate(ctx); err != nil {
-				t.Fatalf("failed to terminte test containers: %s", err.Error())
+				t.Fatalf("failed to terminate test containers: %s", err.Error())
 			}
 		}()
 
 		t.Run("backup-filesystem", func(t *testing.T) {
 			journey.BackupJourneyTests_SingleNode(t, compose.GetWeaviate().URI(),
-				"filesystem", fsBackupJourneyClassName, fsBackupJourneyBackupIDSingleNode)
+				"filesystem", fsBackupJourneyClassName, fsBackupJourneyBackupIDSingleNode, nil)
 		})
 	})
 
@@ -61,13 +61,14 @@ func Test_BackupJourney(t *testing.T) {
 
 		defer func() {
 			if err := compose.Terminate(ctx); err != nil {
-				t.Fatalf("failed to terminte test containers: %s", err.Error())
+				t.Fatalf("failed to terminate test containers: %s", err.Error())
 			}
 		}()
 
 		t.Run("backup-filesystem", func(t *testing.T) {
-			journey.BackupJourneyTests_Cluster(t, "filesystem", fsBackupJourneyClassName,
-				fsBackupJourneyBackupIDCluster, compose.GetWeaviate().URI(), compose.GetWeaviateNode2().URI())
+			journey.BackupJourneyTests_Cluster(t, "filesystem",
+				fsBackupJourneyClassName, fsBackupJourneyBackupIDCluster, nil,
+				compose.GetWeaviate().URI(), compose.GetWeaviateNode2().URI())
 		})
 	})
 }

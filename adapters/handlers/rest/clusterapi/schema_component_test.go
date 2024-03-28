@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package clusterapi_test
@@ -18,17 +18,17 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/semi-technologies/weaviate/adapters/clients"
-	"github.com/semi-technologies/weaviate/adapters/handlers/rest/clusterapi"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/usecases/cluster"
-	"github.com/semi-technologies/weaviate/usecases/config"
-	"github.com/semi-technologies/weaviate/usecases/scaler"
-	schemauc "github.com/semi-technologies/weaviate/usecases/schema"
-	"github.com/semi-technologies/weaviate/usecases/sharding"
 	"github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/adapters/clients"
+	"github.com/weaviate/weaviate/adapters/handlers/rest/clusterapi"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/usecases/cluster"
+	"github.com/weaviate/weaviate/usecases/config"
+	"github.com/weaviate/weaviate/usecases/scaler"
+	schemauc "github.com/weaviate/weaviate/usecases/schema"
+	"github.com/weaviate/weaviate/usecases/sharding"
 )
 
 // This is a cross-package test that tests the schema manager in a distributed
@@ -118,7 +118,7 @@ func setupManagers(t *testing.T) (*schemauc.Manager, *schemauc.Manager) {
 	remoteManager := newSchemaManagerWithClusterStateAndClient(
 		&fakeClusterState{hosts: []string{"node1"}}, nil)
 
-	schemaHandlers := clusterapi.NewSchema(remoteManager.TxManager())
+	schemaHandlers := clusterapi.NewSchema(remoteManager.TxManager(), clusterapi.NewNoopAuthHandler())
 	mux := http.NewServeMux()
 	mux.Handle("/schema/transactions/", http.StripPrefix("/schema/transactions/",
 		schemaHandlers.Transactions()))
@@ -129,6 +129,10 @@ func setupManagers(t *testing.T) (*schemauc.Manager, *schemauc.Manager) {
 	require.Nil(t, err)
 	state := &fakeClusterState{hosts: []string{parsedURL.Host}}
 	localManager := newSchemaManagerWithClusterStateAndClient(state, client)
+
+	// this will also mark the tx managers as ready
+	localManager.StartServing(context.Background())
+	remoteManager.StartServing(context.Background())
 
 	return localManager, remoteManager
 }
@@ -165,7 +169,8 @@ func newSchemaManagerWithClusterStateAndClient(clusterState *fakeClusterState,
 		config.Config{DefaultVectorizerModule: config.VectorizerModuleNone},
 		dummyParseVectorConfig, // only option for now
 		vectorizerValidator, dummyValidateInvertedConfig,
-		&fakeModuleConfig{}, clusterState, client, &fakeScaleOutManager{},
+		&fakeModuleConfig{}, clusterState, client, &fakeTxPersistence{},
+		&fakeScaleOutManager{},
 	)
 	if err != nil {
 		panic(err.Error())
@@ -183,4 +188,25 @@ func (f *fakeScaleOutManager) Scale(ctx context.Context,
 }
 
 func (f *fakeScaleOutManager) SetSchemaManager(sm scaler.SchemaManager) {
+}
+
+// does nothing as this component test does not involve crashes
+type fakeTxPersistence struct{}
+
+func (f *fakeTxPersistence) StoreTx(ctx context.Context,
+	tx *cluster.Transaction,
+) error {
+	return nil
+}
+
+func (f *fakeTxPersistence) DeleteTx(ctx context.Context,
+	txID string,
+) error {
+	return nil
+}
+
+func (f *fakeTxPersistence) IterateAll(ctx context.Context,
+	cb func(tx *cluster.Transaction),
+) error {
+	return nil
 }

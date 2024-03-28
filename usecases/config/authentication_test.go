@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package config
@@ -54,7 +54,7 @@ func TestConfig_Authentication(t *testing.T) {
 
 	t.Run("oidc and anonymous enabled together", func(t *testing.T) {
 		// this might seem counter-intuitive at first, but this makes a lot of
-		// sense when you consider the authorization strageies: for example we
+		// sense when you consider the authorization strategies: for example we
 		// could allow reads for everyone, but only explicitly authenticated users
 		// may write
 		auth := Authentication{

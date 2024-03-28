@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package modqna
@@ -18,15 +18,15 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
-	"github.com/semi-technologies/weaviate/entities/modulecapabilities"
-	"github.com/semi-technologies/weaviate/entities/moduletools"
-	qnaadditional "github.com/semi-technologies/weaviate/modules/qna-transformers/additional"
-	qnaadditionalanswer "github.com/semi-technologies/weaviate/modules/qna-transformers/additional/answer"
-	qnaask "github.com/semi-technologies/weaviate/modules/qna-transformers/ask"
-	"github.com/semi-technologies/weaviate/modules/qna-transformers/clients"
-	qnaadependency "github.com/semi-technologies/weaviate/modules/qna-transformers/dependency"
-	"github.com/semi-technologies/weaviate/modules/qna-transformers/ent"
 	"github.com/sirupsen/logrus"
+	"github.com/weaviate/weaviate/entities/modulecapabilities"
+	"github.com/weaviate/weaviate/entities/moduletools"
+	qnaadditional "github.com/weaviate/weaviate/modules/qna-transformers/additional"
+	qnaadditionalanswer "github.com/weaviate/weaviate/modules/qna-transformers/additional/answer"
+	qnaask "github.com/weaviate/weaviate/modules/qna-transformers/ask"
+	"github.com/weaviate/weaviate/modules/qna-transformers/clients"
+	qnaadependency "github.com/weaviate/weaviate/modules/qna-transformers/dependency"
+	"github.com/weaviate/weaviate/modules/qna-transformers/ent"
 )
 
 func New() *QnAModule {
@@ -53,13 +53,13 @@ func (m *QnAModule) Name() string {
 }
 
 func (m *QnAModule) Type() modulecapabilities.ModuleType {
-	return modulecapabilities.Text2Text
+	return modulecapabilities.Text2TextQnA
 }
 
 func (m *QnAModule) Init(ctx context.Context,
 	params moduletools.ModuleInitParams,
 ) error {
-	if err := m.initAdditional(ctx, params.GetLogger()); err != nil {
+	if err := m.initAdditional(ctx, params.GetConfig().ModuleHttpClientTimeout, params.GetLogger()); err != nil {
 		return errors.Wrap(err, "init vectorizer")
 	}
 
@@ -129,7 +129,7 @@ func (m *QnAModule) InitDependency(modules []modulecapabilities.Module) error {
 	return nil
 }
 
-func (m *QnAModule) initAdditional(ctx context.Context,
+func (m *QnAModule) initAdditional(ctx context.Context, timeout time.Duration,
 	logger logrus.FieldLogger,
 ) error {
 	// TODO: proper config management
@@ -138,7 +138,7 @@ func (m *QnAModule) initAdditional(ctx context.Context,
 		return errors.Errorf("required variable QNA_INFERENCE_API is not set")
 	}
 
-	client := clients.New(uri, logger)
+	client := clients.New(uri, timeout, logger)
 	if err := client.WaitForStartup(ctx, 1*time.Second); err != nil {
 		return errors.Wrap(err, "init remote vectorizer")
 	}

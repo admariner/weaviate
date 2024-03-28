@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 //go:build integrationTest
@@ -26,20 +26,23 @@ import (
 
 	"github.com/go-openapi/strfmt"
 	"github.com/google/uuid"
-	"github.com/semi-technologies/weaviate/adapters/repos/db"
-	"github.com/semi-technologies/weaviate/adapters/repos/db/vector/hnsw/distancer"
-	"github.com/semi-technologies/weaviate/entities/additional"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	"github.com/semi-technologies/weaviate/entities/schema/crossref"
-	enthnsw "github.com/semi-technologies/weaviate/entities/vectorindex/hnsw"
-	"github.com/semi-technologies/weaviate/usecases/objects"
-	"github.com/semi-technologies/weaviate/usecases/sharding"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/adapters/repos/db"
+	"github.com/weaviate/weaviate/adapters/repos/db/vector/hnsw/distancer"
+	"github.com/weaviate/weaviate/entities/additional"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/schema/crossref"
+	enthnsw "github.com/weaviate/weaviate/entities/vectorindex/hnsw"
+	"github.com/weaviate/weaviate/usecases/objects"
+	"github.com/weaviate/weaviate/usecases/sharding"
 )
 
+func getRandomSeed() *rand.Rand {
+	return rand.New(rand.NewSource(time.Now().UnixNano()))
+}
+
 func setupDirectory(t *testing.T) string {
-	rand.Seed(time.Now().UnixNano())
 	dirName := t.TempDir()
 	return dirName
 }
@@ -52,7 +55,6 @@ func dataAsBatch(data []*models.Object) objects.BatchObjects {
 			Err:           nil,
 			Object:        data[i],
 			UUID:          data[i].ID,
-			Vector:        data[i].Vector,
 		}
 	}
 
@@ -67,7 +69,6 @@ func dataAsBatchWithProps(data []*models.Object, props []string) objects.BatchOb
 			Err:           nil,
 			Object:        copyObjectWithProp(data[i], props),
 			UUID:          data[i].ID,
-			Vector:        data[i].Vector,
 		}
 	}
 
@@ -110,17 +111,12 @@ func multiShardState(nodeCount int) *sharding.State {
 	}
 
 	s, err := sharding.InitState("multi-shard-test-index", config,
-		fakeNodes{nodeList}, 1)
+		fakeNodes{nodeList}, 1, false)
 	if err != nil {
 		panic(err)
 	}
 
 	return s
-}
-
-func truePointer() *bool {
-	b := true
-	return &b
 }
 
 func class() *models.Class {
@@ -132,31 +128,30 @@ func class() *models.Class {
 		InvertedIndexConfig: invertedConfig(),
 		Properties: []*models.Property{
 			{
-				Name:          "description",
-				DataType:      []string{string(schema.DataTypeText)},
-				Tokenization:  "word",
-				IndexInverted: truePointer(),
+				Name:         "description",
+				DataType:     schema.DataTypeText.PropString(),
+				Tokenization: models.PropertyTokenizationWord,
 			},
 			{
-				Name:          "other_property",
-				DataType:      []string{string(schema.DataTypeText)},
-				IndexInverted: truePointer(),
+				Name:         "other_property",
+				DataType:     schema.DataTypeText.PropString(),
+				Tokenization: models.PropertyTokenizationWord,
 			},
 			{
 				Name:     "date_property",
-				DataType: []string{string(schema.DataTypeDate)},
+				DataType: schema.DataTypeDate.PropString(),
 			},
 			{
 				Name:     "date_array_property",
-				DataType: []string{string(schema.DataTypeDateArray)},
+				DataType: schema.DataTypeDateArray.PropString(),
 			},
 			{
 				Name:     "int_property",
-				DataType: []string{string(schema.DataTypeInt)},
+				DataType: schema.DataTypeInt.PropString(),
 			},
 			{
 				Name:     "phone_property",
-				DataType: []string{string(schema.DataTypePhoneNumber)},
+				DataType: schema.DataTypePhoneNumber.PropString(),
 			},
 		},
 	}
@@ -316,7 +311,7 @@ func manuallyResolveRef(t *testing.T, obj *models.Object,
 			// find referenced object to get his actual vector from DB
 			require.NotNil(t, repo)
 			res, err := repo.Object(context.Background(), parsed.Class, parsed.TargetID,
-				nil, additional.Properties{Vector: true}, nil)
+				nil, additional.Properties{Vector: true}, nil, "")
 			require.Nil(t, err)
 			require.NotNil(t, res)
 			out[i] = map[string]interface{}{

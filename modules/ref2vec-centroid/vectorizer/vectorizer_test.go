@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package vectorizer
@@ -19,11 +19,11 @@ import (
 
 	"github.com/go-openapi/strfmt"
 	"github.com/google/uuid"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/schema/crossref"
-	"github.com/semi-technologies/weaviate/entities/search"
-	"github.com/semi-technologies/weaviate/modules/ref2vec-centroid/config"
 	"github.com/stretchr/testify/assert"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema/crossref"
+	"github.com/weaviate/weaviate/entities/search"
+	"github.com/weaviate/weaviate/modules/ref2vec-centroid/config"
 )
 
 func TestVectorizer_New(t *testing.T) {
@@ -128,7 +128,7 @@ func TestVectorizer_Object(t *testing.T) {
 					crossRefs[i] = crossRef
 					modelRefs[i] = crossRef.SingleRef()
 
-					repo.On("Object", ctx, crossRef.Class, crossRef.TargetID).
+					repo.On("Object", ctx, crossRef.Class, crossRef.TargetID, "").
 						Return(res.res, res.err)
 				}
 
@@ -136,17 +136,17 @@ func TestVectorizer_Object(t *testing.T) {
 					Properties: map[string]interface{}{"toRef": modelRefs},
 				}
 
-				err := New(cfg, repo.Object).Object(ctx, obj)
+				vec, err := New(cfg, repo.Object).Object(ctx, obj)
 				if test.expectedCalcError != nil {
 					assert.EqualError(t, err, test.expectedCalcError.Error())
 				} else {
-					assert.EqualValues(t, test.expectedResult, obj.Vector)
+					assert.EqualValues(t, test.expectedResult, vec)
 				}
 			})
 		}
 	})
 
-	// due to the fix introduced in https://github.com/semi-technologies/weaviate/pull/2320,
+	// due to the fix introduced in https://github.com/weaviate/weaviate/pull/2320,
 	// MultipleRef's can appear as empty []interface{} when no actual refs are provided for
 	// an object's reference property.
 	//
@@ -162,8 +162,33 @@ func TestVectorizer_Object(t *testing.T) {
 			Properties: map[string]interface{}{"toRef": []interface{}{}},
 		}
 
-		err := New(cfg, repo.Object).Object(ctx, obj)
+		_, err := New(cfg, repo.Object).Object(ctx, obj)
 		assert.Nil(t, err)
 		assert.Nil(t, obj.Vector)
 	})
+}
+
+func TestVectorizer_Tenant(t *testing.T) {
+	objectSearchResults := search.Result{Vector: []float32{}}
+	ctx := context.Background()
+	repo := &fakeObjectsRepo{}
+	refProps := []interface{}{"toRef"}
+	cfg := fakeClassConfig{"method": "mean", "referenceProperties": refProps}
+	tenant := "randomTenant"
+
+	crossRef := crossref.New("localhost", "SomeClass",
+		strfmt.UUID(uuid.NewString()))
+	modelRefs := models.MultipleRef{crossRef.SingleRef()}
+
+	repo.On("Object", ctx, crossRef.Class, crossRef.TargetID, tenant).
+		Return(&objectSearchResults, nil)
+
+	obj := &models.Object{
+		Properties: map[string]interface{}{"toRef": modelRefs},
+		Tenant:     tenant,
+	}
+
+	_, err := New(cfg, repo.Object).Object(ctx, obj)
+	assert.Nil(t, err)
+	assert.Nil(t, obj.Vector)
 }

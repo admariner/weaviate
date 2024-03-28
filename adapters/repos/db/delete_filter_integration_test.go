@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 //go:build integrationTest
@@ -16,31 +16,28 @@ package db
 
 import (
 	"context"
-	"math/rand"
 	"testing"
-	"time"
 
 	"github.com/go-openapi/strfmt"
 	"github.com/google/uuid"
-	"github.com/semi-technologies/weaviate/entities/filters"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	"github.com/semi-technologies/weaviate/entities/search"
-	enthnsw "github.com/semi-technologies/weaviate/entities/vectorindex/hnsw"
-	"github.com/semi-technologies/weaviate/usecases/traverser"
 	"github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/entities/dto"
+	"github.com/weaviate/weaviate/entities/filters"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/search"
+	enthnsw "github.com/weaviate/weaviate/entities/vectorindex/hnsw"
 )
 
 // This test aims to prevent a regression on
-// https://github.com/semi-technologies/weaviate/issues/1308 where we
+// https://github.com/weaviate/weaviate/issues/1308 where we
 // discovered that if the first n doc ids are deleted and a filter would return
 // <= n doc ids, it would return no results instead of skipping the deleted ids
 // and returning the next ones
 func Test_FilterSearchesOnDeletedDocIDsWithLimits(t *testing.T) {
 	className := "DeletedDocIDLimitTestClass"
-	rand.Seed(time.Now().UnixNano())
 	dirName := t.TempDir()
 
 	logger, _ := test.NewNullLogger()
@@ -50,23 +47,26 @@ func Test_FilterSearchesOnDeletedDocIDsWithLimits(t *testing.T) {
 		InvertedIndexConfig: invertedConfig(),
 		Properties: []*models.Property{{
 			Name:         "unrelatedProp",
-			DataType:     []string{string(schema.DataTypeString)},
-			Tokenization: "word",
+			DataType:     schema.DataTypeText.PropString(),
+			Tokenization: models.PropertyTokenizationWhitespace,
 		}, {
 			Name:     "boolProp",
 			DataType: []string{string(schema.DataTypeBoolean)},
 		}},
 	}
-	schemaGetter := &fakeSchemaGetter{shardState: singleShardState()}
-	repo := New(logger, Config{
-		MemtablesFlushIdleAfter:   60,
+	schemaGetter := &fakeSchemaGetter{
+		schema:     schema.Schema{Objects: &models.Schema{Classes: nil}},
+		shardState: singleShardState(),
+	}
+	repo, err := New(logger, Config{
+		MemtablesFlushDirtyAfter:  60,
 		RootPath:                  dirName,
 		QueryMaximumResults:       10000,
 		MaxImportGoroutinesFactor: 1,
 	}, &fakeRemoteClient{}, &fakeNodeResolver{}, &fakeRemoteNodeClient{}, &fakeReplicationClient{}, nil)
-	repo.SetSchemaGetter(schemaGetter)
-	err := repo.WaitForStartup(testCtx())
 	require.Nil(t, err)
+	repo.SetSchemaGetter(schemaGetter)
+	require.Nil(t, repo.WaitForStartup(testCtx()))
 	migrator := NewMigrator(repo, logger)
 	defer repo.Shutdown(testCtx())
 
@@ -96,26 +96,26 @@ func Test_FilterSearchesOnDeletedDocIDsWithLimits(t *testing.T) {
 				Vector: []float32{0.1},
 			}
 
-			err := repo.PutObject(context.Background(), things[i], things[i].Vector)
+			err := repo.PutObject(context.Background(), things[i], things[i].Vector, nil, nil)
 			require.Nil(t, err)
 		}
 	})
 
 	t.Run("updating the first 5 elements", func(t *testing.T) {
 		// The idea is that the first 5 elements can be found with a boolProp==true
-		// search, however, the bug occured if those items all had received an
+		// search, however, the bug occurred if those items all had received an
 		// update
 
 		for i := 0; i < 5; i++ {
 			things[i].Properties.(map[string]interface{})["unrelatedProp"] = "updatedValue"
 
-			err := repo.PutObject(context.Background(), things[i], things[i].Vector)
+			err := repo.PutObject(context.Background(), things[i], things[i].Vector, nil, nil)
 			require.Nil(t, err)
 		}
 	})
 
 	t.Run("searching for boolProp == true with a strict limit", func(t *testing.T) {
-		res, err := repo.ClassSearch(context.Background(), traverser.GetParams{
+		res, err := repo.Search(context.Background(), dto.GetParams{
 			ClassName: className,
 			Pagination: &filters.Pagination{
 				// important as the first 5 doc ids we encounter now should all be
@@ -146,7 +146,7 @@ func mustNewUUID() strfmt.UUID {
 }
 
 func extractIDs(in []search.Result) []strfmt.UUID {
-	out := make([]strfmt.UUID, len(in), len(in))
+	out := make([]strfmt.UUID, len(in))
 	for i, res := range in {
 		out[i] = res.ID
 	}
@@ -155,10 +155,9 @@ func extractIDs(in []search.Result) []strfmt.UUID {
 }
 
 // This bug aims to prevent a regression on
-// https://github.com/semi-technologies/weaviate/issues/1765
+// https://github.com/weaviate/weaviate/issues/1765
 func TestLimitOneAfterDeletion(t *testing.T) {
 	className := "Test"
-	rand.Seed(time.Now().UnixNano())
 	dirName := t.TempDir()
 
 	logger, _ := test.NewNullLogger()
@@ -172,16 +171,19 @@ func TestLimitOneAfterDeletion(t *testing.T) {
 			Tokenization: "word",
 		}},
 	}
-	schemaGetter := &fakeSchemaGetter{shardState: singleShardState()}
-	repo := New(logger, Config{
-		MemtablesFlushIdleAfter:   60,
+	schemaGetter := &fakeSchemaGetter{
+		schema:     schema.Schema{Objects: &models.Schema{Classes: nil}},
+		shardState: singleShardState(),
+	}
+	repo, err := New(logger, Config{
+		MemtablesFlushDirtyAfter:  60,
 		RootPath:                  dirName,
 		QueryMaximumResults:       10000,
 		MaxImportGoroutinesFactor: 1,
 	}, &fakeRemoteClient{}, &fakeNodeResolver{}, &fakeRemoteNodeClient{}, &fakeReplicationClient{}, nil)
-	repo.SetSchemaGetter(schemaGetter)
-	err := repo.WaitForStartup(testCtx())
 	require.Nil(t, err)
+	repo.SetSchemaGetter(schemaGetter)
+	require.Nil(t, repo.WaitForStartup(testCtx()))
 	defer repo.Shutdown(testCtx())
 	migrator := NewMigrator(repo, logger)
 
@@ -206,13 +208,13 @@ func TestLimitOneAfterDeletion(t *testing.T) {
 			Properties: map[string]interface{}{
 				"author": "Simon",
 			},
-		}, []float32{0, 1})
+		}, []float32{0, 1}, nil, nil)
 
 		require.Nil(t, err)
 	})
 
 	t.Run("delete first object", func(t *testing.T) {
-		err := repo.DeleteObject(context.Background(), "Test", firstID)
+		err := repo.DeleteObject(context.Background(), "Test", firstID, nil, "")
 		require.Nil(t, err)
 	})
 
@@ -225,13 +227,13 @@ func TestLimitOneAfterDeletion(t *testing.T) {
 			Properties: map[string]interface{}{
 				"author": "Simon",
 			},
-		}, []float32{0, 1})
+		}, []float32{0, 1}, nil, nil)
 
 		require.Nil(t, err)
 	})
 
 	t.Run("query with high limit", func(t *testing.T) {
-		res, err := repo.ClassSearch(context.Background(), traverser.GetParams{
+		res, err := repo.Search(context.Background(), dto.GetParams{
 			Filters:   buildFilter("author", "Simon", eq, dtText),
 			ClassName: "Test",
 			Pagination: &filters.Pagination{
@@ -246,7 +248,7 @@ func TestLimitOneAfterDeletion(t *testing.T) {
 	})
 
 	t.Run("query with limit 1", func(t *testing.T) {
-		res, err := repo.ClassSearch(context.Background(), traverser.GetParams{
+		res, err := repo.Search(context.Background(), dto.GetParams{
 			Filters:   buildFilter("author", "Simon", eq, dtText),
 			ClassName: "Test",
 			Pagination: &filters.Pagination{

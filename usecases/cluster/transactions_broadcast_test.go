@@ -4,28 +4,34 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package cluster
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	"github.com/sirupsen/logrus/hooks/test"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
+var logger, _ = test.NewNullLogger()
+
 func TestBroadcastOpenTransaction(t *testing.T) {
 	client := &fakeClient{}
-	state := &fakeState{[]string{"host1", "host2", "host3"}}
+	state := &fakeState{hosts: []string{"host1", "host2", "host3"}}
 
-	bc := NewTxBroadcaster(state, client)
+	bc := NewTxBroadcaster(state, client, logger)
 
 	tx := &Transaction{ID: "foo"}
 
@@ -37,9 +43,9 @@ func TestBroadcastOpenTransaction(t *testing.T) {
 
 func TestBroadcastOpenTransactionWithReturnPayload(t *testing.T) {
 	client := &fakeClient{}
-	state := &fakeState{[]string{"host1", "host2", "host3"}}
+	state := &fakeState{hosts: []string{"host1", "host2", "host3"}}
 
-	bc := NewTxBroadcaster(state, client)
+	bc := NewTxBroadcaster(state, client, logger)
 	bc.SetConsensusFunction(func(ctx context.Context,
 		in []*Transaction,
 	) (*Transaction, error) {
@@ -74,11 +80,53 @@ func TestBroadcastOpenTransactionWithReturnPayload(t *testing.T) {
 	}, results)
 }
 
+func TestBroadcastOpenTransactionAfterNodeHasDied(t *testing.T) {
+	client := &fakeClient{}
+	state := &fakeState{hosts: []string{"host1", "host2", "host3"}}
+	bc := NewTxBroadcaster(state, client, logger)
+
+	waitUntilIdealStateHasReached(t, bc, 3, 4*time.Second)
+
+	// host2 is dead
+	state.updateHosts([]string{"host1", "host3"})
+
+	tx := &Transaction{ID: "foo"}
+
+	err := bc.BroadcastTransaction(context.Background(), tx)
+	require.NotNil(t, err)
+	assert.Contains(t, err.Error(), "host2")
+
+	// no node is should have received an open
+	assert.ElementsMatch(t, []string{}, client.openCalled)
+}
+
+func waitUntilIdealStateHasReached(t *testing.T, bc *TxBroadcaster, goal int,
+	max time.Duration,
+) {
+	ctx, cancel := context.WithTimeout(context.Background(), max)
+	defer cancel()
+
+	interval := time.NewTicker(250 * time.Millisecond)
+	defer interval.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			t.Error(fmt.Errorf("waiting to reach state goal %d: %w", goal, ctx.Err()))
+			return
+		case <-interval.C:
+			if len(bc.ideal.Members()) == goal {
+				return
+			}
+		}
+	}
+}
+
 func TestBroadcastAbortTransaction(t *testing.T) {
 	client := &fakeClient{}
-	state := &fakeState{[]string{"host1", "host2", "host3"}}
+	state := &fakeState{hosts: []string{"host1", "host2", "host3"}}
 
-	bc := NewTxBroadcaster(state, client)
+	bc := NewTxBroadcaster(state, client, logger)
 
 	tx := &Transaction{ID: "foo"}
 
@@ -90,9 +138,9 @@ func TestBroadcastAbortTransaction(t *testing.T) {
 
 func TestBroadcastCommitTransaction(t *testing.T) {
 	client := &fakeClient{}
-	state := &fakeState{[]string{"host1", "host2", "host3"}}
+	state := &fakeState{hosts: []string{"host1", "host2", "host3"}}
 
-	bc := NewTxBroadcaster(state, client)
+	bc := NewTxBroadcaster(state, client, logger)
 
 	tx := &Transaction{ID: "foo"}
 
@@ -102,11 +150,48 @@ func TestBroadcastCommitTransaction(t *testing.T) {
 	assert.ElementsMatch(t, []string{"host1", "host2", "host3"}, client.commitCalled)
 }
 
+func TestBroadcastCommitTransactionAfterNodeHasDied(t *testing.T) {
+	client := &fakeClient{}
+	state := &fakeState{hosts: []string{"host1", "host2", "host3"}}
+	bc := NewTxBroadcaster(state, client, logger)
+
+	waitUntilIdealStateHasReached(t, bc, 3, 4*time.Second)
+
+	state.updateHosts([]string{"host1", "host3"})
+
+	tx := &Transaction{ID: "foo"}
+
+	err := bc.BroadcastCommitTransaction(context.Background(), tx)
+	require.NotNil(t, err)
+	assert.Contains(t, err.Error(), "host2")
+
+	// no node should have received the commit
+	assert.ElementsMatch(t, []string{}, client.commitCalled)
+}
+
 type fakeState struct {
 	hosts []string
+	sync.Mutex
+}
+
+func (f *fakeState) updateHosts(newHosts []string) {
+	f.Lock()
+	defer f.Unlock()
+
+	f.hosts = newHosts
 }
 
 func (f *fakeState) Hostnames() []string {
+	f.Lock()
+	defer f.Unlock()
+
+	return f.hosts
+}
+
+func (f *fakeState) AllNames() []string {
+	f.Lock()
+	defer f.Unlock()
+
 	return f.hosts
 }
 

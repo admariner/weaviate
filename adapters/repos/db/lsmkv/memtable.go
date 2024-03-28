@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package lsmkv
@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
+	"github.com/weaviate/weaviate/adapters/repos/db/roaringset"
+	"github.com/weaviate/weaviate/entities/lsmkv"
 )
 
 type Memtable struct {
@@ -25,35 +27,33 @@ type Memtable struct {
 	keyMulti           *binarySearchTreeMulti
 	keyMap             *binarySearchTreeMap
 	primaryIndex       *binarySearchTree
+	roaringSet         *roaringset.BinarySearchTree
 	commitlog          *commitLogger
 	size               uint64
 	path               string
 	strategy           string
 	secondaryIndices   uint16
 	secondaryToPrimary []map[string][]byte
-	lastWrite          time.Time
-	createdAt          time.Time
-	metrics            *memtableMetrics
+	// stores time memtable got dirty to determine when flush is needed
+	dirtyAt   time.Time
+	createdAt time.Time
+	metrics   *memtableMetrics
 }
 
 func newMemtable(path string, strategy string,
-	secondaryIndices uint16, metrics *Metrics,
+	secondaryIndices uint16, cl *commitLogger, metrics *Metrics,
 ) (*Memtable, error) {
-	cl, err := newCommitLogger(path)
-	if err != nil {
-		return nil, errors.Wrap(err, "init commit logger")
-	}
-
 	m := &Memtable{
 		key:              &binarySearchTree{},
 		keyMulti:         &binarySearchTreeMulti{},
 		keyMap:           &binarySearchTreeMap{},
 		primaryIndex:     &binarySearchTree{}, // todo, sort upfront
+		roaringSet:       &roaringset.BinarySearchTree{},
 		commitlog:        cl,
 		path:             path,
 		strategy:         strategy,
 		secondaryIndices: secondaryIndices,
-		lastWrite:        time.Now(),
+		dirtyAt:          time.Time{},
 		createdAt:        time.Now(),
 		metrics:          newMemtableMetrics(metrics, filepath.Dir(path), strategy),
 	}
@@ -70,25 +70,18 @@ func newMemtable(path string, strategy string,
 	return m, nil
 }
 
-type keyIndex struct {
-	key           []byte
-	secondaryKeys [][]byte
-	valueStart    int
-	valueEnd      int
-}
-
-func (l *Memtable) get(key []byte) ([]byte, error) {
+func (m *Memtable) get(key []byte) ([]byte, error) {
 	start := time.Now()
-	defer l.metrics.get(start.UnixNano())
+	defer m.metrics.get(start.UnixNano())
 
-	if l.strategy != StrategyReplace {
+	if m.strategy != StrategyReplace {
 		return nil, errors.Errorf("get only possible with strategy 'replace'")
 	}
 
-	l.RLock()
-	defer l.RUnlock()
+	m.RLock()
+	defer m.RUnlock()
 
-	v, err := l.key.get(key)
+	v, err := m.key.get(key)
 	if err != nil {
 		return nil, err
 	}
@@ -96,23 +89,23 @@ func (l *Memtable) get(key []byte) ([]byte, error) {
 	return v, nil
 }
 
-func (l *Memtable) getBySecondary(pos int, key []byte) ([]byte, error) {
+func (m *Memtable) getBySecondary(pos int, key []byte) ([]byte, error) {
 	start := time.Now()
-	defer l.metrics.getBySecondary(start.UnixNano())
+	defer m.metrics.getBySecondary(start.UnixNano())
 
-	if l.strategy != StrategyReplace {
+	if m.strategy != StrategyReplace {
 		return nil, errors.Errorf("get only possible with strategy 'replace'")
 	}
 
-	l.RLock()
-	defer l.RUnlock()
+	m.RLock()
+	defer m.RUnlock()
 
-	primary := l.secondaryToPrimary[pos][string(key)]
+	primary := m.secondaryToPrimary[pos][string(key)]
 	if primary == nil {
-		return nil, NotFound
+		return nil, lsmkv.NotFound
 	}
 
-	v, err := l.key.get(primary)
+	v, err := m.key.get(primary)
 	if err != nil {
 		return nil, err
 	}
@@ -120,20 +113,20 @@ func (l *Memtable) getBySecondary(pos int, key []byte) ([]byte, error) {
 	return v, nil
 }
 
-func (l *Memtable) put(key, value []byte, opts ...SecondaryKeyOption) error {
+func (m *Memtable) put(key, value []byte, opts ...SecondaryKeyOption) error {
 	start := time.Now()
-	defer l.metrics.put(start.UnixNano())
+	defer m.metrics.put(start.UnixNano())
 
-	if l.strategy != StrategyReplace {
+	if m.strategy != StrategyReplace {
 		return errors.Errorf("put only possible with strategy 'replace'")
 	}
 
-	l.Lock()
-	defer l.Unlock()
+	m.Lock()
+	defer m.Unlock()
 
 	var secondaryKeys [][]byte
-	if l.secondaryIndices > 0 {
-		secondaryKeys = make([][]byte, l.secondaryIndices)
+	if m.secondaryIndices > 0 {
+		secondaryKeys = make([][]byte, m.secondaryIndices)
 		for _, opt := range opts {
 			if err := opt(secondaryKeys); err != nil {
 				return err
@@ -141,47 +134,47 @@ func (l *Memtable) put(key, value []byte, opts ...SecondaryKeyOption) error {
 		}
 	}
 
-	if err := l.commitlog.put(segmentReplaceNode{
+	if err := m.commitlog.put(segmentReplaceNode{
 		primaryKey:          key,
 		value:               value,
-		secondaryIndexCount: l.secondaryIndices,
+		secondaryIndexCount: m.secondaryIndices,
 		secondaryKeys:       secondaryKeys,
 		tombstone:           false,
 	}); err != nil {
 		return errors.Wrap(err, "write into commit log")
 	}
 
-	netAdditions, previousKeys := l.key.insert(key, value, secondaryKeys)
-	l.size += uint64(netAdditions)
-	l.metrics.size(l.size)
+	netAdditions, previousKeys := m.key.insert(key, value, secondaryKeys)
 
 	for i, sec := range previousKeys {
-		l.secondaryToPrimary[i][string(sec)] = nil
+		m.secondaryToPrimary[i][string(sec)] = nil
 	}
 
 	for i, sec := range secondaryKeys {
-		l.secondaryToPrimary[i][string(sec)] = key
+		m.secondaryToPrimary[i][string(sec)] = key
 	}
 
-	l.lastWrite = time.Now()
+	m.size += uint64(netAdditions)
+	m.metrics.size(m.size)
+	m.updateDirtyAt()
 
 	return nil
 }
 
-func (l *Memtable) setTombstone(key []byte, opts ...SecondaryKeyOption) error {
+func (m *Memtable) setTombstone(key []byte, opts ...SecondaryKeyOption) error {
 	start := time.Now()
-	defer l.metrics.setTombstone(start.UnixNano())
+	defer m.metrics.setTombstone(start.UnixNano())
 
-	if l.strategy != "replace" {
+	if m.strategy != "replace" {
 		return errors.Errorf("setTombstone only possible with strategy 'replace'")
 	}
 
-	l.Lock()
-	defer l.Unlock()
+	m.Lock()
+	defer m.Unlock()
 
 	var secondaryKeys [][]byte
-	if l.secondaryIndices > 0 {
-		secondaryKeys = make([][]byte, l.secondaryIndices)
+	if m.secondaryIndices > 0 {
+		secondaryKeys = make([][]byte, m.secondaryIndices)
 		for _, opt := range opts {
 			if err := opt(secondaryKeys); err != nil {
 				return err
@@ -189,37 +182,37 @@ func (l *Memtable) setTombstone(key []byte, opts ...SecondaryKeyOption) error {
 		}
 	}
 
-	if err := l.commitlog.put(segmentReplaceNode{
+	if err := m.commitlog.put(segmentReplaceNode{
 		primaryKey:          key,
 		value:               nil,
-		secondaryIndexCount: l.secondaryIndices,
+		secondaryIndexCount: m.secondaryIndices,
 		secondaryKeys:       secondaryKeys,
 		tombstone:           true,
 	}); err != nil {
 		return errors.Wrap(err, "write into commit log")
 	}
 
-	l.key.setTombstone(key, secondaryKeys)
-	l.size += uint64(len(key)) + 1 // 1 byte for tombstone
-	l.lastWrite = time.Now()
-	l.metrics.size(l.size)
+	m.key.setTombstone(key, secondaryKeys)
+	m.size += uint64(len(key)) + 1 // 1 byte for tombstone
+	m.metrics.size(m.size)
+	m.updateDirtyAt()
 
 	return nil
 }
 
-func (l *Memtable) getCollection(key []byte) ([]value, error) {
+func (m *Memtable) getCollection(key []byte) ([]value, error) {
 	start := time.Now()
-	defer l.metrics.getCollection(start.UnixNano())
+	defer m.metrics.getCollection(start.UnixNano())
 
-	if l.strategy != StrategySetCollection && l.strategy != StrategyMapCollection {
+	if m.strategy != StrategySetCollection && m.strategy != StrategyMapCollection {
 		return nil, errors.Errorf("getCollection only possible with strategies %q, %q",
 			StrategySetCollection, StrategyMapCollection)
 	}
 
-	l.RLock()
-	defer l.RUnlock()
+	m.RLock()
+	defer m.RUnlock()
 
-	v, err := l.keyMulti.get(key)
+	v, err := m.keyMulti.get(key)
 	if err != nil {
 		return nil, err
 	}
@@ -227,19 +220,19 @@ func (l *Memtable) getCollection(key []byte) ([]value, error) {
 	return v, nil
 }
 
-func (l *Memtable) getMap(key []byte) ([]MapPair, error) {
+func (m *Memtable) getMap(key []byte) ([]MapPair, error) {
 	start := time.Now()
-	defer l.metrics.getMap(start.UnixNano())
+	defer m.metrics.getMap(start.UnixNano())
 
-	if l.strategy != StrategyMapCollection {
+	if m.strategy != StrategyMapCollection {
 		return nil, errors.Errorf("getCollection only possible with strategy %q",
 			StrategyMapCollection)
 	}
 
-	l.RLock()
-	defer l.RUnlock()
+	m.RLock()
+	defer m.RUnlock()
 
-	v, err := l.keyMap.get(key)
+	v, err := m.keyMap.get(key)
 	if err != nil {
 		return nil, err
 	}
@@ -247,95 +240,108 @@ func (l *Memtable) getMap(key []byte) ([]MapPair, error) {
 	return v, nil
 }
 
-func (l *Memtable) append(key []byte, values []value) error {
+func (m *Memtable) append(key []byte, values []value) error {
 	start := time.Now()
-	defer l.metrics.append(start.UnixNano())
+	defer m.metrics.append(start.UnixNano())
 
-	if l.strategy != StrategySetCollection && l.strategy != StrategyMapCollection {
+	if m.strategy != StrategySetCollection && m.strategy != StrategyMapCollection {
 		return errors.Errorf("append only possible with strategies %q, %q",
 			StrategySetCollection, StrategyMapCollection)
 	}
 
-	l.Lock()
-	defer l.Unlock()
-	if err := l.commitlog.append(segmentCollectionNode{
+	m.Lock()
+	defer m.Unlock()
+	if err := m.commitlog.append(segmentCollectionNode{
 		primaryKey: key,
 		values:     values,
 	}); err != nil {
 		return errors.Wrap(err, "write into commit log")
 	}
 
-	l.keyMulti.insert(key, values)
-	l.size += uint64(len(key))
+	m.keyMulti.insert(key, values)
+	m.size += uint64(len(key))
 	for _, value := range values {
-		l.size += uint64(len(value.value))
+		m.size += uint64(len(value.value))
 	}
+	m.metrics.size(m.size)
+	m.updateDirtyAt()
 
-	l.metrics.size(l.size)
-	l.lastWrite = time.Now()
 	return nil
 }
 
-func (l *Memtable) appendMapSorted(key []byte, pair MapPair) error {
+func (m *Memtable) appendMapSorted(key []byte, pair MapPair) error {
 	start := time.Now()
-	defer l.metrics.appendMapSorted(start.UnixNano())
+	defer m.metrics.appendMapSorted(start.UnixNano())
 
-	if l.strategy != StrategyMapCollection {
+	if m.strategy != StrategyMapCollection {
 		return errors.Errorf("append only possible with strategy %q",
 			StrategyMapCollection)
 	}
 
-	l.Lock()
-	defer l.Unlock()
+	m.Lock()
+	defer m.Unlock()
 
 	valuesForCommitLog, err := pair.Bytes()
 	if err != nil {
 		return err
 	}
 
-	if err := l.commitlog.append(segmentCollectionNode{
+	if err := m.commitlog.append(segmentCollectionNode{
 		primaryKey: key,
 		values: []value{
 			{
-				value: valuesForCommitLog,
+				value:     valuesForCommitLog,
+				tombstone: pair.Tombstone,
 			},
 		},
 	}); err != nil {
 		return errors.Wrap(err, "write into commit log")
 	}
 
-	l.keyMap.insert(key, pair)
-
-	l.size += uint64(len(key) + len(valuesForCommitLog))
-	l.lastWrite = time.Now()
-	l.metrics.size(l.size)
+	m.keyMap.insert(key, pair)
+	m.size += uint64(len(key) + len(valuesForCommitLog))
+	m.metrics.size(m.size)
+	m.updateDirtyAt()
 
 	return nil
 }
 
-func (l *Memtable) Size() uint64 {
-	l.RLock()
-	defer l.RUnlock()
+func (m *Memtable) Size() uint64 {
+	m.RLock()
+	defer m.RUnlock()
 
-	return l.size
+	return m.size
 }
 
-func (l *Memtable) ActiveDuration() time.Duration {
-	l.RLock()
-	defer l.RUnlock()
+func (m *Memtable) ActiveDuration() time.Duration {
+	m.RLock()
+	defer m.RUnlock()
 
-	return time.Since(l.createdAt)
+	return time.Since(m.createdAt)
 }
 
-func (l *Memtable) IdleDuration() time.Duration {
-	l.RLock()
-	defer l.RUnlock()
-
-	return time.Since(l.lastWrite)
+func (m *Memtable) updateDirtyAt() {
+	if m.dirtyAt.IsZero() {
+		m.dirtyAt = time.Now()
+	}
 }
 
-func (l *Memtable) countStats() *countStats {
-	return l.key.countStats()
+// returns time memtable got dirty (1st write occurred)
+// (0 if clean)
+func (m *Memtable) DirtyDuration() time.Duration {
+	m.RLock()
+	defer m.RUnlock()
+
+	if m.dirtyAt.IsZero() {
+		return 0
+	}
+	return time.Since(m.dirtyAt)
+}
+
+func (m *Memtable) countStats() *countStats {
+	m.RLock()
+	defer m.RUnlock()
+	return m.key.countStats()
 }
 
 // the WAL uses a buffer and isn't written until the buffer size is crossed or
@@ -344,9 +350,9 @@ func (l *Memtable) countStats() *countStats {
 // on the WAL just once. This does not make a batch atomic, but it guarantees
 // that the WAL is written before a successful response is returned to the
 // user.
-func (l *Memtable) writeWAL() error {
-	l.Lock()
-	defer l.Unlock()
+func (m *Memtable) writeWAL() error {
+	m.Lock()
+	defer m.Unlock()
 
-	return l.commitlog.flushBuffers()
+	return m.commitlog.flushBuffers()
 }

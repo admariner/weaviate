@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package get
@@ -17,33 +17,25 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/semi-technologies/weaviate/adapters/handlers/graphql/descriptions"
-	"github.com/semi-technologies/weaviate/adapters/handlers/graphql/local/common_filters"
-	"github.com/semi-technologies/weaviate/entities/additional"
-	"github.com/semi-technologies/weaviate/entities/filters"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/modulecapabilities"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	"github.com/semi-technologies/weaviate/entities/search"
-	"github.com/semi-technologies/weaviate/entities/searchparams"
-	"github.com/semi-technologies/weaviate/usecases/traverser"
 	"github.com/tailor-inc/graphql"
 	"github.com/tailor-inc/graphql/language/ast"
+	"github.com/weaviate/weaviate/adapters/handlers/graphql/descriptions"
+	"github.com/weaviate/weaviate/adapters/handlers/graphql/local/common_filters"
+	"github.com/weaviate/weaviate/entities/additional"
+	"github.com/weaviate/weaviate/entities/dto"
+	enterrors "github.com/weaviate/weaviate/entities/errors"
+	"github.com/weaviate/weaviate/entities/filters"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/modulecapabilities"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/search"
+	"github.com/weaviate/weaviate/entities/searchparams"
 )
 
 func (b *classBuilder) primitiveField(propertyType schema.PropertyDataType,
 	property *models.Property, className string,
 ) *graphql.Field {
 	switch propertyType.AsPrimitive() {
-	case schema.DataTypeString:
-		return &graphql.Field{
-			Description: property.Description,
-			Name:        property.Name,
-			Type:        graphql.String,
-			Resolve: func(p graphql.ResolveParams) (interface{}, error) {
-				return p.Source.(map[string]interface{})[p.Info.FieldName], nil
-			},
-		}
 	case schema.DataTypeText:
 		return &graphql.Field{
 			Description: property.Description,
@@ -98,7 +90,7 @@ func (b *classBuilder) primitiveField(propertyType schema.PropertyDataType,
 			Name:        property.Name,
 			Type:        graphql.String,
 		}
-	case schema.DataTypeStringArray, schema.DataTypeTextArray:
+	case schema.DataTypeTextArray:
 		return &graphql.Field{
 			Description: property.Description,
 			Name:        property.Name,
@@ -127,6 +119,18 @@ func (b *classBuilder) primitiveField(propertyType schema.PropertyDataType,
 			Description: property.Description,
 			Name:        property.Name,
 			Type:        graphql.NewList(graphql.String), // String since no graphql date datatype exists
+		}
+	case schema.DataTypeUUIDArray:
+		return &graphql.Field{
+			Description: property.Description,
+			Name:        property.Name,
+			Type:        graphql.NewList(graphql.String), // Always return UUID as string representation to the user
+		}
+	case schema.DataTypeUUID:
+		return &graphql.Field{
+			Description: property.Description,
+			Name:        property.Name,
+			Type:        graphql.String, // Always return UUID as string representation to the user
 		}
 	default:
 		panic(fmt.Sprintf("buildGetClass: unknown primitive type for %s.%s; %s",
@@ -198,18 +202,26 @@ func newPhoneNumberObject(className string, propertyName string) *graphql.Object
 }
 
 func buildGetClassField(classObject *graphql.Object,
-	class *models.Class, modulesProvider ModulesProvider,
+	class *models.Class, modulesProvider ModulesProvider, fusionEnum *graphql.Enum,
 ) graphql.Field {
 	field := graphql.Field{
 		Type:        graphql.NewList(classObject),
 		Description: class.Description,
 		Args: graphql.FieldConfigArgument{
+			"after": &graphql.ArgumentConfig{
+				Description: descriptions.AfterID,
+				Type:        graphql.String,
+			},
 			"limit": &graphql.ArgumentConfig{
-				Description: descriptions.First,
+				Description: descriptions.Limit,
 				Type:        graphql.Int,
 			},
 			"offset": &graphql.ArgumentConfig{
 				Description: descriptions.After,
+				Type:        graphql.Int,
+			},
+			"autocut": &graphql.ArgumentConfig{
+				Description: "Cut off number of results after the Nth extrema. Off by default, negative numbers mean off.",
 				Type:        graphql.Int,
 			},
 
@@ -218,11 +230,13 @@ func buildGetClassField(classObject *graphql.Object,
 			"nearObject": nearObjectArgument(class.Class),
 			"where":      whereArgument(class.Class),
 			"group":      groupArgument(class.Class),
+			"groupBy":    groupByArgument(class.Class),
 		},
 		Resolve: newResolver(modulesProvider).makeResolveGetClass(class.Class),
 	}
 
 	field.Args["bm25"] = bm25Argument(class.Class)
+	field.Args["hybrid"] = hybridArgument(classObject, class, modulesProvider, fusionEnum)
 
 	if modulesProvider != nil {
 		for name, argument := range modulesProvider.GetArguments(class) {
@@ -230,7 +244,13 @@ func buildGetClassField(classObject *graphql.Object,
 		}
 	}
 
-	field.Args["hybrid"] = hybridArgument(classObject, class, modulesProvider)
+	if replicationEnabled(class) {
+		field.Args["consistencyLevel"] = consistencyLevelArgument(class)
+	}
+
+	if schema.MultiTenancyEnabled(class) {
+		field.Args["tenant"] = tenantArgument()
+	}
 
 	return field
 }
@@ -297,114 +317,159 @@ func newResolver(modulesProvider ModulesProvider) *resolver {
 
 func (r *resolver) makeResolveGetClass(className string) graphql.FieldResolveFn {
 	return func(p graphql.ResolveParams) (interface{}, error) {
-		source, ok := p.Source.(map[string]interface{})
-		if !ok {
-			return nil, fmt.Errorf("expected graphql root to be a map, but was %T", p.Source)
-		}
-
-		resolver, ok := source["Resolver"].(Resolver)
-		if !ok {
-			return nil, fmt.Errorf("expected source map to have a usable Resolver, but got %#v", source["Resolver"])
-		}
-
-		pagination, err := filters.ExtractPaginationFromArgs(p.Args)
+		result, err := r.resolveGet(p, className)
 		if err != nil {
-			return nil, err
+			return result, enterrors.NewErrGraphQLUser(err, "Get", className)
 		}
-
-		// There can only be exactly one ast.Field; it is the class name.
-		if len(p.Info.FieldASTs) != 1 {
-			panic("Only one Field expected here")
-		}
-
-		selectionsOfClass := p.Info.FieldASTs[0].SelectionSet
-
-		properties, additional, err := extractProperties(className, selectionsOfClass, p.Info.Fragments, r.modulesProvider)
-		if err != nil {
-			return nil, err
-		}
-
-		var sort []filters.Sort
-		if sortArg, ok := p.Args["sort"]; ok {
-			sort = filters.ExtractSortFromArgs(sortArg.([]interface{}))
-		}
-
-		filters, err := common_filters.ExtractFilters(p.Args, p.Info.FieldName)
-		if err != nil {
-			return nil, fmt.Errorf("could not extract filters: %s", err)
-		}
-
-		var nearVectorParams *searchparams.NearVector
-		if nearVector, ok := p.Args["nearVector"]; ok {
-			p, err := common_filters.ExtractNearVector(nearVector.(map[string]interface{}))
-			if err != nil {
-				return nil, fmt.Errorf("failed to extract nearVector params: %s", err)
-			}
-			nearVectorParams = &p
-		}
-
-		var nearObjectParams *searchparams.NearObject
-		if nearObject, ok := p.Args["nearObject"]; ok {
-			p, err := common_filters.ExtractNearObject(nearObject.(map[string]interface{}))
-			if err != nil {
-				return nil, fmt.Errorf("failed to extract nearObject params: %s", err)
-			}
-			nearObjectParams = &p
-		}
-
-		var moduleParams map[string]interface{}
-		if r.modulesProvider != nil {
-			extractedParams := r.modulesProvider.ExtractSearchParams(p.Args, className)
-			if len(extractedParams) > 0 {
-				moduleParams = extractedParams
-			}
-		}
-
-		var keywordRankingParams *searchparams.KeywordRanking
-
-		// extracts bm25 (sparseSearch) from the query
-		if bm25, ok := p.Args["bm25"]; ok {
-			p := common_filters.ExtractBM25(bm25.(map[string]interface{}))
-			keywordRankingParams = &p
-		}
-
-		// Extract hybrid search params from the processed query
-		// Everything hybrid can go in another namespace AFTER modulesprovider is
-		// refactored
-		var hybridParams *searchparams.HybridSearch
-		if hybrid, ok := p.Args["hybrid"]; ok {
-			p, err := common_filters.ExtractHybridSearch(hybrid.(map[string]interface{}))
-			if err != nil {
-				return nil, fmt.Errorf("failed to extract hybrid params: %w", err)
-			}
-			hybridParams = p
-		}
-
-		group := extractGroup(p.Args)
-
-		params := traverser.GetParams{
-			Filters:              filters,
-			ClassName:            className,
-			Pagination:           pagination,
-			Properties:           properties,
-			Sort:                 sort,
-			NearVector:           nearVectorParams,
-			NearObject:           nearObjectParams,
-			Group:                group,
-			ModuleParams:         moduleParams,
-			AdditionalProperties: additional,
-			KeywordRanking:       keywordRankingParams,
-			HybridSearch:         hybridParams,
-		}
-
-		// need to perform vector search by distance
-		// under certain conditions
-		setLimitBasedOnVectorSearchParams(&params)
-
-		return func() (interface{}, error) {
-			return resolver.GetClass(p.Context, principalFromContext(p.Context), params)
-		}, nil
+		return result, nil
 	}
+}
+
+func (r *resolver) resolveGet(p graphql.ResolveParams, className string) (interface{}, error) {
+	source, ok := p.Source.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("expected graphql root to be a map, but was %T", p.Source)
+	}
+
+	resolver, ok := source["Resolver"].(Resolver)
+	if !ok {
+		return nil, fmt.Errorf("expected source map to have a usable Resolver, but got %#v", source["Resolver"])
+	}
+
+	pagination, err := filters.ExtractPaginationFromArgs(p.Args)
+	if err != nil {
+		return nil, err
+	}
+
+	cursor, err := filters.ExtractCursorFromArgs(p.Args)
+	if err != nil {
+		return nil, err
+	}
+
+	// There can only be exactly one ast.Field; it is the class name.
+	if len(p.Info.FieldASTs) != 1 {
+		panic("Only one Field expected here")
+	}
+
+	selectionsOfClass := p.Info.FieldASTs[0].SelectionSet
+
+	properties, addlProps, err := extractProperties(
+		className, selectionsOfClass, p.Info.Fragments, r.modulesProvider)
+	if err != nil {
+		return nil, err
+	}
+
+	var sort []filters.Sort
+	if sortArg, ok := p.Args["sort"]; ok {
+		sort = filters.ExtractSortFromArgs(sortArg.([]interface{}))
+	}
+
+	filters, err := common_filters.ExtractFilters(p.Args, p.Info.FieldName)
+	if err != nil {
+		return nil, fmt.Errorf("could not extract filters: %s", err)
+	}
+
+	var nearVectorParams *searchparams.NearVector
+	if nearVector, ok := p.Args["nearVector"]; ok {
+		p, err := common_filters.ExtractNearVector(nearVector.(map[string]interface{}))
+		if err != nil {
+			return nil, fmt.Errorf("failed to extract nearVector params: %s", err)
+		}
+		nearVectorParams = &p
+	}
+
+	var nearObjectParams *searchparams.NearObject
+	if nearObject, ok := p.Args["nearObject"]; ok {
+		p, err := common_filters.ExtractNearObject(nearObject.(map[string]interface{}))
+		if err != nil {
+			return nil, fmt.Errorf("failed to extract nearObject params: %s", err)
+		}
+		nearObjectParams = &p
+	}
+
+	var moduleParams map[string]interface{}
+	if r.modulesProvider != nil {
+		extractedParams := r.modulesProvider.ExtractSearchParams(p.Args, className)
+		if len(extractedParams) > 0 {
+			moduleParams = extractedParams
+		}
+	}
+
+	// extracts bm25 (sparseSearch) from the query
+	var keywordRankingParams *searchparams.KeywordRanking
+	if bm25, ok := p.Args["bm25"]; ok {
+		if len(sort) > 0 {
+			return nil, fmt.Errorf("bm25 search is not compatible with sort")
+		}
+		p := common_filters.ExtractBM25(bm25.(map[string]interface{}), addlProps.ExplainScore)
+		keywordRankingParams = &p
+	}
+
+	// Extract hybrid search params from the processed query
+	// Everything hybrid can go in another namespace AFTER modulesprovider is
+	// refactored
+	var hybridParams *searchparams.HybridSearch
+	if hybrid, ok := p.Args["hybrid"]; ok {
+		if len(sort) > 0 {
+			return nil, fmt.Errorf("hybrid search is not compatible with sort")
+		}
+		p, err := common_filters.ExtractHybridSearch(hybrid.(map[string]interface{}), addlProps.ExplainScore)
+		if err != nil {
+			return nil, fmt.Errorf("failed to extract hybrid params: %w", err)
+		}
+		hybridParams = p
+	}
+
+	var replProps *additional.ReplicationProperties
+	if cl, ok := p.Args["consistencyLevel"]; ok {
+		replProps = &additional.ReplicationProperties{
+			ConsistencyLevel: cl.(string),
+		}
+	}
+
+	group := extractGroup(p.Args)
+
+	var groupByParams *searchparams.GroupBy
+	if groupBy, ok := p.Args["groupBy"]; ok {
+		p := common_filters.ExtractGroupBy(groupBy.(map[string]interface{}))
+		groupByParams = &p
+	}
+
+	var tenant string
+	if tk, ok := p.Args["tenant"]; ok {
+		tenant = tk.(string)
+	}
+
+	params := dto.GetParams{
+		Filters:               filters,
+		ClassName:             className,
+		Pagination:            pagination,
+		Cursor:                cursor,
+		Properties:            properties,
+		Sort:                  sort,
+		NearVector:            nearVectorParams,
+		NearObject:            nearObjectParams,
+		Group:                 group,
+		ModuleParams:          moduleParams,
+		AdditionalProperties:  addlProps,
+		KeywordRanking:        keywordRankingParams,
+		HybridSearch:          hybridParams,
+		ReplicationProperties: replProps,
+		GroupBy:               groupByParams,
+		Tenant:                tenant,
+	}
+
+	// need to perform vector search by distance
+	// under certain conditions
+	setLimitBasedOnVectorSearchParams(&params)
+
+	return func() (interface{}, error) {
+		result, err := resolver.GetClass(p.Context, principalFromContext(p.Context), params)
+		if err != nil {
+			return result, enterrors.NewErrGraphQLUser(err, "Get", params.ClassName)
+		}
+		return result, nil
+	}, nil
 }
 
 // the limit needs to be set according to the vector search parameters.
@@ -412,8 +477,8 @@ func (r *resolver) makeResolveGetClass(className string) graphql.FieldResolveFn 
 // and no limit was provided, weaviate will want to execute a vector
 // search by distance. it knows to do this by watching for a limit
 // flag, specifically filters.LimitFlagSearchByDistance
-func setLimitBasedOnVectorSearchParams(params *traverser.GetParams) {
-	setLimit := func(params *traverser.GetParams) {
+func setLimitBasedOnVectorSearchParams(params *dto.GetParams) {
+	setLimit := func(params *dto.GetParams) {
 		if params.Pagination == nil {
 			// limit was omitted entirely, implicitly
 			// indicating to do unlimited search
@@ -448,7 +513,7 @@ func setLimitBasedOnVectorSearchParams(params *traverser.GetParams) {
 	}
 }
 
-func extractGroup(args map[string]interface{}) *traverser.GroupParams {
+func extractGroup(args map[string]interface{}) *dto.GroupParams {
 	group, ok := args["group"]
 	if !ok {
 		return nil
@@ -457,7 +522,7 @@ func extractGroup(args map[string]interface{}) *traverser.GroupParams {
 	asMap := group.(map[string]interface{}) // guaranteed by graphql
 	strategy := asMap["type"].(string)
 	force := asMap["force"].(float64)
-	return &traverser.GroupParams{
+	return &dto.GroupParams{
 		Strategy: strategy,
 		Force:    float32(force),
 	}
@@ -495,15 +560,18 @@ type additionalCheck struct {
 	modulesProvider ModulesProvider
 }
 
-func (ac *additionalCheck) isAdditional(name string) bool {
-	if name == "classification" || name == "certainty" ||
-		name == "distance" || name == "id" || name == "vector" ||
-		name == "creationTimeUnix" || name == "lastUpdateTimeUnix" ||
-		name == "score" || name == "explainScore" {
-		return true
-	}
-	if ac.isModuleAdditional(name) {
-		return true
+func (ac *additionalCheck) isAdditional(parentName, name string) bool {
+	if parentName == "_additional" {
+		if name == "classification" || name == "certainty" ||
+			name == "distance" || name == "id" || name == "vector" || name == "vectors" ||
+			name == "creationTimeUnix" || name == "lastUpdateTimeUnix" ||
+			name == "score" || name == "explainScore" || name == "isConsistent" ||
+			name == "group" {
+			return true
+		}
+		if ac.isModuleAdditional(name) {
+			return true
+		}
 	}
 	return false
 }
@@ -558,7 +626,7 @@ func extractProperties(className string, selections *ast.SelectionSet,
 					if s.Name.Value == "__typename" {
 						property.IncludeTypeName = true
 						continue
-					} else if additionalCheck.isAdditional(s.Name.Value) {
+					} else if additionalCheck.isAdditional(name, s.Name.Value) {
 						additionalProperty := s.Name.Value
 						if additionalProperty == "classification" {
 							additionalProps.Classification = true
@@ -568,18 +636,28 @@ func extractProperties(className string, selections *ast.SelectionSet,
 							additionalProps.Certainty = true
 							continue
 						}
-
 						if additionalProperty == "distance" {
 							additionalProps.Distance = true
 							continue
 						}
-
 						if additionalProperty == "id" {
 							additionalProps.ID = true
 							continue
 						}
 						if additionalProperty == "vector" {
 							additionalProps.Vector = true
+							continue
+						}
+						if additionalProperty == "vectors" {
+							if s.SelectionSet != nil && len(s.SelectionSet.Selections) > 0 {
+								vectors := make([]string, len(s.SelectionSet.Selections))
+								for i, selection := range s.SelectionSet.Selections {
+									if field, ok := selection.(*ast.Field); ok {
+										vectors[i] = field.Name.Value
+									}
+								}
+								additionalProps.Vectors = vectors
+							}
 							continue
 						}
 						if additionalProperty == "creationTimeUnix" {
@@ -598,6 +676,19 @@ func extractProperties(className string, selections *ast.SelectionSet,
 							additionalProps.LastUpdateTimeUnix = true
 							continue
 						}
+						if additionalProperty == "isConsistent" {
+							additionalProps.IsConsistent = true
+							continue
+						}
+						if additionalProperty == "group" {
+							additionalProps.Group = true
+							additionalGroupHitProperties, err := extractGroupHitProperties(className, additionalProps, subSelection, fragments, modulesProvider)
+							if err != nil {
+								return nil, additionalProps, err
+							}
+							properties = append(properties, additionalGroupHitProperties...)
+							continue
+						}
 						if modulesProvider != nil {
 							if additionalCheck.isModuleAdditional(additionalProperty) {
 								additionalProps.ModuleParams = getModuleParams(additionalProps.ModuleParams)
@@ -606,7 +697,8 @@ func extractProperties(className string, selections *ast.SelectionSet,
 							}
 						}
 					} else {
-						return nil, additionalProps, fmt.Errorf("Expected a InlineFragment, not a '%s' field ", s.Name.Value)
+						// It's an object / object array property
+						continue
 					}
 
 				case *ast.FragmentSpread:
@@ -639,6 +731,47 @@ func extractProperties(className string, selections *ast.SelectionSet,
 	}
 
 	return properties, additionalProps, nil
+}
+
+func extractGroupHitProperties(
+	className string,
+	additionalProps additional.Properties,
+	subSelection ast.Selection,
+	fragments map[string]ast.Definition,
+	modulesProvider ModulesProvider,
+) ([]search.SelectProperty, error) {
+	additionalGroupProperties := []search.SelectProperty{}
+	if subSelection != nil {
+		if selectionSet := subSelection.GetSelectionSet(); selectionSet != nil {
+			for _, groupSubSelection := range selectionSet.Selections {
+				if groupSubSelection != nil {
+					if groupSubSelectionField, ok := groupSubSelection.(*ast.Field); ok {
+						if groupSubSelectionField.Name.Value == "hits" && groupSubSelectionField.SelectionSet != nil {
+							for _, groupHitsSubSelection := range groupSubSelectionField.SelectionSet.Selections {
+								if hf, ok := groupHitsSubSelection.(*ast.Field); ok {
+									if hf.SelectionSet != nil {
+										for _, ss := range hf.SelectionSet.Selections {
+											if inlineFrag, ok := ss.(*ast.InlineFragment); ok {
+												ref, err := extractInlineFragment(className, inlineFrag, fragments, modulesProvider)
+												if err != nil {
+													return nil, err
+												}
+
+												additionalGroupHitProp := search.SelectProperty{Name: fmt.Sprintf("_additional:group:hits:%v", hf.Name.Value)}
+												additionalGroupHitProp.Refs = append(additionalGroupHitProp.Refs, ref)
+												additionalGroupProperties = append(additionalGroupProperties, additionalGroupHitProp)
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	return additionalGroupProperties, nil
 }
 
 func getModuleParams(moduleParams map[string]interface{}) map[string]interface{} {

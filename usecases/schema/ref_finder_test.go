@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package schema
@@ -14,10 +14,10 @@ package schema
 import (
 	"testing"
 
-	"github.com/semi-technologies/weaviate/entities/filters"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/schema"
 	"github.com/stretchr/testify/assert"
+	"github.com/weaviate/weaviate/entities/filters"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
 )
 
 func TestRefFinder(t *testing.T) {
@@ -43,7 +43,7 @@ func TestRefFinder(t *testing.T) {
 						Properties: []*models.Property{
 							{
 								Name:     "model",
-								DataType: []string{string(schema.DataTypeString)},
+								DataType: schema.DataTypeText.PropString(),
 							},
 						},
 					},
@@ -52,7 +52,7 @@ func TestRefFinder(t *testing.T) {
 						Properties: []*models.Property{
 							{
 								Name:     "kind",
-								DataType: []string{string(schema.DataTypeString)},
+								DataType: schema.DataTypeText.PropString(),
 							},
 						},
 					},
@@ -75,7 +75,7 @@ func TestRefFinder(t *testing.T) {
 						Properties: []*models.Property{
 							{
 								Name:     "model",
-								DataType: []string{string(schema.DataTypeString)},
+								DataType: schema.DataTypeText.PropString(),
 							},
 						},
 					},
@@ -84,7 +84,7 @@ func TestRefFinder(t *testing.T) {
 						Properties: []*models.Property{
 							{
 								Name:     "kind",
-								DataType: []string{string(schema.DataTypeString)},
+								DataType: schema.DataTypeText.PropString(),
 							},
 						},
 					},
@@ -93,7 +93,7 @@ func TestRefFinder(t *testing.T) {
 						Properties: []*models.Property{
 							{
 								Name:     "destination",
-								DataType: []string{string(schema.DataTypeString)},
+								DataType: schema.DataTypeText.PropString(),
 							},
 						},
 					},
@@ -102,7 +102,7 @@ func TestRefFinder(t *testing.T) {
 						Properties: []*models.Property{
 							{
 								Name:     "destination",
-								DataType: []string{string(schema.DataTypeString)},
+								DataType: schema.DataTypeText.PropString(),
 							},
 							{
 								Name:     "vehicle",
@@ -138,7 +138,7 @@ func TestRefFinder(t *testing.T) {
 						Properties: []*models.Property{
 							{
 								Name:     "name",
-								DataType: []string{string(schema.DataTypeString)},
+								DataType: schema.DataTypeText.PropString(),
 							},
 							{
 								Name:     "hasOwner",
@@ -151,7 +151,7 @@ func TestRefFinder(t *testing.T) {
 						Properties: []*models.Property{
 							{
 								Name:     "model",
-								DataType: []string{string(schema.DataTypeString)},
+								DataType: schema.DataTypeText.PropString(),
 							},
 						},
 					},
@@ -160,7 +160,7 @@ func TestRefFinder(t *testing.T) {
 						Properties: []*models.Property{
 							{
 								Name:     "name",
-								DataType: []string{string(schema.DataTypeString)},
+								DataType: schema.DataTypeText.PropString(),
 							},
 							{
 								Name:     "travels",
@@ -177,7 +177,7 @@ func TestRefFinder(t *testing.T) {
 						Properties: []*models.Property{
 							{
 								Name:     "destination",
-								DataType: []string{string(schema.DataTypeString)},
+								DataType: schema.DataTypeText.PropString(),
 							},
 							{
 								Name:     "vehicle",

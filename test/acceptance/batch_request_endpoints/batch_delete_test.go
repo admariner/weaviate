@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package batch_request_endpoints
@@ -16,26 +16,27 @@ import (
 	"testing"
 
 	"github.com/go-openapi/strfmt"
-	"github.com/semi-technologies/weaviate/client/batch"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/test/helper"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/client/batch"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/test/helper"
 )
 
 func batchDeleteJourney(t *testing.T) {
 	maxObjects := 20
 	var sources []*models.Object
+	var targets []*models.Object
 	equalThisName := "equal-this-name"
 
-	getBatchDelete := func(className string, path []string, valueString string, dryRun bool) *batch.BatchObjectsDeleteParams {
+	getBatchDelete := func(className string, path []string, valueText string, dryRun bool) *batch.BatchObjectsDeleteParams {
 		output := "verbose"
 		params := batch.NewBatchObjectsDeleteParams().WithBody(&models.BatchDelete{
 			Match: &models.BatchDeleteMatch{
 				Class: className,
 				Where: &models.WhereFilter{
-					Operator:    "Equal",
-					Path:        path,
-					ValueString: &valueString,
+					Operator:  "Equal",
+					Path:      path,
+					ValueText: &valueText,
 				},
 			},
 			DryRun: &dryRun,
@@ -63,7 +64,7 @@ func batchDeleteJourney(t *testing.T) {
 			sourceUUIDs[i] = uuid
 		}
 
-		targets := make([]*models.Object, maxObjects)
+		targets = make([]*models.Object, maxObjects)
 		for i := range targets {
 			uuid := mustNewUUID()
 
@@ -91,6 +92,18 @@ func batchDeleteJourney(t *testing.T) {
 		for _, elem := range res.Payload {
 			require.Nil(t, elem.Result.Errors)
 		}
+
+		paramsTarget := batch.NewBatchObjectsCreateParams().WithBody(
+			batch.BatchObjectsCreateBody{
+				Objects: targets,
+			},
+		)
+		resTarget, errTarget := helper.Client(t).Batch.BatchObjectsCreate(paramsTarget, nil)
+		require.Nil(t, errTarget)
+
+		for _, elem := range resTarget.Payload {
+			require.Nil(t, elem.Result.Errors)
+		}
 	})
 
 	t.Run("import all batch refs", func(t *testing.T) {
@@ -98,8 +111,8 @@ func batchDeleteJourney(t *testing.T) {
 
 		for i := range batchRefs {
 			batchRefs[i] = &models.BatchReference{
-				From: strfmt.URI(fmt.Sprintf("weaviate://localhost/%s/%s/fromSource", "BulkTestTarget", targetUUIDs[i])),
-				To:   strfmt.URI(fmt.Sprintf("weaviate://localhost/%s", sourceUUIDs[i])),
+				From: strfmt.URI(fmt.Sprintf("weaviate://localhost/BulkTestTarget/%s/fromSource", targetUUIDs[i])),
+				To:   strfmt.URI(fmt.Sprintf("weaviate://localhost/BulkTestSource/%s", sourceUUIDs[i])),
 			}
 		}
 
@@ -115,7 +128,7 @@ func batchDeleteJourney(t *testing.T) {
 	t.Run("verify using GraphQL", func(t *testing.T) {
 		// verify objects
 		result := AssertGraphQL(t, helper.RootAuth, `
-		{  Get { BulkTestSource(where:{operator:Equal path:["name"] valueString:"equal-this-name"}) { name } } }
+		{  Get { BulkTestSource(where:{operator:Equal path:["name"] valueText:"equal-this-name"}) { name } } }
 		`)
 		items := result.Get("Get", "BulkTestSource").AsSlice()
 		require.Len(t, items, maxObjects)
@@ -129,7 +142,7 @@ func batchDeleteJourney(t *testing.T) {
 			  where: {
 				path: ["fromSource", "BulkTestSource", "name"]
 				operator: Equal
-				valueString: "equal-this-name"
+				valueText: "equal-this-name"
 			  }
 			)
 			{
@@ -170,6 +183,27 @@ func batchDeleteJourney(t *testing.T) {
 		}
 	})
 
+	t.Run("[deprecated string] perform batch delete by refs dry run", func(t *testing.T) {
+		params := getBatchDelete("BulkTestTarget", []string{"fromSource", "BulkTestSource", "name"}, equalThisName, true)
+		params.Body.Match.Where.ValueText = nil
+		params.Body.Match.Where.ValueString = &equalThisName
+
+		res, err := helper.Client(t).Batch.BatchObjectsDelete(params, nil)
+		require.Nil(t, err)
+
+		response := res.Payload
+		require.NotNil(t, response)
+		require.NotNil(t, response.Match)
+		require.NotNil(t, response.Results)
+		require.Equal(t, int64(maxObjects), response.Results.Matches)
+		require.Equal(t, int64(0), response.Results.Successful)
+		require.Equal(t, int64(0), response.Results.Failed)
+		require.Equal(t, maxObjects, len(response.Results.Objects))
+		for _, elem := range response.Results.Objects {
+			require.Nil(t, elem.Errors)
+		}
+	})
+
 	t.Run("verify that batch delete by refs dry run didn't delete data", func(t *testing.T) {
 		result := AssertGraphQL(t, helper.RootAuth, `
 		{
@@ -179,7 +213,7 @@ func batchDeleteJourney(t *testing.T) {
 			  where: {
 				path: ["fromSource", "BulkTestSource", "name"]
 				operator: Equal
-				valueString: "equal-this-name"
+				valueText: "equal-this-name"
 			  }
 			)
 			{
@@ -218,7 +252,7 @@ func batchDeleteJourney(t *testing.T) {
 
 	t.Run("verify that batch delete by prop dry run didn't delete data", func(t *testing.T) {
 		result := AssertGraphQL(t, helper.RootAuth, `
-		{  Get { BulkTestSource(where:{operator:Equal path:["name"] valueString:"equal-this-name"}) { name } } }
+		{  Get { BulkTestSource(where:{operator:Equal path:["name"] valueText:"equal-this-name"}) { name } } }
 		`)
 		items := result.Get("Get", "BulkTestSource").AsSlice()
 		require.Len(t, items, maxObjects)
@@ -251,7 +285,7 @@ func batchDeleteJourney(t *testing.T) {
 			  where: {
 				path: ["fromSource", "BulkTestSource", "name"]
 				operator: Equal
-				valueString: "equal-this-name"
+				valueText: "equal-this-name"
 			  }
 			)
 			{
@@ -290,7 +324,7 @@ func batchDeleteJourney(t *testing.T) {
 
 	t.Run("verify that batch delete by prop deleted everything", func(t *testing.T) {
 		result := AssertGraphQL(t, helper.RootAuth, `
-		{  Get { BulkTestSource(where:{operator:Equal path:["name"] valueString:"equal-this-name"}) { name } } }
+		{  Get { BulkTestSource(where:{operator:Equal path:["name"] valueText:"equal-this-name"}) { name } } }
 		`)
 		items := result.Get("Get", "BulkTestSource").AsSlice()
 		require.Len(t, items, 0)

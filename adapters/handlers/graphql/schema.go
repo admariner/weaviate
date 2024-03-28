@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 // Package graphql provides the graphql endpoint for Weaviate
@@ -17,13 +17,13 @@ import (
 	"fmt"
 	"runtime/debug"
 
-	"github.com/semi-technologies/weaviate/adapters/handlers/graphql/local"
-	"github.com/semi-technologies/weaviate/adapters/handlers/graphql/local/get"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	"github.com/semi-technologies/weaviate/usecases/config"
-	"github.com/semi-technologies/weaviate/usecases/modules"
 	"github.com/sirupsen/logrus"
 	"github.com/tailor-inc/graphql"
+	"github.com/weaviate/weaviate/adapters/handlers/graphql/local"
+	"github.com/weaviate/weaviate/adapters/handlers/graphql/local/get"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/usecases/config"
+	"github.com/weaviate/weaviate/usecases/modules"
 )
 
 type Traverser interface {
@@ -95,7 +95,7 @@ func buildGraphqlSchema(dbSchema *schema.Schema, logger logrus.FieldLogger,
 		Fields:      localSchema,
 	}
 
-	// Run grahpql.NewSchema in a sub-closure, so that we can recover from panics.
+	// Run graphql.NewSchema in a sub-closure, so that we can recover from panics.
 	// We need to use panics to return errors deep inside the dynamic generation of the GraphQL schema,
 	// inside the FieldThunks. There is _no_ way to bubble up an error besides panicking.
 	var result graphql.Schema

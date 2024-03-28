@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package distancer
@@ -18,6 +18,9 @@ func Normalize(v []float32) []float32 {
 	out := make([]float32, len(v))
 	for i := range v {
 		norm += v[i] * v[i]
+	}
+	if norm == 0 {
+		return out
 	}
 
 	norm = float32(math.Sqrt(float64(norm)))

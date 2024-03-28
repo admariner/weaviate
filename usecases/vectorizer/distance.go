@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package vectorizer
@@ -44,5 +44,5 @@ func cosineSim(a, b []float32) (float32, error) {
 		sumBSquare += float64(b[i] * b[i])
 	}
 
-	return float32(sumProduct / (math.Sqrt(sumASquare) * math.Sqrt(sumBSquare))), nil
+	return float32(sumProduct / (math.Sqrt(sumASquare * sumBSquare))), nil
 }

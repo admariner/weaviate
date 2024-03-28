@@ -4,44 +4,51 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package traverser
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"github.com/go-openapi/strfmt"
 	"github.com/pkg/errors"
-	"github.com/semi-technologies/weaviate/entities/additional"
-	"github.com/semi-technologies/weaviate/entities/filters"
-	"github.com/semi-technologies/weaviate/entities/modulecapabilities"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	"github.com/semi-technologies/weaviate/entities/schema/crossref"
-	"github.com/semi-technologies/weaviate/entities/search"
-	"github.com/semi-technologies/weaviate/entities/searchparams"
-	"github.com/semi-technologies/weaviate/entities/storobj"
-	"github.com/semi-technologies/weaviate/entities/vectorindex/hnsw"
-	"github.com/semi-technologies/weaviate/usecases/floatcomp"
-	uc "github.com/semi-technologies/weaviate/usecases/schema"
-	"github.com/semi-technologies/weaviate/usecases/traverser/grouper"
-	"github.com/semi-technologies/weaviate/usecases/traverser/hybrid"
 	"github.com/sirupsen/logrus"
+	"github.com/weaviate/weaviate/entities/additional"
+	"github.com/weaviate/weaviate/entities/autocut"
+	"github.com/weaviate/weaviate/entities/dto"
+	"github.com/weaviate/weaviate/entities/filters"
+	"github.com/weaviate/weaviate/entities/inverted"
+	"github.com/weaviate/weaviate/entities/modulecapabilities"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/schema/crossref"
+	"github.com/weaviate/weaviate/entities/search"
+	"github.com/weaviate/weaviate/entities/searchparams"
+	"github.com/weaviate/weaviate/entities/storobj"
+	"github.com/weaviate/weaviate/entities/vectorindex/common"
+	"github.com/weaviate/weaviate/usecases/config"
+	"github.com/weaviate/weaviate/usecases/floatcomp"
+	uc "github.com/weaviate/weaviate/usecases/schema"
+	"github.com/weaviate/weaviate/usecases/traverser/grouper"
 )
 
 // Explorer is a helper construct to perform vector-based searches. It does not
 // contain monitoring or authorization checks. It should thus never be directly
 // used by an API, but through a Traverser.
 type Explorer struct {
-	search           vectorClassSearch
-	logger           logrus.FieldLogger
-	modulesProvider  ModulesProvider
-	schemaGetter     uc.SchemaGetter
-	nearParamsVector *nearParamsVector
-	metrics          explorerMetrics
+	searcher          objectsSearcher
+	logger            logrus.FieldLogger
+	modulesProvider   ModulesProvider
+	schemaGetter      uc.SchemaGetter
+	nearParamsVector  *nearParamsVector
+	targetParamHelper *TargetVectorParamHelper
+	metrics           explorerMetrics
+	config            config.Config
 }
 
 type explorerMetrics interface {
@@ -52,46 +59,55 @@ type ModulesProvider interface {
 	ValidateSearchParam(name string, value interface{}, className string) error
 	CrossClassValidateSearchParam(name string, value interface{}) error
 	VectorFromSearchParam(ctx context.Context, className string, param string,
-		params interface{}, findVectorFn modulecapabilities.FindVectorFn) ([]float32, error)
+		params interface{}, findVectorFn modulecapabilities.FindVectorFn, tenant string) ([]float32, string, error)
 	CrossClassVectorFromSearchParam(ctx context.Context, param string,
-		params interface{}, findVectorFn modulecapabilities.FindVectorFn) ([]float32, error)
+		params interface{}, findVectorFn modulecapabilities.FindVectorFn) ([]float32, string, error)
 	GetExploreAdditionalExtend(ctx context.Context, in []search.Result,
 		moduleParams map[string]interface{}, searchVector []float32,
 		argumentModuleParams map[string]interface{}) ([]search.Result, error)
 	ListExploreAdditionalExtend(ctx context.Context, in []search.Result,
 		moduleParams map[string]interface{},
 		argumentModuleParams map[string]interface{}) ([]search.Result, error)
-	VectorFromInput(ctx context.Context, className string, input string) ([]float32, error)
+	VectorFromInput(ctx context.Context, className, input, targetVector string) ([]float32, error)
 }
 
-type vectorClassSearch interface {
-	ClassObjectSearch(ctx context.Context, params GetParams) ([]*storobj.Object, []float32, error)
-	ClassObjectVectorSearch(context.Context, string, []float32,
-		int, int, *filters.LocalFilter) ([]*storobj.Object, []float32, error)
-	ClassSearch(ctx context.Context, params GetParams) ([]search.Result, error)
-	VectorClassSearch(ctx context.Context, params GetParams) ([]search.Result, error)
-	VectorSearch(ctx context.Context, vector []float32, offset, limit int,
+type objectsSearcher interface {
+	hybridSearcher
+
+	// GraphQL Get{} queries
+	Search(ctx context.Context, params dto.GetParams) ([]search.Result, error)
+	VectorSearch(ctx context.Context, params dto.GetParams) ([]search.Result, error)
+
+	// GraphQL Explore{} queries
+	CrossClassVectorSearch(ctx context.Context, vector []float32, targetVector string, offset, limit int,
 		filters *filters.LocalFilter) ([]search.Result, error)
-	ClassVectorSearch(ctx context.Context, class string, vector []float32, offset, limit int,
-		filters *filters.LocalFilter) ([]search.Result, error)
+
+	// Near-params searcher
 	Object(ctx context.Context, className string, id strfmt.UUID,
 		props search.SelectProperties, additional additional.Properties,
-		properties *additional.ReplicationProperties) (*search.Result, error)
-	ObjectsByID(ctx context.Context, id strfmt.UUID,
-		props search.SelectProperties, additional additional.Properties) (search.Results, error)
+		properties *additional.ReplicationProperties, tenant string) (*search.Result, error)
+	ObjectsByID(ctx context.Context, id strfmt.UUID, props search.SelectProperties, additional additional.Properties, tenant string) (search.Results, error)
+}
+
+type hybridSearcher interface {
+	SparseObjectSearch(ctx context.Context, params dto.GetParams) ([]*storobj.Object, []float32, error)
+	DenseObjectSearch(context.Context, string, []float32, string, int, int,
+		*filters.LocalFilter, additional.Properties, string) ([]*storobj.Object, []float32, error)
+	ResolveReferences(ctx context.Context, objs search.Results, props search.SelectProperties,
+		groupBy *searchparams.GroupBy, additional additional.Properties, tenant string) (search.Results, error)
 }
 
 // NewExplorer with search and connector repo
-func NewExplorer(search vectorClassSearch, logger logrus.FieldLogger,
-	modulesProvider ModulesProvider, metrics explorerMetrics,
-) *Explorer {
+func NewExplorer(searcher objectsSearcher, logger logrus.FieldLogger, modulesProvider ModulesProvider, metrics explorerMetrics, conf config.Config) *Explorer {
 	return &Explorer{
-		search:           search,
-		logger:           logger,
-		modulesProvider:  modulesProvider,
-		metrics:          metrics,
-		schemaGetter:     nil, // schemaGetter is set later
-		nearParamsVector: newNearParamsVector(modulesProvider, search),
+		searcher:          searcher,
+		logger:            logger,
+		modulesProvider:   modulesProvider,
+		metrics:           metrics,
+		schemaGetter:      nil, // schemaGetter is set later
+		nearParamsVector:  newNearParamsVector(modulesProvider, searcher),
+		targetParamHelper: NewTargetParamHelper(),
+		config:            conf,
 	}
 }
 
@@ -101,7 +117,7 @@ func (e *Explorer) SetSchemaGetter(sg uc.SchemaGetter) {
 
 // GetClass from search and connector repo
 func (e *Explorer) GetClass(ctx context.Context,
-	params GetParams,
+	params dto.GetParams,
 ) ([]interface{}, error) {
 	if params.Pagination == nil {
 		params.Pagination = &filters.Pagination{
@@ -115,29 +131,39 @@ func (e *Explorer) GetClass(ctx context.Context,
 	}
 
 	if err := e.validateSort(params.ClassName, params.Sort); err != nil {
-		return nil, errors.Wrap(err, "invalid 'sort' filter")
+		return nil, errors.Wrap(err, "invalid 'sort' parameter")
+	}
+
+	if err := e.validateCursor(params); err != nil {
+		return nil, errors.Wrap(err, "cursor api: invalid 'after' parameter")
 	}
 
 	if params.KeywordRanking != nil {
-		return e.getClassKeywordBased(ctx, params)
+		res, err := e.getClassKeywordBased(ctx, params)
+		if err != nil {
+			return nil, err
+		}
+		return e.searchResultsToGetResponse(ctx, res, nil, params)
 	}
 
 	if params.NearVector != nil || params.NearObject != nil || len(params.ModuleParams) > 0 {
-		return e.getClassVectorSearch(ctx, params)
+		res, searchVector, err := e.getClassVectorSearch(ctx, params)
+		if err != nil {
+			return nil, err
+		}
+		return e.searchResultsToGetResponse(ctx, res, searchVector, params)
 	}
 
-	return e.getClassList(ctx, params)
+	res, err := e.getClassList(ctx, params)
+	if err != nil {
+		return nil, err
+	}
+	return e.searchResultsToGetResponse(ctx, res, nil, params)
 }
 
-func (e *Explorer) getClassKeywordBased(ctx context.Context,
-	params GetParams,
-) ([]interface{}, error) {
+func (e *Explorer) getClassKeywordBased(ctx context.Context, params dto.GetParams) ([]search.Result, error) {
 	if params.NearVector != nil || params.NearObject != nil || len(params.ModuleParams) > 0 {
 		return nil, errors.Errorf("conflict: both near<Media> and keyword-based (bm25) arguments present, choose one")
-	}
-
-	if params.Filters != nil {
-		return nil, errors.Errorf("filtered keyword search (bm25) not supported yet")
 	}
 
 	if len(params.KeywordRanking.Query) == 0 {
@@ -151,8 +177,12 @@ func (e *Explorer) getClassKeywordBased(ctx context.Context,
 		params.AdditionalProperties.Vector = true
 	}
 
-	res, err := e.search.ClassSearch(ctx, params)
+	res, err := e.searcher.Search(ctx, params)
 	if err != nil {
+		var e inverted.MissingIndexError
+		if errors.As(err, &e) {
+			return nil, e
+		}
 		return nil, errors.Errorf("explorer: get class: vector search: %v", err)
 	}
 
@@ -173,17 +203,23 @@ func (e *Explorer) getClassKeywordBased(ctx context.Context,
 		}
 	}
 
-	return e.searchResultsToGetResponse(ctx, res, nil, params)
+	return res, nil
 }
 
 func (e *Explorer) getClassVectorSearch(ctx context.Context,
-	params GetParams,
-) ([]interface{}, error) {
-	searchVector, err := e.vectorFromParams(ctx, params)
+	params dto.GetParams,
+) ([]search.Result, []float32, error) {
+	searchVector, targetVector, err := e.vectorFromParams(ctx, params)
 	if err != nil {
-		return nil, errors.Errorf("explorer: get class: vectorize params: %v", err)
+		return nil, nil, errors.Errorf("explorer: get class: vectorize params: %v", err)
 	}
 
+	targetVector, err = e.targetParamHelper.GetTargetVectorOrDefault(e.schemaGetter.GetSchemaSkipAuth(),
+		params.ClassName, targetVector)
+	if err != nil {
+		return nil, nil, errors.Errorf("explorer: get class: validate target vector: %v", err)
+	}
+	params.TargetVector = targetVector
 	params.SearchVector = searchVector
 
 	if len(params.AdditionalProperties.ModuleParams) > 0 || params.Group != nil {
@@ -194,15 +230,24 @@ func (e *Explorer) getClassVectorSearch(ctx context.Context,
 		params.AdditionalProperties.Vector = true
 	}
 
-	res, err := e.search.VectorClassSearch(ctx, params)
+	res, err := e.searcher.VectorSearch(ctx, params)
 	if err != nil {
-		return nil, errors.Errorf("explorer: get class: vector search: %v", err)
+		return nil, nil, errors.Errorf("explorer: get class: vector search: %v", err)
+	}
+
+	if params.Pagination.Autocut > 0 {
+		scores := make([]float32, len(res))
+		for i := range res {
+			scores[i] = res[i].Dist
+		}
+		cutOff := autocut.Autocut(scores, params.Pagination.Autocut)
+		res = res[:cutOff]
 	}
 
 	if params.Group != nil {
 		grouped, err := grouper.New(e.logger).Group(res, params.Group.Strategy, params.Group.Force)
 		if err != nil {
-			return nil, errors.Errorf("grouper: %v", err)
+			return nil, nil, errors.Errorf("grouper: %v", err)
 		}
 
 		res = grouped
@@ -212,61 +257,52 @@ func (e *Explorer) getClassVectorSearch(ctx context.Context,
 		res, err = e.modulesProvider.GetExploreAdditionalExtend(ctx, res,
 			params.AdditionalProperties.ModuleParams, searchVector, params.ModuleParams)
 		if err != nil {
-			return nil, errors.Errorf("explorer: get class: extend: %v", err)
+			return nil, nil, errors.Errorf("explorer: get class: extend: %v", err)
 		}
 	}
 
 	e.trackUsageGet(res, params)
 
-	return e.searchResultsToGetResponse(ctx, res, searchVector, params)
+	return res, searchVector, nil
 }
 
-func (e *Explorer) Hybrid(ctx context.Context, params GetParams) ([]search.Result, error) {
-	sparseSearch := func() ([]*storobj.Object, []float32, error) {
-		params.KeywordRanking = &searchparams.KeywordRanking{
-			Query: params.HybridSearch.Query,
-			Type:  "bm25",
+func MinInt(ints ...int) int {
+	min := ints[0]
+	for _, i := range ints {
+		if i < min {
+			min = i
 		}
+	}
+	return min
+}
 
-		res, dists, err := e.search.ClassObjectSearch(ctx, params)
-		if err != nil {
-			return nil, nil, err
+func MaxInt(ints ...int) int {
+	max := ints[0]
+	for _, i := range ints {
+		if i > max {
+			max = i
 		}
+	}
+	return max
+}
 
-		return res, dists, nil
+func (e *Explorer) CalculateTotalLimit(pagination *filters.Pagination) (int, error) {
+	if pagination == nil {
+		return 0, fmt.Errorf("invalid params, pagination object is nil")
 	}
 
-	denseSearch := func(vec []float32) ([]*storobj.Object, []float32, error) {
-		hybridSearchLimit := params.Pagination.Limit
-		if hybridSearchLimit == 0 {
-			hybridSearchLimit = hybrid.DefaultLimit
-		}
-		res, dists, err := e.search.ClassObjectVectorSearch(
-			ctx, params.ClassName, vec, 0, hybridSearchLimit, nil)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		return res, dists, nil
+	if pagination.Limit == -1 {
+		return int(e.config.QueryDefaults.Limit + int64(pagination.Offset)), nil
 	}
 
-	h := hybrid.NewSearcher(&hybrid.Params{
-		HybridSearch: params.HybridSearch,
-		Keyword:      params.KeywordRanking,
-		Class:        params.ClassName,
-	}, e.logger, sparseSearch, denseSearch, e.modulesProvider)
+	totalLimit := pagination.Offset + pagination.Limit
 
-	res, err := h.Search(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	return res.SearchResults(), nil
+	return MinInt(totalLimit, int(e.config.QueryMaximumResults)), nil
 }
 
 func (e *Explorer) getClassList(ctx context.Context,
-	params GetParams,
-) ([]interface{}, error) {
+	params dto.GetParams,
+) ([]search.Result, error) {
 	// we will modify the params because of the workaround outlined below,
 	// however, we only want to track what the user actually set for the usage
 	// metrics, not our own workaround, so here's a copy of the original user
@@ -280,7 +316,7 @@ func (e *Explorer) getClassList(ctx context.Context,
 	// result payload. if we skip this step, the grouper will attempt
 	// to compute the distance with a `nil` vector, resulting in NaN.
 	// this was the cause of [github issue 1958]
-	// (https://github.com/semi-technologies/weaviate/issues/1958)
+	// (https://github.com/weaviate/weaviate/issues/1958)
 	if params.Group != nil && (params.Filters != nil || params.Sort != nil) {
 		params.AdditionalProperties.Vector = true
 	}
@@ -292,8 +328,12 @@ func (e *Explorer) getClassList(ctx context.Context,
 			return nil, err
 		}
 	} else {
-		res, err = e.search.ClassSearch(ctx, params)
+		res, err = e.searcher.Search(ctx, params)
 		if err != nil {
+			var e inverted.MissingIndexError
+			if errors.As(err, &e) {
+				return nil, e
+			}
 			return nil, errors.Errorf("explorer: list class: search: %v", err)
 		}
 	}
@@ -319,16 +359,34 @@ func (e *Explorer) getClassList(ctx context.Context,
 		e.trackUsageGetExplicitVector(res, params)
 	}
 
-	return e.searchResultsToGetResponse(ctx, res, nil, params)
+	return res, nil
 }
 
-func (e *Explorer) searchResultsToGetResponse(ctx context.Context,
-	input []search.Result,
-	searchVector []float32, params GetParams,
-) ([]interface{}, error) {
+func (e *Explorer) searchResultsToGetResponse(ctx context.Context, input []search.Result, searchVector []float32, params dto.GetParams) ([]interface{}, error) {
 	output := make([]interface{}, 0, len(input))
+	results, err := e.searchResultsToGetResponseWithType(ctx, input, searchVector, params)
+	if err != nil {
+		return nil, err
+	}
+	for _, result := range results {
+		output = append(output, result.Schema)
+	}
+	return output, nil
+}
 
+func (e *Explorer) searchResultsToGetResponseWithType(ctx context.Context,
+	input []search.Result,
+	searchVector []float32, params dto.GetParams,
+) ([]search.Result, error) {
+	var output []search.Result
+	replEnabled, err := e.replicationEnabled(params)
+	if err != nil {
+		return nil, fmt.Errorf("search results to get response: %w", err)
+	}
 	for _, res := range input {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		additionalProperties := make(map[string]interface{})
 
 		if res.AdditionalProperties != nil {
@@ -359,7 +417,7 @@ func (e *Explorer) searchResultsToGetResponse(ctx context.Context,
 			}
 
 			if params.AdditionalProperties.Certainty {
-				if err := e.checkCertaintyCompatibility(params.ClassName); err != nil {
+				if err := e.checkCertaintyCompatibility(params); err != nil {
 					return nil, errors.Errorf("additional: %s", err)
 				}
 				additionalProperties["certainty"] = additional.DistToCertainty(float64(res.Dist))
@@ -386,6 +444,14 @@ func (e *Explorer) searchResultsToGetResponse(ctx context.Context,
 			additionalProperties["vector"] = res.Vector
 		}
 
+		if len(params.AdditionalProperties.Vectors) > 0 {
+			vectors := make(map[string][]float32)
+			for _, targetVector := range params.AdditionalProperties.Vectors {
+				vectors[targetVector] = res.Vectors[targetVector]
+			}
+			additionalProperties["vectors"] = vectors
+		}
+
 		if params.AdditionalProperties.CreationTimeUnix {
 			additionalProperties["creationTimeUnix"] = res.Created
 		}
@@ -394,16 +460,47 @@ func (e *Explorer) searchResultsToGetResponse(ctx context.Context,
 			additionalProperties["lastUpdateTimeUnix"] = res.Updated
 		}
 
+		if replEnabled {
+			additionalProperties["isConsistent"] = res.IsConsistent
+		}
+
 		if len(additionalProperties) > 0 {
+			if additionalProperties["group"] != nil {
+				e.extractAdditionalPropertiesFromGroupRefs(additionalProperties["group"], params.Properties)
+			}
 			res.Schema.(map[string]interface{})["_additional"] = additionalProperties
 		}
 
 		e.extractAdditionalPropertiesFromRefs(res.Schema, params.Properties)
 
-		output = append(output, res.Schema)
+		output = append(output, res)
 	}
 
 	return output, nil
+}
+
+func (e *Explorer) extractAdditionalPropertiesFromGroupRefs(
+	additionalGroup interface{},
+	params search.SelectProperties,
+) {
+	if group, ok := additionalGroup.(*additional.Group); ok {
+		if len(group.Hits) > 0 {
+			var groupSelectProperties search.SelectProperties
+			for _, selectProp := range params {
+				if strings.HasPrefix(selectProp.Name, "_additional:group:hits:") {
+					groupSelectProperties = append(groupSelectProperties, search.SelectProperty{
+						Name:            strings.Replace(selectProp.Name, "_additional:group:hits:", "", 1),
+						IsPrimitive:     selectProp.IsPrimitive,
+						IncludeTypeName: selectProp.IncludeTypeName,
+						Refs:            selectProp.Refs,
+					})
+				}
+			}
+			for _, hit := range group.Hits {
+				e.extractAdditionalPropertiesFromRefs(hit, groupSelectProperties)
+			}
+		}
+	}
 }
 
 func (e *Explorer) extractAdditionalPropertiesFromRefs(propertySchema interface{}, params search.SelectProperties) {
@@ -455,6 +552,9 @@ func (e *Explorer) extractAdditionalPropertiesFromRef(ref interface{},
 				if refClass.AdditionalProperties.Vector {
 					additionalProperties["vector"] = innerRef.Fields["vector"]
 				}
+				if len(refClass.AdditionalProperties.Vectors) > 0 {
+					additionalProperties["vectors"] = innerRef.Fields["vectors"]
+				}
 				if refClass.AdditionalProperties.CreationTimeUnix {
 					additionalProperties["creationTimeUnix"] = innerRef.Fields["creationTimeUnix"]
 				}
@@ -476,12 +576,12 @@ func (e *Explorer) CrossClassVectorSearch(ctx context.Context,
 		return nil, errors.Wrap(err, "invalid params")
 	}
 
-	vector, err := e.vectorFromExploreParams(ctx, params)
+	vector, targetVector, err := e.vectorFromExploreParams(ctx, params)
 	if err != nil {
 		return nil, errors.Errorf("vectorize params: %v", err)
 	}
 
-	res, err := e.search.VectorSearch(ctx, vector, params.Offset, params.Limit, nil)
+	res, err := e.searcher.CrossClassVectorSearch(ctx, vector, targetVector, params.Offset, params.Limit, nil)
 	if err != nil {
 		return nil, errors.Errorf("vector search: %v", err)
 	}
@@ -528,18 +628,18 @@ func (e *Explorer) validateExploreParams(params ExploreParams) error {
 }
 
 func (e *Explorer) vectorFromParams(ctx context.Context,
-	params GetParams,
-) ([]float32, error) {
+	params dto.GetParams,
+) ([]float32, string, error) {
 	return e.nearParamsVector.vectorFromParams(ctx, params.NearVector,
-		params.NearObject, params.ModuleParams, params.ClassName)
+		params.NearObject, params.ModuleParams, params.ClassName, params.Tenant)
 }
 
 func (e *Explorer) vectorFromExploreParams(ctx context.Context,
 	params ExploreParams,
-) ([]float32, error) {
+) ([]float32, string, error) {
 	err := e.nearParamsVector.validateNearParams(params.NearVector, params.NearObject, params.ModuleParams)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	if len(params.ModuleParams) == 1 {
@@ -549,61 +649,79 @@ func (e *Explorer) vectorFromExploreParams(ctx context.Context,
 	}
 
 	if params.NearVector != nil {
-		return params.NearVector.Vector, nil
+		targetVector := ""
+		if len(params.NearVector.TargetVectors) == 1 {
+			targetVector = params.NearVector.TargetVectors[0]
+		}
+		return params.NearVector.Vector, targetVector, nil
 	}
 
 	if params.NearObject != nil {
 		// TODO: cross class
-		vector, err := e.nearParamsVector.crossClassVectorFromNearObjectParams(ctx, params.NearObject)
+		vector, targetVector, err := e.nearParamsVector.crossClassVectorFromNearObjectParams(ctx, params.NearObject)
 		if err != nil {
-			return nil, errors.Errorf("nearObject params: %v", err)
+			return nil, "", errors.Errorf("nearObject params: %v", err)
 		}
 
-		return vector, nil
+		return vector, targetVector, nil
 	}
 
 	// either nearObject or nearVector or module search param has to be set,
 	// so if we land here, something has gone very wrong
-	panic("vectorFromParams was called without any known params present")
+	panic("vectorFromExploreParams was called without any known params present")
 }
 
 // similar to vectorFromModules, but not specific to a single class
 func (e *Explorer) crossClassVectorFromModules(ctx context.Context,
 	paramName string, paramValue interface{},
-) ([]float32, error) {
+) ([]float32, string, error) {
 	if e.modulesProvider != nil {
-		vector, err := e.modulesProvider.CrossClassVectorFromSearchParam(ctx,
+		vector, targetVector, err := e.modulesProvider.CrossClassVectorFromSearchParam(ctx,
 			paramName, paramValue, e.nearParamsVector.findVector,
 		)
 		if err != nil {
-			return nil, errors.Errorf("vectorize params: %v", err)
+			return nil, "", errors.Errorf("vectorize params: %v", err)
 		}
-		return vector, nil
+		return vector, targetVector, nil
 	}
-	return nil, errors.New("no modules defined")
+	return nil, "", errors.New("no modules defined")
 }
 
-func (e *Explorer) checkCertaintyCompatibility(className string) error {
+func (e *Explorer) checkCertaintyCompatibility(params dto.GetParams) error {
 	s := e.schemaGetter.GetSchemaSkipAuth()
 	if s.Objects == nil {
 		return errors.Errorf("failed to get schema")
 	}
-	class := s.GetClass(schema.ClassName(className))
+	class := s.GetClass(schema.ClassName(params.ClassName))
 	if class == nil {
-		return errors.Errorf("failed to get class: %s", className)
+		return errors.Errorf("failed to get class: %s", params.ClassName)
 	}
-	hnswConfig, err := typeAssertVectorIndex(class)
+	targetVector := e.targetParamHelper.GetTargetVectorFromParams(params)
+	vectorConfig, err := schema.TypeAssertVectorIndex(class, []string{targetVector})
 	if err != nil {
 		return err
 	}
-	if hnswConfig.Distance != hnsw.DistanceCosine {
-		return certaintyUnsupportedError(hnswConfig.Distance)
+	if dn := vectorConfig.DistanceName(); dn != common.DistanceCosine {
+		return certaintyUnsupportedError(dn)
 	}
 
 	return nil
 }
 
-func ExtractDistanceFromParams(params GetParams) (distance float64, withDistance bool) {
+func (e *Explorer) replicationEnabled(params dto.GetParams) (bool, error) {
+	if e.schemaGetter == nil {
+		return false, fmt.Errorf("schemaGetter not set")
+	}
+	sch := e.schemaGetter.GetSchemaSkipAuth()
+	cls := sch.GetClass(schema.ClassName(params.ClassName))
+	if cls == nil {
+		return false, fmt.Errorf("class not found in schema: %q", params.ClassName)
+	}
+
+	return cls.ReplicationConfig != nil && cls.ReplicationConfig.Factor > 1, nil
+}
+
+func ExtractDistanceFromParams(params dto.GetParams) (distance float64, withDistance bool) {
 	if params.NearVector != nil {
 		distance = params.NearVector.Distance
 		withDistance = params.NearVector.WithDistance
@@ -623,7 +741,7 @@ func ExtractDistanceFromParams(params GetParams) (distance float64, withDistance
 	return
 }
 
-func ExtractCertaintyFromParams(params GetParams) (certainty float64) {
+func ExtractCertaintyFromParams(params dto.GetParams) (certainty float64) {
 	if params.NearVector != nil {
 		certainty = params.NearVector.Certainty
 		return
@@ -711,16 +829,18 @@ func extractDistanceFromModuleParams(moduleParams map[string]interface{}) (dista
 	return
 }
 
-func (e *Explorer) trackUsageGet(res search.Results, params GetParams) {
+func (e *Explorer) trackUsageGet(res search.Results, params dto.GetParams) {
 	if len(res) == 0 {
 		return
 	}
 
 	op := e.usageOperationFromGetParams(params)
-	e.metrics.AddUsageDimensions(params.ClassName, "get_graphql", op, res[0].Dims)
+	if e.metrics != nil {
+		e.metrics.AddUsageDimensions(params.ClassName, "get_graphql", op, res[0].Dims)
+	}
 }
 
-func (e *Explorer) trackUsageGetExplicitVector(res search.Results, params GetParams) {
+func (e *Explorer) trackUsageGetExplicitVector(res search.Results, params dto.GetParams) {
 	if len(res) == 0 {
 		return
 	}
@@ -729,7 +849,7 @@ func (e *Explorer) trackUsageGetExplicitVector(res search.Results, params GetPar
 		res[0].Dims)
 }
 
-func (e *Explorer) usageOperationFromGetParams(params GetParams) string {
+func (e *Explorer) usageOperationFromGetParams(params dto.GetParams) string {
 	if params.NearObject != nil {
 		return "nearObject"
 	}

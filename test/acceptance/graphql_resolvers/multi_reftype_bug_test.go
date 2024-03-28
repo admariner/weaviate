@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package test
@@ -15,20 +15,23 @@ import (
 	"fmt"
 	"testing"
 
-	graphqlhelper "github.com/semi-technologies/weaviate/test/helper/graphql"
+	graphqlhelper "github.com/weaviate/weaviate/test/helper/graphql"
 
 	"github.com/go-openapi/strfmt"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/test/helper"
 	"github.com/stretchr/testify/assert"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/test/helper"
 )
 
 // This test prevents a regression on
-// https://github.com/semi-technologies/weaviate/issues/1410
+// https://github.com/weaviate/weaviate/issues/1410
 func TestMultipleRefTypeIssues(t *testing.T) {
 	className := func(suffix string) string {
 		return "MultiRefTypeBug" + suffix
 	}
+	defer deleteObjectClass(t, className("TargetOne"))
+	defer deleteObjectClass(t, className("TargetTwo"))
+	defer deleteObjectClass(t, className("Source"))
 
 	const (
 		targetOneID strfmt.UUID = "155c5914-6594-4cde-b3ab-f8570b561965"

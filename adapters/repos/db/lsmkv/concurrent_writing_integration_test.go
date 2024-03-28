@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 //go:build integrationTest
@@ -17,8 +17,8 @@ package lsmkv
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"fmt"
-	"math/rand"
 	"reflect"
 	"sync"
 	"testing"
@@ -27,13 +27,13 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/entities/cyclemanager"
 )
 
 // This test continuously writes into a bucket with a small memtable threshold,
 // so that a lot of flushing is happening while writing. This is to ensure that
 // there will be no lost writes or other inconsistencies under load
 func TestConcurrentWriting_Replace(t *testing.T) {
-	rand.Seed(time.Now().UnixNano())
 	dirName := t.TempDir()
 
 	amount := 2000
@@ -42,7 +42,8 @@ func TestConcurrentWriting_Replace(t *testing.T) {
 	keys := make([][]byte, amount)
 	values := make([][]byte, amount)
 
-	bucket, err := NewBucket(testCtx(), dirName, "", nullLogger(), nil,
+	bucket, err := NewBucketCreator().NewBucket(testCtx(), dirName, "", nullLogger(), nil,
+		cyclemanager.NewCallbackGroupNoop(), cyclemanager.NewCallbackGroupNoop(),
 		WithStrategy(StrategyReplace),
 		WithMemtableThreshold(10000))
 	require.Nil(t, err)
@@ -124,7 +125,6 @@ func TestConcurrentWriting_Replace(t *testing.T) {
 // so that a lot of flushing is happening while writing. This is to ensure that
 // there will be no lost writes or other inconsistencies under load
 func TestConcurrentWriting_Set(t *testing.T) {
-	rand.Seed(time.Now().UnixNano())
 	dirName := t.TempDir()
 
 	amount := 2000
@@ -134,7 +134,8 @@ func TestConcurrentWriting_Set(t *testing.T) {
 	keys := make([][]byte, amount)
 	values := make([][][]byte, amount)
 
-	bucket, err := NewBucket(testCtx(), dirName, "", nullLogger(), nil,
+	bucket, err := NewBucketCreator().NewBucket(testCtx(), dirName, "", nullLogger(), nil,
+		cyclemanager.NewCallbackGroupNoop(), cyclemanager.NewCallbackGroupNoop(),
 		WithStrategy(StrategySetCollection),
 		WithMemtableThreshold(10000))
 	require.Nil(t, err)
@@ -213,7 +214,6 @@ func TestConcurrentWriting_Set(t *testing.T) {
 // so that a lot of flushing is happening while writing. This is to ensure that
 // there will be no lost writes or other inconsistencies under load
 func TestConcurrentWriting_Map(t *testing.T) {
-	rand.Seed(time.Now().UnixNano())
 	dirName := t.TempDir()
 
 	amount := 2000
@@ -224,7 +224,8 @@ func TestConcurrentWriting_Map(t *testing.T) {
 	keys := make([][]byte, amount)
 	values := make([][]MapPair, amount)
 
-	bucket, err := NewBucket(testCtx(), dirName, "", nullLogger(), nil,
+	bucket, err := NewBucketCreator().NewBucket(testCtx(), dirName, "", nullLogger(), nil,
+		cyclemanager.NewCallbackGroupNoop(), cyclemanager.NewCallbackGroupNoop(),
 		WithStrategy(StrategyMapCollection),
 		WithMemtableThreshold(5000))
 	require.Nil(t, err)

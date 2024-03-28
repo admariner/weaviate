@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 //go:build integrationTest
@@ -17,38 +17,38 @@ package db
 import (
 	"context"
 	"fmt"
-	"math/rand"
 	"testing"
-	"time"
 
 	"github.com/go-openapi/strfmt"
-	"github.com/semi-technologies/weaviate/entities/filters"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	"github.com/semi-technologies/weaviate/entities/schema/crossref"
-	"github.com/semi-technologies/weaviate/entities/search"
-	"github.com/semi-technologies/weaviate/usecases/traverser"
 	"github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/entities/dto"
+	"github.com/weaviate/weaviate/entities/filters"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/schema/crossref"
+	"github.com/weaviate/weaviate/entities/search"
 )
 
 func TestRefFilters(t *testing.T) {
-	rand.Seed(time.Now().UnixNano())
 	dirName := t.TempDir()
 
 	logger, _ := test.NewNullLogger()
-	schemaGetter := &fakeSchemaGetter{shardState: singleShardState()}
-	repo := New(logger, Config{
-		MemtablesFlushIdleAfter:   60,
+	schemaGetter := &fakeSchemaGetter{
+		schema:     schema.Schema{Objects: &models.Schema{Classes: nil}},
+		shardState: singleShardState(),
+	}
+	repo, err := New(logger, Config{
+		MemtablesFlushDirtyAfter:  60,
 		RootPath:                  dirName,
 		QueryLimit:                20,
 		QueryMaximumResults:       10000,
 		MaxImportGoroutinesFactor: 1,
 	}, &fakeRemoteClient{}, &fakeNodeResolver{}, &fakeRemoteNodeClient{}, &fakeReplicationClient{}, nil)
-	repo.SetSchemaGetter(schemaGetter)
-	err := repo.WaitForStartup(testCtx())
 	require.Nil(t, err)
+	repo.SetSchemaGetter(schemaGetter)
+	require.Nil(t, repo.WaitForStartup(testCtx()))
 	defer repo.Shutdown(testCtx())
 	migrator := NewMigrator(repo, logger)
 
@@ -198,7 +198,7 @@ func TestRefFilters(t *testing.T) {
 
 		for _, thing := range objects {
 			t.Run(fmt.Sprintf("add %s", thing.ID), func(t *testing.T) {
-				err := repo.PutObject(context.Background(), &thing, []float32{1, 2, 3, 4, 5, 6, 7})
+				err := repo.PutObject(context.Background(), &thing, []float32{1, 2, 3, 4, 5, 6, 7}, nil, nil)
 				require.Nil(t, err)
 			})
 		}
@@ -207,31 +207,31 @@ func TestRefFilters(t *testing.T) {
 	t.Run("filtering", func(t *testing.T) {
 		t.Run("one level deep", func(t *testing.T) {
 			t.Run("ref name matches", func(t *testing.T) {
-				filter := filterCarParkedAtGarage(schema.DataTypeString,
+				filter := filterCarParkedAtGarage(schema.DataTypeText,
 					"name", filters.OperatorEqual, "Luxury Parking Garage")
 				params := getParamsWithFilter("MultiRefCar", filter)
 
-				res, err := repo.ClassSearch(context.Background(), params)
+				res, err := repo.Search(context.Background(), params)
 				require.Nil(t, err)
 				require.Len(t, res, 2)
 			})
 
 			t.Run("ref id matches", func(t *testing.T) {
-				filter := filterCarParkedAtGarage(schema.DataTypeString,
+				filter := filterCarParkedAtGarage(schema.DataTypeText,
 					"id", filters.OperatorEqual, "a7e10b55-1ac4-464f-80df-82508eea1951")
 				params := getParamsWithFilter("MultiRefCar", filter)
 
-				res, err := repo.ClassSearch(context.Background(), params)
+				res, err := repo.Search(context.Background(), params)
 				require.Nil(t, err)
 				require.Len(t, res, 2)
 			})
 
 			t.Run("ref name doesn't match", func(t *testing.T) {
-				filter := filterCarParkedAtGarage(schema.DataTypeString,
+				filter := filterCarParkedAtGarage(schema.DataTypeText,
 					"name", filters.OperatorEqual, "There is no parking garage with this name")
 				params := getParamsWithFilter("MultiRefCar", filter)
 
-				res, err := repo.ClassSearch(context.Background(), params)
+				res, err := repo.Search(context.Background(), params)
 				require.Nil(t, err)
 				require.Len(t, res, 0)
 			})
@@ -247,7 +247,7 @@ func TestRefFilters(t *testing.T) {
 					})
 				params := getParamsWithFilter("MultiRefCar", filter)
 
-				res, err := repo.ClassSearch(context.Background(), params)
+				res, err := repo.Search(context.Background(), params)
 				require.Nil(t, err)
 				require.Len(t, res, 2)
 
@@ -271,7 +271,7 @@ func TestRefFilters(t *testing.T) {
 					})
 				params := getParamsWithFilter("MultiRefCar", filter)
 
-				res, err := repo.ClassSearch(context.Background(), params)
+				res, err := repo.Search(context.Background(), params)
 				require.Nil(t, err)
 				require.Len(t, res, 0)
 			})
@@ -298,7 +298,7 @@ func TestRefFilters(t *testing.T) {
 								},
 								Value: &filters.Value{
 									Value: "Car which is parked in a garage",
-									Type:  schema.DataTypeString,
+									Type:  schema.DataTypeText,
 								},
 								Operator: filters.OperatorEqual,
 							},
@@ -307,7 +307,7 @@ func TestRefFilters(t *testing.T) {
 				}
 				params := getParamsWithFilter("MultiRefCar", filter)
 
-				res, err := repo.ClassSearch(context.Background(), params)
+				res, err := repo.Search(context.Background(), params)
 				require.Nil(t, err)
 				require.Len(t, res, 1)
 
@@ -322,11 +322,11 @@ func TestRefFilters(t *testing.T) {
 
 		t.Run("multiple levels deep", func(t *testing.T) {
 			t.Run("ref name matches", func(t *testing.T) {
-				filter := filterDrivesCarParkedAtGarage(schema.DataTypeString,
+				filter := filterDrivesCarParkedAtGarage(schema.DataTypeText,
 					"name", filters.OperatorEqual, "Luxury Parking Garage")
 				params := getParamsWithFilter("MultiRefDriver", filter)
 
-				res, err := repo.ClassSearch(context.Background(), params)
+				res, err := repo.Search(context.Background(), params)
 				require.Nil(t, err)
 				require.Len(t, res, 1)
 
@@ -334,11 +334,11 @@ func TestRefFilters(t *testing.T) {
 			})
 
 			t.Run("ref name doesn't match", func(t *testing.T) {
-				filter := filterDrivesCarParkedAtGarage(schema.DataTypeString,
+				filter := filterDrivesCarParkedAtGarage(schema.DataTypeText,
 					"name", filters.OperatorEqual, "There is no parking garage with this name")
 				params := getParamsWithFilter("MultiRefDriver", filter)
 
-				res, err := repo.ClassSearch(context.Background(), params)
+				res, err := repo.Search(context.Background(), params)
 				require.Nil(t, err)
 				require.Len(t, res, 0)
 			})
@@ -354,7 +354,7 @@ func TestRefFilters(t *testing.T) {
 					})
 				params := getParamsWithFilter("MultiRefDriver", filter)
 
-				res, err := repo.ClassSearch(context.Background(), params)
+				res, err := repo.Search(context.Background(), params)
 				require.Nil(t, err)
 				require.Len(t, res, 1)
 
@@ -372,7 +372,7 @@ func TestRefFilters(t *testing.T) {
 					})
 				params := getParamsWithFilter("MultiRefDriver", filter)
 
-				res, err := repo.ClassSearch(context.Background(), params)
+				res, err := repo.Search(context.Background(), params)
 				require.Nil(t, err)
 				require.Len(t, res, 0)
 			})
@@ -382,7 +382,7 @@ func TestRefFilters(t *testing.T) {
 			t.Run("equal to zero", func(t *testing.T) {
 				filter := filterCarParkedCount(filters.OperatorEqual, 0)
 				params := getParamsWithFilter("MultiRefCar", filter)
-				res, err := repo.ClassSearch(context.Background(), params)
+				res, err := repo.Search(context.Background(), params)
 				require.Nil(t, err)
 				require.Len(t, res, 1) // there is just one car parked nowhere
 				assert.Equal(t, "Car which is parked no where", res[0].Schema.(map[string]interface{})["name"])
@@ -391,7 +391,7 @@ func TestRefFilters(t *testing.T) {
 			t.Run("equal to one", func(t *testing.T) {
 				filter := filterCarParkedCount(filters.OperatorEqual, 1)
 				params := getParamsWithFilter("MultiRefCar", filter)
-				res, err := repo.ClassSearch(context.Background(), params)
+				res, err := repo.Search(context.Background(), params)
 				require.Nil(t, err)
 				expectedNames := []string{
 					"Car which is parked in a garage",
@@ -403,7 +403,7 @@ func TestRefFilters(t *testing.T) {
 			t.Run("equal to more than one", func(t *testing.T) {
 				filter := filterCarParkedCount(filters.OperatorGreaterThan, 1)
 				params := getParamsWithFilter("MultiRefCar", filter)
-				res, err := repo.ClassSearch(context.Background(), params)
+				res, err := repo.Search(context.Background(), params)
 				require.Nil(t, err)
 				expectedNames := []string{
 					"Car which is parked in two places at the same time (magic!)",
@@ -414,7 +414,7 @@ func TestRefFilters(t *testing.T) {
 			t.Run("greater or equal one", func(t *testing.T) {
 				filter := filterCarParkedCount(filters.OperatorGreaterThanEqual, 1)
 				params := getParamsWithFilter("MultiRefCar", filter)
-				res, err := repo.ClassSearch(context.Background(), params)
+				res, err := repo.Search(context.Background(), params)
 				require.Nil(t, err)
 				expectedNames := []string{
 					"Car which is parked in a garage",
@@ -427,7 +427,7 @@ func TestRefFilters(t *testing.T) {
 			t.Run("less than one", func(t *testing.T) {
 				filter := filterCarParkedCount(filters.OperatorLessThan, 1)
 				params := getParamsWithFilter("MultiRefCar", filter)
-				res, err := repo.ClassSearch(context.Background(), params)
+				res, err := repo.Search(context.Background(), params)
 				require.Nil(t, err)
 				expectedNames := []string{
 					"Car which is parked no where",
@@ -438,7 +438,7 @@ func TestRefFilters(t *testing.T) {
 			t.Run("less than or equal one", func(t *testing.T) {
 				filter := filterCarParkedCount(filters.OperatorLessThanEqual, 1)
 				params := getParamsWithFilter("MultiRefCar", filter)
-				res, err := repo.ClassSearch(context.Background(), params)
+				res, err := repo.Search(context.Background(), params)
 				require.Nil(t, err)
 				expectedNames := []string{
 					"Car which is parked in a garage",
@@ -456,20 +456,22 @@ func TestRefFilters_MergingWithAndOperator(t *testing.T) {
 	// operator, which was discovered through a journey test as part of gh-1286.
 	// The schema is modelled after the journey test, as the regular tests suites
 	// above do not seem to run into this issue on their own
-	rand.Seed(time.Now().UnixNano())
 	dirName := t.TempDir()
 
 	logger, _ := test.NewNullLogger()
-	schemaGetter := &fakeSchemaGetter{shardState: singleShardState()}
-	repo := New(logger, Config{
-		MemtablesFlushIdleAfter:   60,
+	schemaGetter := &fakeSchemaGetter{
+		schema:     schema.Schema{Objects: &models.Schema{Classes: nil}},
+		shardState: singleShardState(),
+	}
+	repo, err := New(logger, Config{
+		MemtablesFlushDirtyAfter:  60,
 		RootPath:                  dirName,
 		QueryMaximumResults:       10000,
 		MaxImportGoroutinesFactor: 1,
 	}, &fakeRemoteClient{}, &fakeNodeResolver{}, &fakeRemoteNodeClient{}, &fakeReplicationClient{}, nil)
-	repo.SetSchemaGetter(schemaGetter)
-	err := repo.WaitForStartup(testCtx())
 	require.Nil(t, err)
+	repo.SetSchemaGetter(schemaGetter)
+	require.Nil(t, repo.WaitForStartup(testCtx()))
 	defer repo.Shutdown(testCtx())
 	migrator := NewMigrator(repo, logger)
 
@@ -647,7 +649,7 @@ func TestRefFilters_MergingWithAndOperator(t *testing.T) {
 		}
 
 		for _, obj := range objects {
-			require.Nil(t, repo.PutObject(context.Background(), obj, []float32{0.1}))
+			require.Nil(t, repo.PutObject(context.Background(), obj, []float32{0.1}, nil, nil))
 		}
 	})
 
@@ -657,7 +659,7 @@ func TestRefFilters_MergingWithAndOperator(t *testing.T) {
 		// of ids
 
 		filter := filterAirportsInGermanCitiesOver600k()
-		res, err := repo.ClassSearch(context.Background(),
+		res, err := repo.Search(context.Background(),
 			getParamsWithFilter("Airport", filter))
 		require.Nil(t, err)
 
@@ -761,7 +763,7 @@ func filterAirportsInGermanCitiesOver600k() *filters.LocalFilter {
 					},
 					Value: &filters.Value{
 						Value: "Germany",
-						Type:  dtString,
+						Type:  schema.DataTypeText,
 					},
 				},
 			},
@@ -769,8 +771,8 @@ func filterAirportsInGermanCitiesOver600k() *filters.LocalFilter {
 	}
 }
 
-func getParamsWithFilter(className string, filter *filters.LocalFilter) traverser.GetParams {
-	return traverser.GetParams{
+func getParamsWithFilter(className string, filter *filters.LocalFilter) dto.GetParams {
+	return dto.GetParams{
 		Filters: filter,
 		// we don't care about actually resolving the ref as long as filtering
 		// on it worked
@@ -784,7 +786,7 @@ func getParamsWithFilter(className string, filter *filters.LocalFilter) traverse
 }
 
 func extractNames(in []search.Result) []string {
-	out := make([]string, len(in), len(in))
+	out := make([]string, len(in))
 	for i, res := range in {
 		out[i] = res.Schema.(map[string]interface{})["name"].(string)
 	}
@@ -793,7 +795,7 @@ func extractNames(in []search.Result) []string {
 }
 
 func extractCodes(in []search.Result) []string {
-	out := make([]string, len(in), len(in))
+	out := make([]string, len(in))
 	for i, res := range in {
 		out[i] = res.Schema.(map[string]interface{})["code"].(string)
 	}

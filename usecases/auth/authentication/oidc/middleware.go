@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package oidc
@@ -18,11 +18,11 @@ import (
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	errors "github.com/go-openapi/errors"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/usecases/config"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/usecases/config"
 )
 
-// Client handles the OIDC setup at startup and provides a middleware to tbe
+// Client handles the OIDC setup at startup and provides a middleware to be
 // used with the goswagger API
 type Client struct {
 	config   config.OIDC
@@ -149,7 +149,7 @@ func (c *Client) extractUsername(claims map[string]interface{}) (string, error) 
 	return username, nil
 }
 
-// extractGroups never errors, if groups cant be parsed an empty set of groups
+// extractGroups never errors, if groups can't be parsed an empty set of groups
 // is returned. This is because groups are not a required standard in the OIDC
 // spec, so we can't error if an OIDC provider does not support them.
 func (c *Client) extractGroups(claims map[string]interface{}) []string {

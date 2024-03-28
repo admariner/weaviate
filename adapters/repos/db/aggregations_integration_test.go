@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 //go:build integrationTest
@@ -17,37 +17,38 @@ package db
 import (
 	"context"
 	"fmt"
-	"math/rand"
 	"testing"
 	"time"
 
 	"github.com/go-openapi/strfmt"
 	"github.com/google/uuid"
-	"github.com/semi-technologies/weaviate/entities/aggregation"
-	"github.com/semi-technologies/weaviate/entities/filters"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/schema"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/entities/aggregation"
+	"github.com/weaviate/weaviate/entities/filters"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
 )
 
 func Test_Aggregations(t *testing.T) {
-	rand.Seed(time.Now().UnixNano())
 	dirName := t.TempDir()
 
 	shardState := singleShardState()
 	logger := logrus.New()
-	schemaGetter := &fakeSchemaGetter{shardState: shardState}
-	repo := New(logger, Config{
-		MemtablesFlushIdleAfter:   60,
+	schemaGetter := &fakeSchemaGetter{
+		schema:     schema.Schema{Objects: &models.Schema{Classes: nil}},
+		shardState: shardState,
+	}
+	repo, err := New(logger, Config{
+		MemtablesFlushDirtyAfter:  60,
 		RootPath:                  dirName,
 		QueryMaximumResults:       10000,
 		MaxImportGoroutinesFactor: 1,
 	}, &fakeRemoteClient{}, &fakeNodeResolver{}, &fakeRemoteNodeClient{}, &fakeReplicationClient{}, nil)
-	repo.SetSchemaGetter(schemaGetter)
-	err := repo.WaitForStartup(testCtx())
 	require.Nil(t, err)
+	repo.SetSchemaGetter(schemaGetter)
+	require.Nil(t, repo.WaitForStartup(testCtx()))
 	migrator := NewMigrator(repo, logger)
 
 	t.Run("prepare test schema and data ",
@@ -76,21 +77,23 @@ func Test_Aggregations(t *testing.T) {
 }
 
 func Test_Aggregations_MultiShard(t *testing.T) {
-	rand.Seed(time.Now().UnixNano())
 	dirName := t.TempDir()
 
 	shardState := fixedMultiShardState()
 	logger := logrus.New()
-	schemaGetter := &fakeSchemaGetter{shardState: shardState}
-	repo := New(logger, Config{
-		MemtablesFlushIdleAfter:   60,
+	schemaGetter := &fakeSchemaGetter{
+		schema:     schema.Schema{Objects: &models.Schema{Classes: nil}},
+		shardState: shardState,
+	}
+	repo, err := New(logger, Config{
+		MemtablesFlushDirtyAfter:  60,
 		RootPath:                  dirName,
 		QueryMaximumResults:       10000,
 		MaxImportGoroutinesFactor: 1,
 	}, &fakeRemoteClient{}, &fakeNodeResolver{}, &fakeRemoteNodeClient{}, &fakeReplicationClient{}, nil)
-	repo.SetSchemaGetter(schemaGetter)
-	err := repo.WaitForStartup(testCtx())
 	require.Nil(t, err)
+	repo.SetSchemaGetter(schemaGetter)
+	require.Nil(t, repo.WaitForStartup(testCtx()))
 	migrator := NewMigrator(repo, logger)
 
 	t.Run("prepare test schema and data ",
@@ -157,7 +160,7 @@ func prepareCompanyTestSchemaAndData(repo *DB,
 						Properties: schema,
 					}
 					require.Nil(t,
-						repo.PutObject(context.Background(), &fixture, []float32{0.1, 0.2, 0.01, 0.2}))
+						repo.PutObject(context.Background(), &fixture, []float32{0.1, 0.2, 0.01, 0.2}, nil, nil))
 				})
 			}
 		})
@@ -173,7 +176,7 @@ func prepareCompanyTestSchemaAndData(repo *DB,
 						}
 
 						require.Nil(t,
-							repo.PutObject(context.Background(), &fixture, []float32{0.1, 0.1, 0.1, 0.1}))
+							repo.PutObject(context.Background(), &fixture, []float32{0.1, 0.1, 0.1, 0.1}, nil, nil))
 					})
 				}
 			}
@@ -188,7 +191,7 @@ func prepareCompanyTestSchemaAndData(repo *DB,
 						Properties: schema,
 					}
 					require.Nil(t,
-						repo.PutObject(context.Background(), &fixture, []float32{0.1, 0.1, 0.1, 0.1}))
+						repo.PutObject(context.Background(), &fixture, []float32{0.1, 0.1, 0.1, 0.1}, nil, nil))
 				})
 			}
 		})
@@ -202,7 +205,7 @@ func prepareCompanyTestSchemaAndData(repo *DB,
 						Properties: schema,
 					}
 					require.Nil(t,
-						repo.PutObject(context.Background(), &fixture, []float32{0.1, 0.1, 0.1, 0.1}))
+						repo.PutObject(context.Background(), &fixture, []float32{0.1, 0.1, 0.1, 0.1}, nil, nil))
 				})
 			}
 		})
@@ -958,7 +961,7 @@ func testNumericalAggregationsWithGrouping(repo *DB, exact bool) func(t *testing
 					Root: &filters.Clause{
 						Operator: filters.OperatorEqual,
 						Value: &filters.Value{
-							Type:  schema.DataTypeString,
+							Type:  schema.DataTypeText,
 							Value: "Superbread",
 						},
 						On: &filters.Path{
@@ -1500,7 +1503,7 @@ func testNumericalAggregationsWithoutGrouping(repo *DB,
 					expextedAggs := expectedResult.Groups[0].Properties["dividendYield"].NumericalAggregations
 
 					// max, min, count, sum are always exact matches, but we need an
-					// epsiolon check because of floating point arithmetics
+					// epsilon check because of floating point arithmetics
 					assert.InEpsilon(t, expextedAggs["maximum"], aggs["maximum"], 0.1)
 					assert.Equal(t, expextedAggs["minimum"], aggs["minimum"]) // equal because the result == 0
 					assert.InEpsilon(t, expextedAggs["count"], aggs["count"], 0.1)
@@ -1517,7 +1520,7 @@ func testNumericalAggregationsWithoutGrouping(repo *DB,
 					expextedAggs := expectedResult.Groups[0].Properties["price"].NumericalAggregations
 
 					// max, min, count, sum are always exact matches, but we need an
-					// epsiolon check because of floating point arithmetics
+					// epsilon check because of floating point arithmetics
 					assert.InEpsilon(t, expextedAggs["maximum"], aggs["maximum"], 0.1)
 					assert.InEpsilon(t, expextedAggs["minimum"], aggs["minimum"], 0.1)
 					assert.InEpsilon(t, expextedAggs["count"], aggs["count"], 0.1)
@@ -1792,7 +1795,7 @@ func testNumericalAggregationsWithoutGrouping(repo *DB,
 					Root: &filters.Clause{
 						Operator: filters.OperatorEqual,
 						Value: &filters.Value{
-							Type:  schema.DataTypeString,
+							Type:  schema.DataTypeText,
 							Value: "Superbread",
 						},
 						On: &filters.Path{
@@ -2248,7 +2251,7 @@ func sectorEqualsFoodFilter() *filters.LocalFilter {
 			},
 			Value: &filters.Value{
 				Value: "Food",
-				Type:  schema.DataTypeString,
+				Type:  schema.DataTypeText,
 			},
 		},
 	}

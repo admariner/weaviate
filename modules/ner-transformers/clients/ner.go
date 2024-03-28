@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package clients
@@ -18,10 +18,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/pkg/errors"
-	"github.com/semi-technologies/weaviate/modules/ner-transformers/ent"
 	"github.com/sirupsen/logrus"
+	"github.com/weaviate/weaviate/modules/ner-transformers/ent"
 )
 
 type ner struct {
@@ -50,15 +51,15 @@ type nerResponse struct {
 	Tokens []tokenResponse `json:"tokens"`
 }
 
-func New(origin string, logger logrus.FieldLogger) *ner {
+func New(origin string, timeout time.Duration, logger logrus.FieldLogger) *ner {
 	return &ner{
 		origin:     origin,
-		httpClient: &http.Client{},
+		httpClient: &http.Client{Timeout: timeout},
 		logger:     logger,
 	}
 }
 
-func (v *ner) GetTokens(ctx context.Context, property,
+func (n *ner) GetTokens(ctx context.Context, property,
 	text string,
 ) ([]ent.TokenResult, error) {
 	body, err := json.Marshal(nerInput{
@@ -68,13 +69,13 @@ func (v *ner) GetTokens(ctx context.Context, property,
 		return nil, errors.Wrapf(err, "marshal body")
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", v.url("/ner/"),
+	req, err := http.NewRequestWithContext(ctx, "POST", n.url("/ner/"),
 		bytes.NewReader(body))
 	if err != nil {
 		return nil, errors.Wrap(err, "create POST request")
 	}
 
-	res, err := v.httpClient.Do(req)
+	res, err := n.httpClient.Do(req)
 	if err != nil {
 		return nil, errors.Wrap(err, "send POST request")
 	}
@@ -110,6 +111,6 @@ func (v *ner) GetTokens(ctx context.Context, property,
 	return out, nil
 }
 
-func (v *ner) url(path string) string {
-	return fmt.Sprintf("%s%s", v.origin, path)
+func (n *ner) url(path string) string {
+	return fmt.Sprintf("%s%s", n.origin, path)
 }

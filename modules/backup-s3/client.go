@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package modstgs3
@@ -14,6 +14,7 @@ package modstgs3
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -22,9 +23,9 @@ import (
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 	"github.com/pkg/errors"
-	"github.com/semi-technologies/weaviate/entities/backup"
-	"github.com/semi-technologies/weaviate/usecases/monitoring"
 	"github.com/sirupsen/logrus"
+	"github.com/weaviate/weaviate/entities/backup"
+	"github.com/weaviate/weaviate/usecases/monitoring"
 )
 
 type s3Client struct {
@@ -40,9 +41,16 @@ func newClient(config *clientConfig, logger logrus.FieldLogger, dataPath string)
 		region = os.Getenv("AWS_DEFAULT_REGION")
 	}
 
-	creds := credentials.NewIAM("")
-	if _, err := creds.Get(); err != nil {
+	var creds *credentials.Credentials
+	if (os.Getenv("AWS_ACCESS_KEY_ID") != "" || os.Getenv("AWS_ACCESS_KEY") != "") &&
+		(os.Getenv("AWS_SECRET_ACCESS_KEY") != "" || os.Getenv("AWS_SECRET_KEY") != "") {
 		creds = credentials.NewEnvAWS()
+	} else {
+		creds = credentials.NewIAM("")
+		if _, err := creds.Get(); err != nil {
+			// can be anonymous access
+			creds = credentials.NewEnvAWS()
+		}
 	}
 
 	client, err := minio.New(config.Endpoint, &minio.Options{
@@ -154,28 +162,66 @@ func (s *s3Client) Initialize(ctx context.Context, backupID string) error {
 	return nil
 }
 
+// WriteFile downloads contents of an object to a local file destPath
 func (s *s3Client) WriteToFile(ctx context.Context, backupID, key, destPath string) error {
-	// TODO use s.client.FGetObject() because it is more efficient than GetObject
-	obj, err := s.GetObject(ctx, backupID, key)
+	object := s.makeObjectName(backupID, key)
+	err := s.client.FGetObject(ctx, s.config.Bucket, object, destPath, minio.GetObjectOptions{})
 	if err != nil {
-		return errors.Wrapf(err, "get object '%s'", key)
+		return fmt.Errorf("s3.FGetObject %q %q: %w", destPath, object, err)
 	}
 
-	dir := path.Dir(destPath)
-	if err := os.MkdirAll(dir, os.ModePerm); err != nil {
-		return errors.Wrapf(err, "make dir '%s'", dir)
+	if st, err := os.Stat(destPath); err == nil {
+		metric, err := monitoring.GetMetrics().BackupRestoreDataTransferred.GetMetricWithLabelValues(Name, "class")
+		if err == nil {
+			metric.Add(float64(st.Size()))
+		}
 	}
-
-	if err := os.WriteFile(destPath, obj, os.ModePerm); err != nil {
-		return errors.Wrapf(err, "write file '%s'", destPath)
-	}
-
-	metric, err := monitoring.GetMetrics().BackupRestoreDataTransferred.GetMetricWithLabelValues(Name, "class")
-	if err == nil {
-		metric.Add(float64(len(obj)))
-	}
-
 	return nil
+}
+
+func (s *s3Client) Write(ctx context.Context, backupID, key string, r io.ReadCloser) (int64, error) {
+	defer r.Close()
+	path := s.makeObjectName(backupID, key)
+	opt := minio.PutObjectOptions{
+		ContentType:      "application/octet-stream",
+		DisableMultipart: false,
+	}
+
+	info, err := s.client.PutObject(ctx, s.config.Bucket, path, r, -1, opt)
+	if err != nil {
+		return info.Size, fmt.Errorf("write object %q", path)
+	}
+
+	if metric, err := monitoring.GetMetrics().BackupStoreDataTransferred.
+		GetMetricWithLabelValues(Name, "class"); err == nil {
+		metric.Add(float64(float64(info.Size)))
+	}
+	return info.Size, nil
+}
+
+func (s *s3Client) Read(ctx context.Context, backupID, key string, w io.WriteCloser) (int64, error) {
+	defer w.Close()
+	path := s.makeObjectName(backupID, key)
+	obj, err := s.client.GetObject(ctx, s.config.Bucket, path, minio.GetObjectOptions{})
+	if err != nil {
+		return 0, fmt.Errorf("get object %q: %w", path, err)
+	}
+
+	read, err := io.Copy(w, obj)
+	if err != nil {
+		err = fmt.Errorf("get object %q: %w", path, err)
+		if s3Err, ok := err.(minio.ErrorResponse); ok && s3Err.StatusCode == http.StatusNotFound {
+			err = backup.NewErrNotFound(err)
+		}
+		return 0, err
+	}
+
+	if metric, err := monitoring.GetMetrics().BackupRestoreDataTransferred.
+		GetMetricWithLabelValues(Name, "class"); err == nil {
+		metric.Add(float64(float64(read)))
+	}
+
+	return read, nil
 }
 
 func (s *s3Client) SourceDataPath() string {

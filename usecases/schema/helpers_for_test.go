@@ -4,36 +4,61 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package schema
 
 import (
 	"context"
+	"fmt"
 
-	"github.com/pkg/errors"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	"github.com/semi-technologies/weaviate/usecases/cluster"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/vectorindex/common"
+	"github.com/weaviate/weaviate/usecases/cluster"
 )
 
 type fakeRepo struct {
-	schema *State
+	schema State
 }
 
 func newFakeRepo() *fakeRepo {
-	return &fakeRepo{}
+	return &fakeRepo{schema: NewState(2)}
 }
 
-func (f *fakeRepo) LoadSchema(context.Context) (*State, error) {
+func (f *fakeRepo) Save(ctx context.Context, schema State) error {
+	f.schema = schema
+	return nil
+}
+
+func (f *fakeRepo) Load(context.Context) (State, error) {
 	return f.schema, nil
 }
 
-func (f *fakeRepo) SaveSchema(ctx context.Context, schema State) error {
-	f.schema = &schema
+func (f *fakeRepo) NewClass(context.Context, ClassPayload) error {
+	return nil
+}
+
+func (f *fakeRepo) UpdateClass(context.Context, ClassPayload) error {
+	return nil
+}
+
+func (f *fakeRepo) DeleteClass(ctx context.Context, class string) error {
+	return nil
+}
+
+func (f *fakeRepo) NewShards(ctx context.Context, class string, shards []KeyValuePair) error {
+	return nil
+}
+
+func (f *fakeRepo) UpdateShards(ctx context.Context, class string, shards []KeyValuePair) error {
+	return nil
+}
+
+func (f *fakeRepo) DeleteShards(_ context.Context, class string, _ []string) error {
 	return nil
 }
 
@@ -51,7 +76,11 @@ func (f fakeVectorConfig) IndexType() string {
 	return "fake"
 }
 
-func dummyParseVectorConfig(in interface{}) (schema.VectorIndexConfig, error) {
+func (f fakeVectorConfig) DistanceName() string {
+	return common.DistanceCosine
+}
+
+func dummyParseVectorConfig(in interface{}, vectorIndexType string) (schema.VectorIndexConfig, error) {
 	return fakeVectorConfig{raw: in}, nil
 }
 
@@ -70,7 +99,7 @@ func (f *fakeVectorizerValidator) ValidateVectorizer(moduleName string) error {
 		}
 	}
 
-	return errors.Errorf("invalid vectorizer %q", moduleName)
+	return fmt.Errorf("invalid vectorizer %q", moduleName)
 }
 
 type fakeModuleConfig struct{}
@@ -116,7 +145,17 @@ func (f *fakeModuleConfig) ValidateClass(ctx context.Context, class *models.Clas
 }
 
 type fakeClusterState struct {
-	hosts []string
+	hosts       []string
+	syncIgnored bool
+	skipRepair  bool
+}
+
+func (f *fakeClusterState) SchemaSyncIgnored() bool {
+	return f.syncIgnored
+}
+
+func (f *fakeClusterState) SkipSchemaRepair() bool {
+	return f.skipRepair
 }
 
 func (f *fakeClusterState) Hostnames() []string {
@@ -124,6 +163,10 @@ func (f *fakeClusterState) Hostnames() []string {
 }
 
 func (f *fakeClusterState) AllNames() []string {
+	return f.hosts
+}
+
+func (f *fakeClusterState) Candidates() []string {
 	return f.hosts
 }
 
@@ -137,6 +180,15 @@ func (f *fakeClusterState) NodeCount() int {
 
 func (f *fakeClusterState) ClusterHealthScore() int {
 	return 0
+}
+
+func (f *fakeClusterState) ResolveParentNodes(string, string,
+) (map[string]string, error) {
+	return nil, nil
+}
+
+func (f *fakeClusterState) NodeHostname(string) (string, bool) {
+	return "", false
 }
 
 type fakeTxClient struct {

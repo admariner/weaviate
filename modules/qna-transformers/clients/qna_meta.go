@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package clients
@@ -20,13 +20,13 @@ import (
 	"github.com/pkg/errors"
 )
 
-func (v *qna) MetaInfo() (map[string]interface{}, error) {
-	req, err := http.NewRequestWithContext(context.Background(), "GET", v.url("/meta"), nil)
+func (q *qna) MetaInfo() (map[string]interface{}, error) {
+	req, err := http.NewRequestWithContext(context.Background(), "GET", q.url("/meta"), nil)
 	if err != nil {
 		return nil, errors.Wrap(err, "create GET meta request")
 	}
 
-	res, err := v.httpClient.Do(req)
+	res, err := q.httpClient.Do(req)
 	if err != nil {
 		return nil, errors.Wrap(err, "send GET meta request")
 	}

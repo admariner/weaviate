@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package classification
@@ -15,9 +15,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/semi-technologies/weaviate/entities/errorcompounder"
-	"github.com/semi-technologies/weaviate/entities/search"
-	"github.com/semi-technologies/weaviate/usecases/objects"
+	"github.com/sirupsen/logrus"
+	enterrors "github.com/weaviate/weaviate/entities/errors"
+
+	"github.com/weaviate/weaviate/entities/errorcompounder"
+	"github.com/weaviate/weaviate/entities/search"
+	"github.com/weaviate/weaviate/usecases/objects"
 )
 
 type batchWriterResults struct {
@@ -48,10 +51,11 @@ type batchWriter struct {
 	errorCount      int64
 	ec              *errorcompounder.SafeErrorCompounder
 	cancel          chan struct{}
-	batchTreshold   int
+	batchThreshold  int
+	logger          logrus.FieldLogger
 }
 
-func newBatchWriter(vectorRepo vectorRepo) Writer {
+func newBatchWriter(vectorRepo vectorRepo, logger logrus.FieldLogger) Writer {
 	return &batchWriter{
 		vectorRepo:      vectorRepo,
 		batchItemsCount: 0,
@@ -60,7 +64,8 @@ func newBatchWriter(vectorRepo vectorRepo) Writer {
 		errorCount:      0,
 		ec:              &errorcompounder.SafeErrorCompounder{},
 		cancel:          make(chan struct{}),
-		batchTreshold:   100,
+		batchThreshold:  100,
+		logger:          logger,
 	}
 }
 
@@ -73,7 +78,7 @@ func (r *batchWriter) Store(item search.Result) error {
 
 // Start starts the batch save goroutine
 func (r *batchWriter) Start() {
-	go r.batchSave()
+	enterrors.GoWrapper(func() { r.batchSave() }, r.logger)
 }
 
 // Stop stops the batch save goroutine and saves the last items
@@ -88,12 +93,11 @@ func (r *batchWriter) storeObject(item search.Result) error {
 		UUID:          item.ID,
 		Object:        item.Object(),
 		OriginalIndex: r.batchIndex,
-		Vector:        item.Vector,
 	}
 	r.batchItemsCount++
 	r.batchIndex++
 	r.batchObjects = append(r.batchObjects, batchObject)
-	if len(r.batchObjects) >= r.batchTreshold {
+	if len(r.batchObjects) >= r.batchThreshold {
 		r.saveObjectItems <- r.batchObjects
 		r.batchObjects = objects.BatchObjects{}
 		r.batchIndex = 0
@@ -123,7 +127,7 @@ func (r *batchWriter) saveObjects(items objects.BatchObjects) {
 	defer cancel()
 
 	if len(items) > 0 {
-		saved, err := r.vectorRepo.BatchPutObjects(ctx, items)
+		saved, err := r.vectorRepo.BatchPutObjects(ctx, items, nil)
 		if err != nil {
 			r.ec.Add(err)
 		}

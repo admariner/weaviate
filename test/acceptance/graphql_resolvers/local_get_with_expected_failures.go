@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package test
@@ -14,11 +14,12 @@ package test
 import (
 	"testing"
 
-	graphqlhelper "github.com/semi-technologies/weaviate/test/helper/graphql"
+	graphqlhelper "github.com/weaviate/weaviate/test/helper/graphql"
 
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/test/helper"
 	"github.com/stretchr/testify/assert"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/test/helper"
 )
 
 func getsWithExpectedFailures(t *testing.T) {
@@ -39,8 +40,9 @@ func getsWithExpectedFailures(t *testing.T) {
 				},
 				Properties: []*models.Property{
 					{
-						Name:     "name",
-						DataType: []string{"string"},
+						Name:         "name",
+						DataType:     schema.DataTypeText.PropString(),
+						Tokenization: models.PropertyTokenizationWhitespace,
 					},
 				},
 			})
@@ -60,7 +62,7 @@ func getsWithExpectedFailures(t *testing.T) {
 			assert.Len(t, result, 1)
 
 			errMsg := result[0].Message
-			assert.Equal(t, "can't use certainty when vector index is configured with l2-squared distance", errMsg)
+			assert.Equal(t, "can't compute and return certainty when vector index is configured with l2-squared distance", errMsg)
 		})
 	})
 
@@ -81,8 +83,9 @@ func getsWithExpectedFailures(t *testing.T) {
 				},
 				Properties: []*models.Property{
 					{
-						Name:     "name",
-						DataType: []string{"string"},
+						Name:         "name",
+						DataType:     schema.DataTypeText.PropString(),
+						Tokenization: models.PropertyTokenizationWhitespace,
 					},
 				},
 			})
@@ -102,7 +105,7 @@ func getsWithExpectedFailures(t *testing.T) {
 			assert.Len(t, result, 1)
 
 			errMsg := result[0].Message
-			assert.Equal(t, "can't use certainty when vector index is configured with dot distance", errMsg)
+			assert.Equal(t, "can't compute and return certainty when vector index is configured with dot distance", errMsg)
 		})
 	})
 }

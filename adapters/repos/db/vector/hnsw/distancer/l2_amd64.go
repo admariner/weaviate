@@ -4,20 +4,22 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package distancer
 
 import (
-	"github.com/semi-technologies/weaviate/adapters/repos/db/vector/hnsw/distancer/asm"
+	"github.com/weaviate/weaviate/adapters/repos/db/vector/hnsw/distancer/asm"
 	"golang.org/x/sys/cpu"
 )
 
 func init() {
-	if cpu.X86.HasAVX2 {
-		l2SquaredImpl = asm.L2
+	if cpu.X86.HasAMXBF16 && cpu.X86.HasAVX512 {
+		l2SquaredImpl = asm.L2AVX512
+	} else if cpu.X86.HasAVX2 {
+		l2SquaredImpl = asm.L2AVX256
 	}
 }

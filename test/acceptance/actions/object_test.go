@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package test
@@ -19,28 +19,17 @@ import (
 	"time"
 
 	"github.com/go-openapi/strfmt"
-	"github.com/semi-technologies/weaviate/client/batch"
-	"github.com/semi-technologies/weaviate/client/objects"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/schema/crossref"
-	"github.com/semi-technologies/weaviate/test/helper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/client/batch"
+	"github.com/weaviate/weaviate/client/objects"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/schema/crossref"
+	"github.com/weaviate/weaviate/test/helper"
 )
 
-func Test_ObjectHTTP(t *testing.T) {
-	t.Run("GET", findObject)
-	t.Run("HEAD", headObject)
-	t.Run("PUT", putObject)
-	t.Run("PATCH", patchObject)
-	t.Run("DELETE", deleteObject)
-	t.Run("PostReference", postReference)
-	t.Run("PutReferences", putReferences)
-	t.Run("DeleteReference", deleteReference)
-	t.Run("Query", query)
-}
-
-func findObject(t *testing.T) {
+func TestFindObject(t *testing.T) {
 	t.Parallel()
 	var (
 		cls           = "TestObjectHTTPGet"
@@ -59,8 +48,9 @@ func findObject(t *testing.T) {
 		Vectorizer: "none",
 		Properties: []*models.Property{
 			{
-				Name:     "name",
-				DataType: []string{"string"},
+				Name:         "name",
+				DataType:     schema.DataTypeText.PropString(),
+				Tokenization: models.PropertyTokenizationWhitespace,
 			},
 			{
 				Name:     "friend",
@@ -71,8 +61,8 @@ func findObject(t *testing.T) {
 	// tear down
 	defer helper.DeleteClassObject(t, cls)
 	link1 := map[string]interface{}{
-		"beacon": crossref.NewLocalhost("", first_uuid).String(),
-		"href":   fmt.Sprintf("/v1/objects/%s", first_uuid),
+		"beacon": crossref.NewLocalhost(first_friend, first_uuid).String(),
+		"href":   fmt.Sprintf("/v1/objects/%s/%s", first_friend, first_uuid),
 	}
 	link2 := map[string]interface{}{
 		"beacon": crossref.NewLocalhost(second_friend, second_uuid).String(),
@@ -97,17 +87,19 @@ func findObject(t *testing.T) {
 	helper.AssertRequestFail(t, resp, err, nil)
 }
 
-func headObject(t *testing.T) {
+func TestHeadObject(t *testing.T) {
 	t.Parallel()
 	cls := "TestObjectHTTPHead"
 	// test setup
+	helper.DeleteClassObject(t, cls)
 	helper.AssertCreateObjectClass(t, &models.Class{
 		Class:      cls,
 		Vectorizer: "none",
 		Properties: []*models.Property{
 			{
-				Name:     "name",
-				DataType: []string{"string"},
+				Name:         "name",
+				DataType:     schema.DataTypeText.PropString(),
+				Tokenization: models.PropertyTokenizationWhitespace,
 			},
 		},
 	})
@@ -129,7 +121,7 @@ func headObject(t *testing.T) {
 	helper.AssertRequestFail(t, resp, err, nil)
 }
 
-func putObject(t *testing.T) {
+func TestPutObject(t *testing.T) {
 	t.Parallel()
 	var (
 		cls        = "TestObjectHTTPUpdate"
@@ -149,8 +141,9 @@ func putObject(t *testing.T) {
 		},
 		Properties: []*models.Property{
 			{
-				Name:     "testString",
-				DataType: []string{"string"},
+				Name:         "testString",
+				DataType:     schema.DataTypeText.PropString(),
+				Tokenization: models.PropertyTokenizationWhitespace,
 			},
 			{
 				Name:     "testWholeNumber",
@@ -183,8 +176,8 @@ func putObject(t *testing.T) {
 	})
 
 	link1 := map[string]interface{}{
-		"beacon": crossref.NewLocalhost("", friend_uuid).String(),
-		"href":   fmt.Sprintf("/v1/objects/%s", friend_uuid),
+		"beacon": crossref.NewLocalhost(friend_cls, friend_uuid).String(),
+		"href":   fmt.Sprintf("/v1/objects/%s/%s", friend_cls, friend_uuid),
 	}
 	link2 := map[string]interface{}{
 		"beacon": crossref.NewLocalhost(friend_cls, friend_uuid).String(),
@@ -208,7 +201,7 @@ func putObject(t *testing.T) {
 	assert.Equal(t, expected, actual)
 }
 
-func patchObject(t *testing.T) {
+func TestPatchObject(t *testing.T) {
 	t.Parallel()
 	var (
 		cls        = "TestObjectHTTPPatch"
@@ -220,6 +213,8 @@ func patchObject(t *testing.T) {
 		}
 	)
 	// test setup
+	helper.DeleteClassObject(t, friend_cls)
+	helper.DeleteClassObject(t, cls)
 	helper.AssertCreateObjectClass(t, &models.Class{ // friend
 		Class:        friend_cls,
 		ModuleConfig: mconfig,
@@ -231,8 +226,9 @@ func patchObject(t *testing.T) {
 		ModuleConfig: mconfig,
 		Properties: []*models.Property{
 			{
-				Name:     "string1",
-				DataType: []string{"string"},
+				Name:         "string1",
+				DataType:     schema.DataTypeText.PropString(),
+				Tokenization: models.PropertyTokenizationWhitespace,
 			},
 			{
 				Name:     "integer1",
@@ -260,8 +256,8 @@ func patchObject(t *testing.T) {
 	})
 	friendID := helper.AssertCreateObject(t, friend_cls, nil)
 	link1 := map[string]interface{}{
-		"beacon": fmt.Sprintf("weaviate://localhost/%s", friendID),
-		"href":   fmt.Sprintf("/v1/objects/%s", friendID),
+		"beacon": fmt.Sprintf("weaviate://localhost/%s/%s", friend_cls, friendID),
+		"href":   fmt.Sprintf("/v1/objects/%s/%s", friend_cls, friendID),
 	}
 	link2 := map[string]interface{}{
 		"beacon": fmt.Sprintf("weaviate://localhost/%s/%s", friend_cls, friendID),
@@ -307,7 +303,7 @@ func patchObject(t *testing.T) {
 	}
 }
 
-func deleteObject(t *testing.T) {
+func TestDeleteObject(t *testing.T) {
 	t.Parallel()
 	var (
 		id     = strfmt.UUID("21111111-1111-1111-1111-111111111111")
@@ -321,6 +317,7 @@ func deleteObject(t *testing.T) {
 		}
 	)
 	// test setup
+	helper.DeleteClassObject(t, classA)
 	helper.AssertCreateObjectClass(t, &models.Class{
 		Class:      classA,
 		Vectorizer: "none",
@@ -328,6 +325,7 @@ func deleteObject(t *testing.T) {
 	})
 	defer helper.DeleteClassObject(t, classA)
 
+	helper.DeleteClassObject(t, classB)
 	helper.AssertCreateObjectClass(t, &models.Class{
 		Class:      classB,
 		Vectorizer: "none",
@@ -410,7 +408,7 @@ func deleteObject(t *testing.T) {
 	}
 }
 
-func postReference(t *testing.T) {
+func TestPostReference(t *testing.T) {
 	t.Parallel()
 	var (
 		cls        = "TestObjectHTTPAddReference"
@@ -423,6 +421,8 @@ func postReference(t *testing.T) {
 	)
 
 	// test setup
+	helper.DeleteClassObject(t, cls)
+	helper.DeleteClassObject(t, friend_cls)
 	helper.AssertCreateObjectClass(t, &models.Class{
 		Class:        friend_cls,
 		ModuleConfig: mconfig,
@@ -480,7 +480,7 @@ func postReference(t *testing.T) {
 	}
 }
 
-func putReferences(t *testing.T) {
+func TestPutReferences(t *testing.T) {
 	t.Parallel()
 	var (
 		cls           = "TestObjectHTTPUpdateReferences"
@@ -493,6 +493,7 @@ func putReferences(t *testing.T) {
 		}
 	)
 	// test setup
+	helper.DeleteClassObject(t, first_friend)
 	helper.AssertCreateObjectClass(t, &models.Class{
 		Class:        first_friend,
 		ModuleConfig: mconfig,
@@ -500,6 +501,7 @@ func putReferences(t *testing.T) {
 	})
 	defer helper.DeleteClassObject(t, first_friend)
 
+	helper.DeleteClassObject(t, second_friend)
 	helper.AssertCreateObjectClass(t, &models.Class{
 		Class:        second_friend,
 		ModuleConfig: mconfig,
@@ -507,6 +509,7 @@ func putReferences(t *testing.T) {
 	})
 	defer helper.DeleteClassObject(t, second_friend)
 
+	helper.DeleteClassObject(t, cls)
 	helper.AssertCreateObjectClass(t, &models.Class{
 		Class:        cls,
 		ModuleConfig: mconfig,
@@ -595,7 +598,7 @@ func putReferences(t *testing.T) {
 	}
 }
 
-func deleteReference(t *testing.T) {
+func TestDeleteReference(t *testing.T) {
 	t.Parallel()
 	var (
 		cls           = "TestObjectHTTPDeleteReference"
@@ -608,6 +611,7 @@ func deleteReference(t *testing.T) {
 		}
 	)
 	// test setup
+	helper.DeleteClassObject(t, first_friend)
 	helper.AssertCreateObjectClass(t, &models.Class{
 		Class:        first_friend,
 		ModuleConfig: mconfig,
@@ -615,6 +619,7 @@ func deleteReference(t *testing.T) {
 	})
 	defer helper.DeleteClassObject(t, first_friend)
 
+	helper.DeleteClassObject(t, second_friend)
 	helper.AssertCreateObjectClass(t, &models.Class{
 		Class:        second_friend,
 		ModuleConfig: mconfig,
@@ -622,6 +627,7 @@ func deleteReference(t *testing.T) {
 	})
 	defer helper.DeleteClassObject(t, second_friend)
 
+	helper.DeleteClassObject(t, cls)
 	helper.AssertCreateObjectClass(t, &models.Class{
 		Class:        cls,
 		ModuleConfig: mconfig,
@@ -717,13 +723,16 @@ func deleteReference(t *testing.T) {
 	}
 }
 
-func query(t *testing.T) {
+func TestQuery(t *testing.T) {
 	t.Parallel()
 	var (
 		cls          = "TestObjectHTTPQuery"
 		first_friend = "TestObjectHTTPQueryFriend"
 	)
 	// test setup
+	helper.DeleteClassObject(t, cls)
+	helper.DeleteClassObject(t, first_friend)
+
 	helper.AssertCreateObject(t, first_friend, map[string]interface{}{})
 	defer helper.DeleteClassObject(t, first_friend)
 	helper.AssertCreateObjectClass(t, &models.Class{

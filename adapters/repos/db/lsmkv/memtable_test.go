@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package lsmkv
@@ -17,14 +17,22 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/entities/lsmkv"
 )
 
 // This test prevents a regression on
 // https://www.youtube.com/watch?v=OS8taasZl8k
 func Test_MemtableSecondaryKeyBug(t *testing.T) {
 	dir := t.TempDir()
-	m, err := newMemtable(path.Join(dir, "will-never-flush"), StrategyReplace, 1, nil)
+
+	cl, err := newCommitLogger(dir)
+	require.NoError(t, err)
+
+	m, err := newMemtable(path.Join(dir, "will-never-flush"), StrategyReplace, 1, cl, nil)
 	require.Nil(t, err)
+	t.Cleanup(func() {
+		require.Nil(t, m.commitlog.close())
+	})
 
 	t.Run("add initial value", func(t *testing.T) {
 		err = m.put([]byte("my-key"), []byte("my-value"),
@@ -64,7 +72,7 @@ func Test_MemtableSecondaryKeyBug(t *testing.T) {
 
 	t.Run("retrieve by initial secondary - should not find anything", func(t *testing.T) {
 		val, err := m.getBySecondary(0, []byte("secondary-key-initial"))
-		assert.Equal(t, NotFound, err)
+		assert.Equal(t, lsmkv.NotFound, err)
 		assert.Nil(t, val)
 	})
 }

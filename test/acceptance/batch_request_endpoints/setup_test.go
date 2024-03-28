@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package batch_request_endpoints
@@ -15,9 +15,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/semi-technologies/weaviate/client/schema"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/test/helper"
+	clschema "github.com/weaviate/weaviate/client/schema"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/test/helper"
 )
 
 func Test_Batch(t *testing.T) {
@@ -28,8 +29,9 @@ func Test_Batch(t *testing.T) {
 			Class: "BulkTest",
 			Properties: []*models.Property{
 				{
-					Name:     "name",
-					DataType: []string{"string"},
+					Name:         "name",
+					DataType:     schema.DataTypeText.PropString(),
+					Tokenization: models.PropertyTokenizationWhitespace,
 				},
 			},
 		})
@@ -37,8 +39,9 @@ func Test_Batch(t *testing.T) {
 			Class: "BulkTestSource",
 			Properties: []*models.Property{
 				{
-					Name:     "name",
-					DataType: []string{"string"},
+					Name:         "name",
+					DataType:     schema.DataTypeText.PropString(),
+					Tokenization: models.PropertyTokenizationWhitespace,
 				},
 				{
 					Name:     "ref",
@@ -65,6 +68,7 @@ func Test_Batch(t *testing.T) {
 
 	t.Run("gql results order", batchJourney)
 	t.Run("gql results order", gqlResultsOrder)
+	t.Run("gql malformed request", gqlMalformedRequest)
 	t.Run("batch delete", batchDeleteJourney)
 
 	deleteObjectClass(t, "BulkTest")
@@ -73,13 +77,13 @@ func Test_Batch(t *testing.T) {
 }
 
 func createObjectClass(t *testing.T, class *models.Class) {
-	params := schema.NewSchemaObjectsCreateParams().WithObjectClass(class)
+	params := clschema.NewSchemaObjectsCreateParams().WithObjectClass(class)
 	resp, err := helper.Client(t).Schema.SchemaObjectsCreate(params, nil)
 	helper.AssertRequestOk(t, resp, err, nil)
 }
 
 func deleteObjectClass(t *testing.T, class string) {
-	delParams := schema.NewSchemaObjectsDeleteParams().WithClassName(class)
+	delParams := clschema.NewSchemaObjectsDeleteParams().WithClassName(class)
 	delRes, err := helper.Client(t).Schema.SchemaObjectsDelete(delParams, nil)
 	helper.AssertRequestOk(t, delRes, err, nil)
 }

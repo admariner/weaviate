@@ -4,15 +4,17 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package hnsw
 
 import (
 	"context"
+
+	"github.com/weaviate/weaviate/adapters/repos/db/vector/compressionhelpers"
 )
 
 // NoopCommitLogger implements the CommitLogger interface, but does not
@@ -23,7 +25,9 @@ func (n *NoopCommitLogger) ID() string {
 	return ""
 }
 
-func (n *NoopCommitLogger) Start() {}
+func (n *NoopCommitLogger) AddPQ(data compressionhelpers.PQData) error {
+	return nil
+}
 
 func (n *NoopCommitLogger) AddNode(node *vertex) error {
 	return nil
@@ -99,8 +103,4 @@ func (n *NoopCommitLogger) RootPath() string {
 
 func (n *NoopCommitLogger) SwitchCommitLogs(force bool) error {
 	return nil
-}
-
-func (n *NoopCommitLogger) MaintenanceInProgress() bool {
-	return false
 }

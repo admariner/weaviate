@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package graphqlhelper
@@ -14,13 +14,15 @@ package graphqlhelper
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/go-openapi/runtime"
-	"github.com/semi-technologies/weaviate/client/graphql"
-	graphql_client "github.com/semi-technologies/weaviate/client/graphql"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/test/helper"
+	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/client/graphql"
+	graphql_client "github.com/weaviate/weaviate/client/graphql"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/test/helper"
 )
 
 type GraphQLResult struct {
@@ -103,4 +105,22 @@ func (g GraphQLResult) Get(paths ...string) *GraphQLResult {
 // Cast the result to a slice
 func (g *GraphQLResult) AsSlice() []interface{} {
 	return g.Result.([]interface{})
+}
+
+func Vec2String(v []float32) (s string) {
+	for _, n := range v {
+		s = fmt.Sprintf("%s, %f", s, n)
+	}
+	s = strings.TrimLeft(s, ", ")
+	return fmt.Sprintf("[%s]", s)
+}
+
+func ParseVec(t *testing.T, iVec []interface{}) []float32 {
+	vec := make([]float32, len(iVec))
+	for i, val := range iVec {
+		parsed, err := val.(json.Number).Float64()
+		require.Nil(t, err)
+		vec[i] = float32(parsed)
+	}
+	return vec
 }

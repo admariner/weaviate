@@ -4,16 +4,14 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package lsmkv
 
-import (
-	"github.com/semi-technologies/weaviate/adapters/repos/db/lsmkv/segmentindex"
-)
+import "github.com/weaviate/weaviate/entities/lsmkv"
 
 type segmentCursorMap struct {
 	segment    *segment
@@ -40,16 +38,10 @@ func (sg *SegmentGroup) newMapCursors() ([]innerCursorMap, func()) {
 func (s *segmentCursorMap) seek(key []byte) ([]byte, []MapPair, error) {
 	node, err := s.segment.index.Seek(key)
 	if err != nil {
-		if err == segmentindex.NotFound {
-			return nil, nil, NotFound
-		}
-
 		return nil, nil, err
 	}
 
-	parsed, err := s.segment.collectionStratParseDataWithKey(
-		s.segment.contents[node.Start:node.End])
-
+	parsed, err := s.parseCollectionNode(nodeOffset{node.Start, node.End})
 	// make sure to set the next offset before checking the error. The error
 	// could be 'Deleted' which would require that the offset is still advanced
 	// for the next cycle
@@ -71,12 +63,10 @@ func (s *segmentCursorMap) seek(key []byte) ([]byte, []MapPair, error) {
 
 func (s *segmentCursorMap) next() ([]byte, []MapPair, error) {
 	if s.nextOffset >= s.segment.dataEndPos {
-		return nil, nil, NotFound
+		return nil, nil, lsmkv.NotFound
 	}
 
-	parsed, err := s.segment.collectionStratParseDataWithKey(
-		s.segment.contents[s.nextOffset:])
-
+	parsed, err := s.parseCollectionNode(nodeOffset{start: s.nextOffset})
 	// make sure to set the next offset before checking the error. The error
 	// could be 'Deleted' which would require that the offset is still advanced
 	// for the next cycle
@@ -98,9 +88,8 @@ func (s *segmentCursorMap) next() ([]byte, []MapPair, error) {
 
 func (s *segmentCursorMap) first() ([]byte, []MapPair, error) {
 	s.nextOffset = s.segment.dataStartPos
-	parsed, err := s.segment.collectionStratParseDataWithKey(
-		s.segment.contents[s.nextOffset:])
 
+	parsed, err := s.parseCollectionNode(nodeOffset{start: s.nextOffset})
 	// make sure to set the next offset before checking the error. The error
 	// could be 'Deleted' which would require that the offset is still advanced
 	// for the next cycle
@@ -118,4 +107,12 @@ func (s *segmentCursorMap) first() ([]byte, []MapPair, error) {
 	}
 
 	return parsed.primaryKey, pairs, nil
+}
+
+func (s *segmentCursorMap) parseCollectionNode(offset nodeOffset) (segmentCollectionNode, error) {
+	r, err := s.segment.newNodeReader(offset)
+	if err != nil {
+		return segmentCollectionNode{}, err
+	}
+	return ParseCollectionNode(r)
 }

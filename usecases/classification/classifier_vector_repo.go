@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package classification
@@ -14,9 +14,9 @@ package classification
 import (
 	"context"
 
-	"github.com/semi-technologies/weaviate/entities/modulecapabilities"
-	"github.com/semi-technologies/weaviate/entities/search"
-	"github.com/semi-technologies/weaviate/usecases/traverser"
+	"github.com/weaviate/weaviate/entities/dto"
+	"github.com/weaviate/weaviate/entities/modulecapabilities"
+	"github.com/weaviate/weaviate/entities/search"
 )
 
 type vectorClassSearchRepo struct {
@@ -30,7 +30,7 @@ func newVectorClassSearchRepo(vectorRepo vectorRepo) *vectorClassSearchRepo {
 func (r *vectorClassSearchRepo) VectorClassSearch(ctx context.Context,
 	params modulecapabilities.VectorClassSearchParams,
 ) ([]search.Result, error) {
-	return r.vectorRepo.VectorClassSearch(ctx, traverser.GetParams{
+	return r.vectorRepo.VectorSearch(ctx, dto.GetParams{
 		Filters:    params.Filters,
 		Pagination: params.Pagination,
 		ClassName:  params.ClassName,

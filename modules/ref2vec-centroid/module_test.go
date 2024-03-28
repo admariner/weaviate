@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package modcentroid
@@ -19,16 +19,17 @@ import (
 
 	"github.com/go-openapi/strfmt"
 	"github.com/google/uuid"
-	"github.com/semi-technologies/weaviate/entities/additional"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/modulecapabilities"
-	"github.com/semi-technologies/weaviate/entities/moduletools"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	"github.com/semi-technologies/weaviate/entities/schema/crossref"
-	"github.com/semi-technologies/weaviate/entities/search"
 	"github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/weaviate/weaviate/entities/additional"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/modulecapabilities"
+	"github.com/weaviate/weaviate/entities/moduletools"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/schema/crossref"
+	"github.com/weaviate/weaviate/entities/search"
+	"github.com/weaviate/weaviate/usecases/config"
 )
 
 func TestRef2VecCentroid(t *testing.T) {
@@ -36,7 +37,7 @@ func TestRef2VecCentroid(t *testing.T) {
 	defer cancel()
 	sp := newFakeStorageProvider(t)
 	logger, _ := test.NewNullLogger()
-	params := moduletools.NewInitParams(sp, nil, logger)
+	params := moduletools.NewInitParams(sp, nil, config.Config{}, logger)
 
 	mod := New()
 	classConfig := fakeClassConfig(mod.ClassConfigDefaults())
@@ -108,10 +109,10 @@ func TestRef2VecCentroid(t *testing.T) {
 				repo.On("Object", ctx, ref.Class, ref.TargetID).
 					Return(&search.Result{Vector: []float32{1, 2, 3}}, nil)
 
-				err := mod.VectorizeObject(ctx, obj, classConfig, repo.Object)
+				vec, err := mod.VectorizeObject(ctx, obj, classConfig, repo.Object)
 				assert.Nil(t, err)
 				expectedVec := models.C11yVector{1, 2, 3}
-				assert.EqualValues(t, expectedVec, obj.Vector)
+				assert.EqualValues(t, expectedVec, vec)
 			})
 
 			t.Run("no refVecs", func(t *testing.T) {
@@ -124,7 +125,7 @@ func TestRef2VecCentroid(t *testing.T) {
 				repo.On("Object", ctx, ref.Class, ref.TargetID).
 					Return(&search.Result{}, nil)
 
-				err := mod.VectorizeObject(ctx, obj, classConfig, repo.Object)
+				_, err := mod.VectorizeObject(ctx, obj, classConfig, repo.Object)
 				assert.Nil(t, err)
 				assert.Nil(t, nil, obj.Vector)
 			})
@@ -149,7 +150,7 @@ func TestRef2VecCentroid(t *testing.T) {
 				repo.On("Object", ctx, ref2.Class, ref2.TargetID).
 					Return(&search.Result{Vector: []float32{1, 2, 3}}, nil)
 
-				err := mod.VectorizeObject(ctx, obj, classConfig, repo.Object)
+				_, err := mod.VectorizeObject(ctx, obj, classConfig, repo.Object)
 				assert.EqualError(t, err, expectedErr.Error())
 			})
 		})
@@ -162,7 +163,7 @@ type fakeObjectsRepo struct {
 
 func (r *fakeObjectsRepo) Object(ctx context.Context, class string,
 	id strfmt.UUID, props search.SelectProperties,
-	addl additional.Properties,
+	addl additional.Properties, tenant string,
 ) (*search.Result, error) {
 	args := r.Called(ctx, class, id)
 	if args.Get(0) == nil {

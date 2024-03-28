@@ -4,29 +4,30 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package replication
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
 
 	"github.com/go-openapi/strfmt"
-	"github.com/semi-technologies/weaviate/client/objects"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/schema/crossref"
-	"github.com/semi-technologies/weaviate/test/docker"
-	"github.com/semi-technologies/weaviate/test/helper"
-	"github.com/semi-technologies/weaviate/test/helper/sample-schema/articles"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/net/context"
+	"github.com/weaviate/weaviate/client/objects"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema/crossref"
+	"github.com/weaviate/weaviate/test/docker"
+	"github.com/weaviate/weaviate/test/helper"
+	"github.com/weaviate/weaviate/test/helper/sample-schema/articles"
+	"github.com/weaviate/weaviate/usecases/replica"
 )
 
 var (
@@ -68,7 +69,7 @@ func immediateReplicaCRUD(t *testing.T) {
 	require.Nil(t, err)
 	defer func() {
 		if err := compose.Terminate(ctx); err != nil {
-			t.Fatalf("failed to terminte test containers: %s", err.Error())
+			t.Fatalf("failed to terminate test containers: %s", err.Error())
 		}
 	}()
 
@@ -104,7 +105,7 @@ func immediateReplicaCRUD(t *testing.T) {
 		})
 
 		t.Run("assert objects exist on node 2", func(t *testing.T) {
-			resp := gqlGet(t, compose.GetWeaviateNode2().URI(), "Paragraph")
+			resp := gqlGet(t, compose.GetWeaviateNode2().URI(), "Paragraph", replica.One)
 			assert.Len(t, resp, len(paragraphIDs))
 		})
 
@@ -129,7 +130,7 @@ func immediateReplicaCRUD(t *testing.T) {
 		})
 
 		t.Run("assert objects exist on node 1", func(t *testing.T) {
-			resp := gqlGet(t, compose.GetWeaviate().URI(), "Article")
+			resp := gqlGet(t, compose.GetWeaviate().URI(), "Article", replica.One)
 			assert.Len(t, resp, len(articleIDs))
 		})
 
@@ -170,8 +171,8 @@ func immediateReplicaCRUD(t *testing.T) {
 
 			// maps article id to referenced paragraph id
 			refPairs := make(map[strfmt.UUID]strfmt.UUID)
-			resp := gqlGet(t, compose.GetWeaviateNode2().URI(), "Article", "_additional{id}",
-				"hasParagraphs {... on Paragraph {_additional{id}}}")
+			resp := gqlGet(t, compose.GetWeaviateNode2().URI(), "Article", replica.One,
+				"_additional{id}", "hasParagraphs {... on Paragraph {_additional{id}}}")
 			assert.Len(t, resp, len(articleIDs))
 
 			for _, r := range resp {
@@ -197,7 +198,7 @@ func immediateReplicaCRUD(t *testing.T) {
 	})
 
 	t.Run("patch an object", func(t *testing.T) {
-		before, err := getObject(t, compose.GetWeaviate().URI(), "Article", articleIDs[0])
+		before, err := getObject(t, compose.GetWeaviate().URI(), "Article", articleIDs[0], false)
 		require.Nil(t, err)
 		newTitle := "Article#9000"
 
@@ -240,7 +241,7 @@ func immediateReplicaCRUD(t *testing.T) {
 
 		t.Run("assert object removed from node 2", func(t *testing.T) {
 			_, err := getObjectFromNode(t, compose.GetWeaviateNode2().URI(), "Article", articleIDs[0], "node2")
-			assert.Equal(t, err, &objects.ObjectsClassGetNotFound{})
+			assert.Equal(t, &objects.ObjectsClassGetNotFound{}, err)
 		})
 
 		t.Run("restart node 1", func(t *testing.T) {
@@ -259,7 +260,7 @@ func immediateReplicaCRUD(t *testing.T) {
 		})
 
 		t.Run("assert objects are removed from node 1", func(t *testing.T) {
-			resp := gqlGet(t, compose.GetWeaviate().URI(), "Article")
+			resp := gqlGet(t, compose.GetWeaviate().URI(), "Article", replica.One)
 			assert.Empty(t, resp)
 		})
 
@@ -271,8 +272,6 @@ func immediateReplicaCRUD(t *testing.T) {
 }
 
 func eventualReplicaCRUD(t *testing.T) {
-	t.Skip("disabled while reworking dynamic scaling - TODO: re-enabled when fixed")
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -283,7 +282,7 @@ func eventualReplicaCRUD(t *testing.T) {
 	require.Nil(t, err)
 	defer func() {
 		if err := compose.Terminate(ctx); err != nil {
-			t.Fatalf("failed to terminte test containers: %s", err.Error())
+			t.Fatalf("failed to terminate test containers: %s", err.Error())
 		}
 	}()
 
@@ -339,9 +338,9 @@ func eventualReplicaCRUD(t *testing.T) {
 	})
 
 	t.Run("assert all previous data replicated to node 2", func(t *testing.T) {
-		resp := gqlGet(t, compose.GetWeaviateNode2().URI(), "Article")
+		resp := gqlGet(t, compose.GetWeaviateNode2().URI(), "Article", replica.One)
 		assert.Len(t, resp, len(articleIDs))
-		resp = gqlGet(t, compose.GetWeaviateNode2().URI(), "Paragraph")
+		resp = gqlGet(t, compose.GetWeaviateNode2().URI(), "Paragraph", replica.One)
 		assert.Len(t, resp, len(paragraphIDs))
 	})
 
@@ -351,7 +350,7 @@ func eventualReplicaCRUD(t *testing.T) {
 
 	t.Run("assert any future writes are replicated", func(t *testing.T) {
 		t.Run("patch an object", func(t *testing.T) {
-			before, err := getObject(t, compose.GetWeaviate().URI(), "Article", articleIDs[0])
+			before, err := getObject(t, compose.GetWeaviate().URI(), "Article", articleIDs[0], false)
 			require.Nil(t, err)
 			newTitle := "Article#9000"
 
@@ -413,7 +412,7 @@ func eventualReplicaCRUD(t *testing.T) {
 			})
 
 			t.Run("assert objects are removed from node 1", func(t *testing.T) {
-				resp := gqlGet(t, compose.GetWeaviate().URI(), "Article")
+				resp := gqlGet(t, compose.GetWeaviate().URI(), "Article", replica.One)
 				assert.Empty(t, resp)
 			})
 

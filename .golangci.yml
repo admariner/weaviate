@@ -7,6 +7,8 @@ linters:
     - gofumpt
     - exhaustive
     - govet
+    - unused
+    - nolintlint
 linters-settings:
   exhaustive:
     # Presence of "default" case in switch statements satisfies exhaustiveness,
@@ -17,6 +19,9 @@ issues:
     # Exclude some staticcheck messages
     - linters:
         - staticcheck
+      text: "S1034"
+    - linters:
+        - staticcheck
       text: "SA1029:"
     - linters:
         - staticcheck
@@ -24,3 +29,34 @@ issues:
     - linters:
         - staticcheck
       text: "SA5011"
+    - linters:
+        - govet
+      text: "composites"
+    - linters:
+        - staticcheck
+      path: adapters/handlers/grpc/v1/filters.go
+      text: 'SA1019' # TODO: remove this once deprecated gRPC fields are removed from API
+    - linters:
+        - staticcheck
+      path: adapters/handlers/grpc/v1/prepare_reply.go
+      text: 'SA1019' # TODO: remove this once deprecated gRPC fields are removed from API
+    - linters:
+        - staticcheck
+      path: adapters/handlers/grpc/v1/parse_search_request.go
+      text: 'SA1019' # TODO: remove this once deprecated gRPC fields are removed from API
+    - linters:
+        - staticcheck
+      path: adapters/handlers/grpc/v1/batch_parse_request.go
+      text: 'SA1019' # TODO: remove this once deprecated gRPC fields are removed from API
+    - linters:
+        - staticcheck
+      path: adapters/handlers/grpc/v1/service.go
+      text: 'SA1019' # TODO: remove this once deprecated gRPC fields are removed from API
+    - linters:
+        - staticcheck
+      path: test/acceptance/grpc/grpc_test_deprecated.go
+      text: 'SA1019' # TODO: remove this once deprecated gRPC fields are removed from API
+run:
+  build-tags:
+    - integrationTest
+    - integrationTestSlow

@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package clients
@@ -21,10 +21,13 @@ type cohereUrlBuilder struct {
 func newCohereUrlBuilder() *cohereUrlBuilder {
 	return &cohereUrlBuilder{
 		origin:   "https://api.cohere.ai",
-		pathMask: "/embed",
+		pathMask: "/v1/embed",
 	}
 }
 
-func (c *cohereUrlBuilder) url() string {
+func (c *cohereUrlBuilder) url(baseURL string) string {
+	if baseURL != "" {
+		return fmt.Sprintf("%s%s", baseURL, c.pathMask)
+	}
 	return fmt.Sprintf("%s%s", c.origin, c.pathMask)
 }

@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package modner
@@ -18,13 +18,13 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
-	"github.com/semi-technologies/weaviate/entities/modulecapabilities"
-	"github.com/semi-technologies/weaviate/entities/moduletools"
-	neradditional "github.com/semi-technologies/weaviate/modules/ner-transformers/additional"
-	neradditionaltoken "github.com/semi-technologies/weaviate/modules/ner-transformers/additional/tokens"
-	"github.com/semi-technologies/weaviate/modules/ner-transformers/clients"
-	"github.com/semi-technologies/weaviate/modules/ner-transformers/ent"
 	"github.com/sirupsen/logrus"
+	"github.com/weaviate/weaviate/entities/modulecapabilities"
+	"github.com/weaviate/weaviate/entities/moduletools"
+	neradditional "github.com/weaviate/weaviate/modules/ner-transformers/additional"
+	neradditionaltoken "github.com/weaviate/weaviate/modules/ner-transformers/additional/tokens"
+	"github.com/weaviate/weaviate/modules/ner-transformers/clients"
+	"github.com/weaviate/weaviate/modules/ner-transformers/ent"
 )
 
 func New() *NERModule {
@@ -46,19 +46,19 @@ func (m *NERModule) Name() string {
 }
 
 func (m *NERModule) Type() modulecapabilities.ModuleType {
-	return modulecapabilities.Text2Text
+	return modulecapabilities.Text2TextNER
 }
 
 func (m *NERModule) Init(ctx context.Context,
 	params moduletools.ModuleInitParams,
 ) error {
-	if err := m.initAdditional(ctx, params.GetLogger()); err != nil {
+	if err := m.initAdditional(ctx, params.GetConfig().ModuleHttpClientTimeout, params.GetLogger()); err != nil {
 		return errors.Wrap(err, "init additional")
 	}
 	return nil
 }
 
-func (m *NERModule) initAdditional(ctx context.Context,
+func (m *NERModule) initAdditional(ctx context.Context, timeout time.Duration,
 	logger logrus.FieldLogger,
 ) error {
 	uri := os.Getenv("NER_INFERENCE_API")
@@ -66,7 +66,7 @@ func (m *NERModule) initAdditional(ctx context.Context,
 		return errors.Errorf("required variable NER_INFERENCE_API is not set")
 	}
 
-	client := clients.New(uri, logger)
+	client := clients.New(uri, timeout, logger)
 	if err := client.WaitForStartup(ctx, 1*time.Second); err != nil {
 		return errors.Wrap(err, "init remote ner module")
 	}

@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package test
@@ -17,12 +17,12 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/semi-technologies/weaviate/client/schema"
 	"github.com/stretchr/testify/assert"
+	"github.com/weaviate/weaviate/client/schema"
 
-	"github.com/semi-technologies/weaviate/client/objects"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/test/helper"
+	"github.com/weaviate/weaviate/client/objects"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/test/helper"
 )
 
 func TestAutoSchemaWithDifferentProperties(t *testing.T) {
@@ -60,8 +60,8 @@ func TestAutoSchemaWithDifferentProperties(t *testing.T) {
 			resp2, err2 := helper.Client(t).Objects.ObjectsCreate(params2, nil)
 			helper.AssertRequestOk(t, resp2, err2, nil)
 
-			SchmeaParams := schema.NewSchemaDumpParams()
-			resp3, err3 := helper.Client(t).Schema.SchemaDump(SchmeaParams, nil)
+			SchemaParams := schema.NewSchemaDumpParams()
+			resp3, err3 := helper.Client(t).Schema.SchemaDump(SchemaParams, nil)
 			helper.AssertRequestOk(t, resp3, err3, nil)
 			assert.Len(t, resp3.Payload.Classes, 1)
 			class := resp3.Payload.Classes[0]
@@ -97,15 +97,10 @@ func autoSchemaObjects(t *testing.T) {
 							"longitude": json.Number("1.01"),
 						},
 						"testPhoneNumber": map[string]interface{}{
-							"input":                  "020 1234567",
-							"internationalFormatted": "+31 20 1234567",
-							"defaultCountry":         "nl",
-							"countryCode":            31,
-							"national":               201234567,
-							"nationalFormatted":      "020 1234567",
-							"valid":                  true,
+							"input":          "020 1234567",
+							"defaultCountry": "nl",
 						},
-						"stringArray": []string{"a", "b", "c"},
+						"textArray":   []string{"a", "b", "c"},
 						"intArray":    []int{1, 2, 3},
 						"numberArray": []int{11.0, 22.0, 33.0},
 					},

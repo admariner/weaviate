@@ -4,20 +4,20 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package schema
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
 	"github.com/sirupsen/logrus"
+	"github.com/weaviate/weaviate/entities/models"
 )
 
 // startupClusterSync tries to determine what - if any - schema migration is
@@ -38,19 +38,40 @@ import (
 // - If Node 1 and Node 2 both have a schema, but they aren't in sync, the
 // cluster is broken. This state cannot be automatically recovered from and
 // startup needs to fail. Manual intervention would be required in this case.
-func (m *Manager) startupClusterSync(ctx context.Context,
-	localSchema *State,
-) error {
+func (m *Manager) startupClusterSync(ctx context.Context) error {
 	nodes := m.clusterState.AllNames()
 	if len(nodes) <= 1 {
 		return m.startupHandleSingleNode(ctx, nodes)
 	}
 
-	if isEmpty(localSchema) {
-		return m.startupJoinCluster(ctx, localSchema)
+	if m.schemaCache.isEmpty() {
+		return m.startupJoinCluster(ctx)
 	}
 
-	return m.validateSchemaCorruption(ctx, localSchema)
+	err := m.validateSchemaCorruption(ctx)
+	if err == nil {
+		// schema is fine, we are done
+		return nil
+	}
+
+	if m.clusterState.SchemaSyncIgnored() {
+		m.logger.WithError(err).WithFields(logrusStartupSyncFields()).
+			Warning("schema out of sync, but ignored because " +
+				"CLUSTER_IGNORE_SCHEMA_SYNC=true")
+		return nil
+	}
+
+	if m.cluster.HaveDanglingTxs(ctx, resumableTxs) {
+		m.logger.WithFields(logrusStartupSyncFields()).
+			Infof("schema out of sync, but there are dangling transactions, the check will be repeated after an attempt to resume those transactions")
+
+		m.LockGuard(func() {
+			m.shouldTryToResumeTx = true
+		})
+		return nil
+	}
+
+	return err
 }
 
 // startupHandleSingleNode deals with the case where there is only a single
@@ -87,9 +108,7 @@ func (m *Manager) startupHandleSingleNode(ctx context.Context,
 //
 // There is one edge case: The cluster could consist of multiple nodes which
 // are empty. In this case, no migration is required.
-func (m *Manager) startupJoinCluster(ctx context.Context,
-	localSchema *State,
-) error {
+func (m *Manager) startupJoinCluster(ctx context.Context) error {
 	tx, err := m.cluster.BeginTransaction(ctx, ReadSchema, nil, DefaultTxTTL)
 	if err != nil {
 		if m.clusterSyncImpossibleBecauseRemoteNodeTooOld(err) {
@@ -115,19 +134,46 @@ func (m *Manager) startupJoinCluster(ctx context.Context,
 		return nil
 	}
 
-	m.state = *pl.Schema
+	if err := m.saveSchema(ctx, *pl.Schema); err != nil {
+		return fmt.Errorf("save schema: %w", err)
+	}
 
-	m.saveSchema(ctx)
+	m.schemaCache.setState(*pl.Schema)
 
 	return nil
+}
+
+func (m *Manager) ClusterStatus(ctx context.Context) (*models.SchemaClusterStatus, error) {
+	m.RLock()
+	defer m.RUnlock()
+
+	out := &models.SchemaClusterStatus{
+		Hostname:         m.clusterState.LocalName(),
+		IgnoreSchemaSync: m.clusterState.SchemaSyncIgnored(),
+	}
+
+	nodes := m.clusterState.AllNames()
+	out.NodeCount = int64(len(nodes))
+	if len(nodes) < 2 {
+		out.Healthy = true
+		return out, nil
+	}
+
+	err := m.validateSchemaCorruption(ctx)
+	if err != nil {
+		out.Error = err.Error()
+		out.Healthy = false
+		return out, err
+	}
+
+	out.Healthy = true
+	return out, nil
 }
 
 // validateSchemaCorruption makes sure that - given that all nodes in the
 // cluster have a schema - they are in sync. If not the cluster is considered
 // broken and needs to be repaired manually
-func (m *Manager) validateSchemaCorruption(ctx context.Context,
-	localSchema *State,
-) error {
+func (m *Manager) validateSchemaCorruption(ctx context.Context) error {
 	tx, err := m.cluster.BeginTransaction(ctx, ReadSchema, nil, DefaultTxTTL)
 	if err != nil {
 		if m.clusterSyncImpossibleBecauseRemoteNodeTooOld(err) {
@@ -138,25 +184,33 @@ func (m *Manager) validateSchemaCorruption(ctx context.Context,
 
 	// this tx is read-only, so we don't have to worry about aborting it, the
 	// close should be the same on both happy and unhappy path
-	defer m.cluster.CloseReadTransaction(ctx, tx)
+	if err = m.cluster.CloseReadTransaction(ctx, tx); err != nil {
+		return err
+	}
 
 	pl, ok := tx.Payload.(ReadSchemaPayload)
 	if !ok {
 		return fmt.Errorf("unrecognized tx response payload: %T", tx.Payload)
 	}
-
-	if !Equal(localSchema, pl.Schema) {
-		localSchemaJSON, err1 := json.Marshal(localSchema)
-		consensusSchemaJSON, err2 := json.Marshal(pl.Schema)
+	var diff []string
+	cmp := func() error {
+		if err := Equal(&m.schemaCache.State, pl.Schema); err != nil {
+			diff = Diff("local", &m.schemaCache.State, "cluster", pl.Schema)
+			return err
+		}
+		return nil
+	}
+	if err := m.schemaCache.RLockGuard(cmp); err != nil {
 		m.logger.WithFields(logrusStartupSyncFields()).WithFields(logrus.Fields{
-			"local_schema":         string(localSchemaJSON),
-			"remote_schema":        string(consensusSchemaJSON),
-			"marhsal_error_local":  err1,
-			"marhsal_error_remote": err2,
-		}).Errorf("mismatch between local schema and remote (other nodes consensus) schema")
-
-		return fmt.Errorf("corrupt cluster: other nodes have consensus on schema, " +
-			"but local node has a different (non-null) schema")
+			"diff": diff,
+		}).Warning("mismatch between local schema and remote (other nodes consensus) schema")
+		if m.clusterState.SkipSchemaRepair() {
+			return fmt.Errorf("corrupt cluster: other nodes have consensus on schema, "+
+				"but local node has a different (non-null) schema: %w", err)
+		}
+		if repairErr := m.repairSchema(ctx, pl.Schema); repairErr != nil {
+			return fmt.Errorf("attempted to repair and failed: %v, sync error: %w", repairErr, err)
+		}
 	}
 
 	return nil
@@ -167,15 +221,7 @@ func logrusStartupSyncFields() logrus.Fields {
 }
 
 func isEmpty(schema *State) bool {
-	if schema.ObjectSchema == nil {
-		return true
-	}
-
-	if len(schema.ObjectSchema.Classes) == 0 {
-		return true
-	}
-
-	return false
+	return schema == nil || schema.ObjectSchema == nil || len(schema.ObjectSchema.Classes) == 0
 }
 
 func (m *Manager) clusterSyncImpossibleBecauseRemoteNodeTooOld(err error) bool {

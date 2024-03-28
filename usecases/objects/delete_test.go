@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package objects
@@ -17,11 +17,11 @@ import (
 	"testing"
 
 	"github.com/go-openapi/strfmt"
-	"github.com/semi-technologies/weaviate/entities/search"
-	"github.com/semi-technologies/weaviate/usecases/config"
 	"github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/weaviate/weaviate/entities/search"
+	"github.com/weaviate/weaviate/usecases/config"
 )
 
 func Test_DeleteObjectsWithSameId(t *testing.T) {
@@ -37,7 +37,7 @@ func Test_DeleteObjectsWithSameId(t *testing.T) {
 	vectorRepo.On("ObjectByID", mock.Anything, mock.Anything, mock.Anything).Return(nil, nil).Once()
 	vectorRepo.On("DeleteObject", cls, id).Return(nil).Once()
 
-	err := manager.DeleteObject(context.Background(), nil, "", id)
+	err := manager.DeleteObject(context.Background(), nil, "", id, nil, "")
 	assert.Nil(t, err)
 	vectorRepo.AssertExpectations(t)
 }
@@ -53,13 +53,13 @@ func Test_DeleteObject(t *testing.T) {
 	repo.On("DeleteObject", cls, id).Return(nil).Once()
 	repo.On("Exists", cls, id).Return(true, nil).Once()
 
-	err := manager.DeleteObject(context.Background(), nil, cls, id)
+	err := manager.DeleteObject(context.Background(), nil, cls, id, nil, "")
 	assert.Nil(t, err)
 	repo.AssertExpectations(t)
 
 	// delete non existing object
 	repo.On("Exists", cls, id).Return(false, nil).Once()
-	err = manager.DeleteObject(context.Background(), nil, cls, id)
+	err = manager.DeleteObject(context.Background(), nil, cls, id, nil, "")
 	if _, ok := err.(ErrNotFound); !ok {
 		t.Errorf("error type got: %T want: ErrNotFound", err)
 	}
@@ -67,7 +67,7 @@ func Test_DeleteObject(t *testing.T) {
 
 	// return internal error if exists() fails
 	repo.On("Exists", cls, id).Return(false, errNotFound).Once()
-	err = manager.DeleteObject(context.Background(), nil, cls, id)
+	err = manager.DeleteObject(context.Background(), nil, cls, id, nil, "")
 	if _, ok := err.(ErrInternal); !ok {
 		t.Errorf("error type got: %T want: ErrInternal", err)
 	}
@@ -76,7 +76,7 @@ func Test_DeleteObject(t *testing.T) {
 	// return internal error if deleteObject() fails
 	repo.On("DeleteObject", cls, id).Return(errNotFound).Once()
 	repo.On("Exists", cls, id).Return(true, nil).Once()
-	err = manager.DeleteObject(context.Background(), nil, cls, id)
+	err = manager.DeleteObject(context.Background(), nil, cls, id, nil, "")
 	if _, ok := err.(ErrInternal); !ok {
 		t.Errorf("error type got: %T want: ErrInternal", err)
 	}

@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package classification
@@ -14,10 +14,10 @@ package classification
 import (
 	"fmt"
 
-	"github.com/semi-technologies/weaviate/entities/errorcompounder"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	schemaUC "github.com/semi-technologies/weaviate/usecases/schema"
+	"github.com/weaviate/weaviate/entities/errorcompounder"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
+	schemaUC "github.com/weaviate/weaviate/usecases/schema"
 )
 
 const (
@@ -155,7 +155,7 @@ func (v *Validator) classifyProperty(class *models.Class, propName string) {
 		return
 	}
 
-	if dt.IsPrimitive() {
+	if !dt.IsReference() {
 		v.errors.Addf("classifyProperties: property '%s' must be of reference type (cref)", propName)
 		return
 	}

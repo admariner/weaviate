@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package schema
@@ -18,11 +18,11 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/usecases/config"
 	"github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/usecases/config"
 )
 
 // A component-test like test suite that makes sure that every available UC is
@@ -50,7 +50,7 @@ func Test_Schema_Authorization(t *testing.T) {
 		},
 		{
 			methodName:       "GetShardsStatus",
-			additionalArgs:   []interface{}{"className"},
+			additionalArgs:   []interface{}{"className", "tenant"},
 			expectedVerb:     "list",
 			expectedResource: "schema/className/shards",
 		},
@@ -62,12 +62,6 @@ func Test_Schema_Authorization(t *testing.T) {
 		},
 		{
 			methodName:       "UpdateClass",
-			additionalArgs:   []interface{}{"somename", &models.Class{}},
-			expectedVerb:     "update",
-			expectedResource: "schema/objects",
-		},
-		{
-			methodName:       "UpdateObject",
 			additionalArgs:   []interface{}{"somename", &models.Class{}},
 			expectedVerb:     "update",
 			expectedResource: "schema/objects",
@@ -85,6 +79,12 @@ func Test_Schema_Authorization(t *testing.T) {
 			expectedResource: "schema/objects",
 		},
 		{
+			methodName:       "MergeClassObjectProperty",
+			additionalArgs:   []interface{}{"somename", &models.Property{}},
+			expectedVerb:     "update",
+			expectedResource: "schema/objects",
+		},
+		{
 			methodName:       "DeleteClassProperty",
 			additionalArgs:   []interface{}{"somename", "someprop"},
 			expectedVerb:     "update",
@@ -95,6 +95,38 @@ func Test_Schema_Authorization(t *testing.T) {
 			additionalArgs:   []interface{}{"className", "shardName", "targetStatus"},
 			expectedVerb:     "update",
 			expectedResource: "schema/className/shards/shardName",
+		},
+		{
+			methodName:       "AddTenants",
+			additionalArgs:   []interface{}{"className", []*models.Tenant{{Name: "P1"}}},
+			expectedVerb:     "update",
+			expectedResource: tenantsPath,
+		},
+		{
+			methodName: "UpdateTenants",
+			additionalArgs: []interface{}{"className", []*models.Tenant{
+				{Name: "P1", ActivityStatus: models.TenantActivityStatusHOT},
+			}},
+			expectedVerb:     "update",
+			expectedResource: tenantsPath,
+		},
+		{
+			methodName:       "DeleteTenants",
+			additionalArgs:   []interface{}{"className", []string{"P1"}},
+			expectedVerb:     "delete",
+			expectedResource: tenantsPath,
+		},
+		{
+			methodName:       "GetTenants",
+			additionalArgs:   []interface{}{"className"},
+			expectedVerb:     "get",
+			expectedResource: tenantsPath,
+		},
+		{
+			methodName:       "TenantExists",
+			additionalArgs:   []interface{}{"className", "tenantName"},
+			expectedVerb:     "get",
+			expectedResource: tenantsPath,
 		},
 	}
 
@@ -109,8 +141,10 @@ func Test_Schema_Authorization(t *testing.T) {
 			case "RegisterSchemaUpdateCallback",
 				"UpdateMeta", "GetSchemaSkipAuth", "IndexedInverted", "RLock", "RUnlock", "Lock", "Unlock",
 				"TryLock", "RLocker", "TryRLock", // introduced by sync.Mutex in go 1.18
-				"Nodes", "NodeName", "ClusterHealthScore",
-				"ShardingState", "TxManager", "RestoreClass":
+				"Nodes", "NodeName", "ClusterHealthScore", "ClusterStatus", "ResolveParentNodes",
+				"CopyShardingState", "TxManager", "RestoreClass",
+				"ShardOwner", "TenantShard", "ShardFromUUID", "LockGuard", "RLockGuard", "ShardReplicas",
+				"StartServing", "Shutdown": // internal methods to indicate readiness state
 				// don't require auth on methods which are exported because other
 				// packages need to call them for maintenance and other regular jobs,
 				// but aren't user facing
@@ -120,7 +154,7 @@ func Test_Schema_Authorization(t *testing.T) {
 		}
 	})
 
-	t.Run("verify the tested methods require correct permissions from the authorizer", func(t *testing.T) {
+	t.Run("verify the tested methods require correct permissions from the Authorizer", func(t *testing.T) {
 		principal := &models.Principal{}
 		logger, _ := test.NewNullLogger()
 		for _, test := range tests {
@@ -131,7 +165,7 @@ func Test_Schema_Authorization(t *testing.T) {
 					dummyParseVectorConfig, &fakeVectorizerValidator{},
 					dummyValidateInvertedConfig, &fakeModuleConfig{},
 					&fakeClusterState{hosts: []string{"node1"}}, &fakeTxClient{},
-					&fakeScaleOutManager{})
+					&fakeTxPersistence{}, &fakeScaleOutManager{})
 				require.Nil(t, err)
 
 				var args []interface{}
@@ -143,11 +177,11 @@ func Test_Schema_Authorization(t *testing.T) {
 				}
 				out, _ := callFuncByName(manager, test.methodName, args...)
 
-				require.Len(t, authorizer.calls, 1, "authorizer must be called")
+				require.Len(t, authorizer.calls, 1, "Authorizer must be called")
 				assert.Equal(t, errors.New("just a test fake"), out[len(out)-1].Interface(),
-					"execution must abort with authorizer error")
+					"execution must abort with Authorizer error")
 				assert.Equal(t, authorizeCall{principal, test.expectedVerb, test.expectedResource},
-					authorizer.calls[0], "correct paramteres must have been used on authorizer")
+					authorizer.calls[0], "correct parameters must have been used on Authorizer")
 			})
 		}
 	})

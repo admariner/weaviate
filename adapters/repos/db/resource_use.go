@@ -4,21 +4,22 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package db
 
 import (
 	"fmt"
-	"runtime"
-	"runtime/debug"
-	"syscall"
 	"time"
 
-	"github.com/semi-technologies/weaviate/usecases/memwatch"
+	enterrors "github.com/weaviate/weaviate/entities/errors"
+
+	"github.com/weaviate/weaviate/entities/interval"
+	"github.com/weaviate/weaviate/entities/storagestate"
+	"github.com/weaviate/weaviate/usecases/memwatch"
 )
 
 type diskUse struct {
@@ -43,48 +44,125 @@ func (d diskUse) String() string {
 }
 
 func (d *DB) scanResourceUsage() {
-	memMonitor := memwatch.NewMonitor(
-		runtime.MemProfile, debug.SetMemoryLimit, runtime.MemProfileRate)
-
-	go func() {
-		t := time.NewTicker(time.Second * 30)
+	f := func() {
+		t := time.NewTicker(time.Millisecond * 500)
 		defer t.Stop()
 		for {
 			select {
 			case <-d.shutdown:
 				return
 			case <-t.C:
-				d.indexLock.RLock()
-				for _, i := range d.indices {
-					for _, s := range i.Shards {
-						if !s.isReadOnly() {
-							diskPath := i.Config.RootPath
-							du := d.getDiskUse(diskPath)
-
-							s.resourceUseWarn(memMonitor, du)
-							s.resourceUseReadonly(memMonitor, du)
-						}
-					}
+				if !d.resourceScanState.isReadOnly {
+					du := d.getDiskUse(d.config.RootPath)
+					d.resourceUseWarn(d.memMonitor, du)
+					d.resourceUseReadonly(d.memMonitor, du)
 				}
-				d.indexLock.RUnlock()
 			}
 		}
-	}()
+	}
+	enterrors.GoWrapper(f, d.logger)
 }
 
-func (d *DB) getDiskUse(diskPath string) diskUse {
-	fs := syscall.Statfs_t{}
+type resourceScanState struct {
+	diskWarning *interval.BackoffTimer
+	memWarning  *interval.BackoffTimer
+	isReadOnly  bool
+}
 
-	err := syscall.Statfs(diskPath, &fs)
-	if err != nil {
-		d.logger.WithField("action", "read_disk_use").
-			WithField("path", diskPath).
-			Errorf("failed to read disk usage: %s", err)
+func newResourceScanState() *resourceScanState {
+	return &resourceScanState{
+		diskWarning: interval.NewBackoffTimer(),
+		memWarning:  interval.NewBackoffTimer(),
 	}
+}
 
-	return diskUse{
-		total: fs.Blocks * uint64(fs.Bsize),
-		free:  fs.Bfree * uint64(fs.Bsize),
-		avail: fs.Bfree * uint64(fs.Bsize),
+// logs a warning if user-set threshold is surpassed
+func (db *DB) resourceUseWarn(mon *memwatch.Monitor, du diskUse) {
+	mon.Refresh()
+	db.diskUseWarn(du)
+	db.memUseWarn(mon)
+}
+
+func (db *DB) diskUseWarn(du diskUse) {
+	diskWarnPercent := db.config.ResourceUsage.DiskUse.WarningPercentage
+	if diskWarnPercent > 0 {
+		if pu := du.percentUsed(); pu > float64(diskWarnPercent) {
+			if db.resourceScanState.diskWarning.IntervalElapsed() {
+				db.logger.WithField("action", "read_disk_use").
+					WithField("path", db.config.RootPath).
+					Warnf("disk usage currently at %.2f%%, threshold set to %.2f%%",
+						pu, float64(diskWarnPercent))
+
+				db.logger.WithField("action", "disk_use_stats").
+					WithField("path", db.config.RootPath).
+					Debugf("%s", du.String())
+				db.resourceScanState.diskWarning.IncreaseInterval()
+			}
+		}
 	}
+}
+
+func (db *DB) memUseWarn(mon *memwatch.Monitor) {
+	memWarnPercent := db.config.ResourceUsage.MemUse.WarningPercentage
+	if memWarnPercent > 0 {
+		if pu := mon.Ratio() * 100; pu > float64(memWarnPercent) {
+			if db.resourceScanState.memWarning.IntervalElapsed() {
+				db.logger.WithField("action", "read_memory_use").
+					WithField("path", db.config.RootPath).
+					Warnf("memory usage currently at %.2f%%, threshold set to %.2f%%",
+						pu, float64(memWarnPercent))
+				db.resourceScanState.memWarning.IncreaseInterval()
+			}
+		}
+	}
+}
+
+// sets the shard to readonly if user-set threshold is surpassed
+func (db *DB) resourceUseReadonly(mon *memwatch.Monitor, du diskUse) {
+	db.diskUseReadonly(du)
+	db.memUseReadonly(mon)
+}
+
+func (db *DB) diskUseReadonly(du diskUse) {
+	diskROPercent := db.config.ResourceUsage.DiskUse.ReadOnlyPercentage
+	if diskROPercent > 0 {
+		if pu := du.percentUsed(); pu > float64(diskROPercent) {
+			db.setShardsReadOnly()
+			db.logger.WithField("action", "set_shard_read_only").
+				WithField("path", db.config.RootPath).
+				Warnf("Set READONLY, disk usage currently at %.2f%%, threshold set to %.2f%%",
+					pu, float64(diskROPercent))
+		}
+	}
+}
+
+func (db *DB) memUseReadonly(mon *memwatch.Monitor) {
+	memROPercent := db.config.ResourceUsage.MemUse.ReadOnlyPercentage
+	if memROPercent > 0 {
+		if pu := mon.Ratio() * 100; pu > float64(memROPercent) {
+			db.setShardsReadOnly()
+			db.logger.WithField("action", "set_shard_read_only").
+				WithField("path", db.config.RootPath).
+				Warnf("Set READONLY, memory usage currently at %.2f%%, threshold set to %.2f%%",
+					pu, float64(memROPercent))
+		}
+	}
+}
+
+func (db *DB) setShardsReadOnly() {
+	db.indexLock.Lock()
+	for _, index := range db.indices {
+		index.ForEachShard(func(name string, shard ShardLike) error {
+			err := shard.UpdateStatus(storagestate.StatusReadOnly.String())
+			if err != nil {
+				db.logger.WithField("action", "set_shard_read_only").
+					WithField("path", db.config.RootPath).
+					WithError(err).
+					Fatal("failed to set to READONLY")
+			}
+			return nil
+		})
+	}
+	db.indexLock.Unlock()
+	db.resourceScanState.isReadOnly = true
 }

@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 //go:build integrationTest
@@ -16,27 +16,32 @@ package hnsw
 
 import (
 	"bufio"
-	"math/rand"
+	"context"
 	"os"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/adapters/repos/db/vector/compressionhelpers"
+	"github.com/weaviate/weaviate/entities/cyclemanager"
 )
 
 func TestCondensor(t *testing.T) {
-	rand.Seed(time.Now().UnixNano())
 	rootPath := t.TempDir()
+	ctx := context.Background()
 
 	logger, _ := test.NewNullLogger()
-	uncondensed, err := NewCommitLogger(rootPath, "uncondensed", 0, logger)
+	uncondensed, err := NewCommitLogger(rootPath, "uncondensed", logger,
+		cyclemanager.NewCallbackGroupNoop())
 	require.Nil(t, err)
+	defer uncondensed.Shutdown(ctx)
 
-	perfect, err := NewCommitLogger(rootPath, "perfect", 0, logger)
+	perfect, err := NewCommitLogger(rootPath, "perfect", logger,
+		cyclemanager.NewCallbackGroupNoop())
 	require.Nil(t, err)
+	defer perfect.Shutdown(ctx)
 
 	t.Run("add redundant data to the original log", func(t *testing.T) {
 		uncondensed.AddNode(&vertex{id: 0, level: 3})
@@ -139,18 +144,24 @@ func TestCondensor(t *testing.T) {
 }
 
 func TestCondensorAppendNodeLinks(t *testing.T) {
-	rand.Seed(time.Now().UnixNano())
 	rootPath := t.TempDir()
+	ctx := context.Background()
 
 	logger, _ := test.NewNullLogger()
-	uncondensed1, err := NewCommitLogger(rootPath, "uncondensed1", 0, logger)
+	uncondensed1, err := NewCommitLogger(rootPath, "uncondensed1", logger,
+		cyclemanager.NewCallbackGroupNoop())
 	require.Nil(t, err)
+	defer uncondensed1.Shutdown(ctx)
 
-	uncondensed2, err := NewCommitLogger(rootPath, "uncondensed2", 0, logger)
+	uncondensed2, err := NewCommitLogger(rootPath, "uncondensed2", logger,
+		cyclemanager.NewCallbackGroupNoop())
 	require.Nil(t, err)
+	defer uncondensed2.Shutdown(ctx)
 
-	control, err := NewCommitLogger(rootPath, "control", 0, logger)
+	control, err := NewCommitLogger(rootPath, "control", logger,
+		cyclemanager.NewCallbackGroupNoop())
 	require.Nil(t, err)
+	defer control.Shutdown(ctx)
 
 	t.Run("add data to the first log", func(t *testing.T) {
 		uncondensed1.AddLinkAtLevel(0, 0, 1)
@@ -219,7 +230,7 @@ func TestCondensorAppendNodeLinks(t *testing.T) {
 }
 
 // This test was added as part of
-// https://github.com/semi-technologies/weaviate/issues/1868 to rule out that
+// https://github.com/weaviate/weaviate/issues/1868 to rule out that
 // replace links broken across two independent commit logs. It turned out that
 // this was green and not the cause for the bug. The bug could be reproduced
 // with the new test added in index_too_many_links_bug_integration_test.go.
@@ -227,18 +238,24 @@ func TestCondensorAppendNodeLinks(t *testing.T) {
 // a potential cause as well and by having this test, we can prevent a
 // regression.
 func TestCondensorReplaceNodeLinks(t *testing.T) {
-	rand.Seed(time.Now().UnixNano())
 	rootPath := t.TempDir()
+	ctx := context.Background()
 
 	logger, _ := test.NewNullLogger()
-	uncondensed1, err := NewCommitLogger(rootPath, "uncondensed1", 0, logger)
+	uncondensed1, err := NewCommitLogger(rootPath, "uncondensed1", logger,
+		cyclemanager.NewCallbackGroupNoop())
 	require.Nil(t, err)
+	defer uncondensed1.Shutdown(ctx)
 
-	uncondensed2, err := NewCommitLogger(rootPath, "uncondensed2", 0, logger)
+	uncondensed2, err := NewCommitLogger(rootPath, "uncondensed2", logger,
+		cyclemanager.NewCallbackGroupNoop())
 	require.Nil(t, err)
+	defer uncondensed2.Shutdown(ctx)
 
-	control, err := NewCommitLogger(rootPath, "control", 0, logger)
+	control, err := NewCommitLogger(rootPath, "control", logger,
+		cyclemanager.NewCallbackGroupNoop())
 	require.Nil(t, err)
+	defer control.Shutdown(ctx)
 
 	t.Run("add data to the first log", func(t *testing.T) {
 		uncondensed1.AddNode(&vertex{id: 0, level: 1})
@@ -312,7 +329,7 @@ func TestCondensorReplaceNodeLinks(t *testing.T) {
 }
 
 // This test was added as part of the investigation and fixing of
-// https://github.com/semi-technologies/weaviate/issues/1868. We used the new
+// https://github.com/weaviate/weaviate/issues/1868. We used the new
 // (higher level) test in index_too_many_links_bug_integration_test.go to
 // reproduce the problem without knowing what causes it. Eventually we came to
 // the conclusion that "ClearLinksAtLevel" was not propagated correctly across
@@ -320,18 +337,24 @@ func TestCondensorReplaceNodeLinks(t *testing.T) {
 // makes sure that the bug is gone and prevents regressions, this test was
 // still added to test the broken (now fixed) behavior in relative isolation.
 func TestCondensorClearLinksAtLevel(t *testing.T) {
-	rand.Seed(time.Now().UnixNano())
 	rootPath := t.TempDir()
+	ctx := context.Background()
 
 	logger, _ := test.NewNullLogger()
-	uncondensed1, err := NewCommitLogger(rootPath, "uncondensed1", 0, logger)
+	uncondensed1, err := NewCommitLogger(rootPath, "uncondensed1", logger,
+		cyclemanager.NewCallbackGroupNoop())
 	require.Nil(t, err)
+	defer uncondensed1.Shutdown(ctx)
 
-	uncondensed2, err := NewCommitLogger(rootPath, "uncondensed2", 0, logger)
+	uncondensed2, err := NewCommitLogger(rootPath, "uncondensed2", logger,
+		cyclemanager.NewCallbackGroupNoop())
 	require.Nil(t, err)
+	defer uncondensed2.Shutdown(ctx)
 
-	control, err := NewCommitLogger(rootPath, "control", 0, logger)
+	control, err := NewCommitLogger(rootPath, "control", logger,
+		cyclemanager.NewCallbackGroupNoop())
 	require.Nil(t, err)
+	defer control.Shutdown(ctx)
 
 	t.Run("add data to the first log", func(t *testing.T) {
 		uncondensed1.AddNode(&vertex{id: 0, level: 1})
@@ -409,12 +432,14 @@ func TestCondensorClearLinksAtLevel(t *testing.T) {
 }
 
 func TestCondensorWithoutEntrypoint(t *testing.T) {
-	rand.Seed(time.Now().UnixNano())
 	rootPath := t.TempDir()
+	ctx := context.Background()
 
 	logger, _ := test.NewNullLogger()
-	uncondensed, err := NewCommitLogger(rootPath, "uncondensed", 0, logger)
+	uncondensed, err := NewCommitLogger(rootPath, "uncondensed", logger,
+		cyclemanager.NewCallbackGroupNoop())
 	require.Nil(t, err)
+	defer uncondensed.Shutdown(ctx)
 
 	t.Run("add data, but do not set an entrypoint", func(t *testing.T) {
 		uncondensed.AddNode(&vertex{id: 0, level: 3})
@@ -456,23 +481,88 @@ func TestCondensorWithoutEntrypoint(t *testing.T) {
 	})
 }
 
-func dumpIndexFromCommitLog(t *testing.T, fileName string) {
-	fd, err := os.Open(fileName)
-	require.Nil(t, err)
+func TestCondensorWithPQInformation(t *testing.T) {
+	rootPath := t.TempDir()
+	ctx := context.Background()
 
-	bufr := bufio.NewReader(fd)
 	logger, _ := test.NewNullLogger()
-	res, _, err := NewDeserializer(logger).Do(bufr, nil, false)
+	uncondensed, err := NewCommitLogger(rootPath, "uncondensed", logger,
+		cyclemanager.NewCallbackGroupNoop())
 	require.Nil(t, err)
+	defer uncondensed.Shutdown(ctx)
 
-	index := &hnsw{
-		nodes:               res.Nodes,
-		currentMaximumLayer: int(res.Level),
-		entryPointID:        res.Entrypoint,
-		tombstones:          res.Tombstones,
+	encoders := []compressionhelpers.PQEncoder{
+		compressionhelpers.NewKMeansWithCenters(
+			4,
+			2,
+			0,
+			[][]float32{{1, 2}, {3, 4}, {5, 6}, {7, 8}},
+		),
+		compressionhelpers.NewKMeansWithCenters(
+			4,
+			2,
+			1,
+			[][]float32{{8, 7}, {6, 5}, {4, 3}, {2, 1}},
+		),
+		compressionhelpers.NewKMeansWithCenters(
+			4,
+			2,
+			2,
+			[][]float32{{1, 2}, {3, 4}, {5, 6}, {7, 8}},
+		),
 	}
 
-	dumpIndex(index)
+	t.Run("add pq info", func(t *testing.T) {
+		uncondensed.AddPQ(compressionhelpers.PQData{
+			Ks:                  4,
+			M:                   3,
+			Dimensions:          6,
+			EncoderType:         compressionhelpers.UseKMeansEncoder,
+			EncoderDistribution: uint8(0),
+			Encoders:            encoders,
+			UseBitsEncoding:     false,
+		})
+
+		require.Nil(t, uncondensed.Flush())
+	})
+
+	t.Run("condense the original and verify the PQ info is present", func(t *testing.T) {
+		input, ok, err := getCurrentCommitLogFileName(commitLogDirectory(rootPath, "uncondensed"))
+		require.Nil(t, err)
+		require.True(t, ok)
+
+		err = NewMemoryCondensor(logger).Do(commitLogFileName(rootPath, "uncondensed", input))
+		require.Nil(t, err)
+
+		actual, ok, err := getCurrentCommitLogFileName(
+			commitLogDirectory(rootPath, "uncondensed"))
+		require.Nil(t, err)
+		require.True(t, ok)
+
+		assert.True(t, strings.HasSuffix(actual, ".condensed"),
+			"commit log is now saved as condensed")
+
+		initialState := DeserializationResult{}
+		fd, err := os.Open(commitLogFileName(rootPath, "uncondensed", actual))
+		require.Nil(t, err)
+
+		bufr := bufio.NewReader(fd)
+		res, _, err := NewDeserializer(logger).Do(bufr, &initialState, false)
+		require.Nil(t, err)
+
+		assert.True(t, res.Compressed)
+		expected := compressionhelpers.PQData{
+			Ks:                  4,
+			M:                   3,
+			Dimensions:          6,
+			EncoderType:         compressionhelpers.UseKMeansEncoder,
+			EncoderDistribution: uint8(0),
+			Encoders:            encoders,
+			UseBitsEncoding:     false,
+		}
+
+		assert.Equal(t, expected, res.PQData)
+	})
 }
 
 func assertIndicesFromCommitLogsMatch(t *testing.T, fileNameControl string,

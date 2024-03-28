@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package clients
@@ -18,9 +18,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/semi-technologies/weaviate/modules/ner-transformers/ent"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/modules/ner-transformers/ent"
 )
 
 func TestGetAnswer(t *testing.T) {
@@ -43,7 +43,7 @@ func TestGetAnswer(t *testing.T) {
 			},
 		})
 		defer server.Close()
-		c := New(server.URL, nullLogger())
+		c := New(server.URL, 0, nullLogger())
 		res, err := c.GetTokens(context.Background(), "prop",
 			"I work at Apple")
 
@@ -79,7 +79,7 @@ func TestGetAnswer(t *testing.T) {
 			},
 		})
 		defer server.Close()
-		c := New(server.URL, nullLogger())
+		c := New(server.URL, 0, nullLogger())
 		res, err := c.GetTokens(context.Background(), "prop",
 			"I work at Apple")
 
@@ -104,7 +104,7 @@ func TestGetAnswer(t *testing.T) {
 			},
 		})
 		defer server.Close()
-		c := New(server.URL, nullLogger())
+		c := New(server.URL, 0, nullLogger())
 		_, err := c.GetTokens(context.Background(), "prop",
 			"I work at Apple")
 

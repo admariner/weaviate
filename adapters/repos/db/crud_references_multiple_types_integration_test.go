@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 //go:build integrationTest
@@ -17,33 +17,34 @@ package db
 import (
 	"context"
 	"fmt"
-	"math/rand"
 	"testing"
-	"time"
 
 	"github.com/go-openapi/strfmt"
-	"github.com/semi-technologies/weaviate/entities/additional"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/search"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/entities/additional"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/search"
 )
 
 func TestMultipleCrossRefTypes(t *testing.T) {
-	rand.Seed(time.Now().UnixNano())
 	dirName := t.TempDir()
 
 	logger := logrus.New()
-	schemaGetter := &fakeSchemaGetter{shardState: singleShardState()}
-	repo := New(logger, Config{
-		MemtablesFlushIdleAfter:   60,
+	schemaGetter := &fakeSchemaGetter{
+		schema:     schema.Schema{Objects: &models.Schema{Classes: nil}},
+		shardState: singleShardState(),
+	}
+	repo, err := New(logger, Config{
+		MemtablesFlushDirtyAfter:  60,
 		RootPath:                  dirName,
 		MaxImportGoroutinesFactor: 1,
 	}, &fakeRemoteClient{}, &fakeNodeResolver{}, &fakeRemoteNodeClient{}, &fakeReplicationClient{}, nil)
-	repo.SetSchemaGetter(schemaGetter)
-	err := repo.WaitForStartup(testCtx())
 	require.Nil(t, err)
+	repo.SetSchemaGetter(schemaGetter)
+	require.Nil(t, repo.WaitForStartup(testCtx()))
 	defer repo.Shutdown(context.Background())
 	migrator := NewMigrator(repo, logger)
 
@@ -194,7 +195,7 @@ func TestMultipleCrossRefTypes(t *testing.T) {
 
 		for _, thing := range objects {
 			t.Run(fmt.Sprintf("add %s", thing.ID), func(t *testing.T) {
-				err := repo.PutObject(context.Background(), &thing, []float32{1, 2, 3, 4, 5, 6, 7})
+				err := repo.PutObject(context.Background(), &thing, []float32{1, 2, 3, 4, 5, 6, 7}, nil, nil)
 				require.Nil(t, err)
 			})
 		}
@@ -208,28 +209,28 @@ func TestMultipleCrossRefTypes(t *testing.T) {
 		}
 
 		t.Run("asking for no refs", func(t *testing.T) {
-			res, err := repo.ObjectByID(context.Background(), id, nil, additional.Properties{})
+			res, err := repo.ObjectByID(context.Background(), id, nil, additional.Properties{}, "")
 			require.Nil(t, err)
 
 			assert.Equal(t, expectedSchema, res.Schema)
 		})
 
 		t.Run("asking for refs of type garage", func(t *testing.T) {
-			res, err := repo.ObjectByID(context.Background(), id, parkedAtGarage(), additional.Properties{})
+			res, err := repo.ObjectByID(context.Background(), id, parkedAtGarage(), additional.Properties{}, "")
 			require.Nil(t, err)
 
 			assert.Equal(t, expectedSchema, res.Schema)
 		})
 
 		t.Run("asking for refs of type lot", func(t *testing.T) {
-			res, err := repo.ObjectByID(context.Background(), id, parkedAtLot(), additional.Properties{})
+			res, err := repo.ObjectByID(context.Background(), id, parkedAtLot(), additional.Properties{}, "")
 			require.Nil(t, err)
 
 			assert.Equal(t, expectedSchema, res.Schema)
 		})
 
 		t.Run("asking for refs of both types", func(t *testing.T) {
-			res, err := repo.ObjectByID(context.Background(), id, parkedAtEither(), additional.Properties{})
+			res, err := repo.ObjectByID(context.Background(), id, parkedAtEither(), additional.Properties{}, "")
 			require.Nil(t, err)
 
 			assert.Equal(t, expectedSchema, res.Schema)
@@ -277,35 +278,35 @@ func TestMultipleCrossRefTypes(t *testing.T) {
 		expectedSchemaWithRefsWithVector := getExpectedSchema(true)
 
 		t.Run("asking for no refs", func(t *testing.T) {
-			res, err := repo.ObjectByID(context.Background(), id, nil, additional.Properties{})
+			res, err := repo.ObjectByID(context.Background(), id, nil, additional.Properties{}, "")
 			require.Nil(t, err)
 
 			assert.Equal(t, expectedSchemaUnresolved, res.Schema)
 		})
 
 		t.Run("asking for refs of type garage", func(t *testing.T) {
-			res, err := repo.ObjectByID(context.Background(), id, parkedAtGarage(), additional.Properties{})
+			res, err := repo.ObjectByID(context.Background(), id, parkedAtGarage(), additional.Properties{}, "")
 			require.Nil(t, err)
 
 			assert.Equal(t, expectedSchemaWithRefs, res.Schema)
 		})
 
 		t.Run("asking for refs of type garage with vector", func(t *testing.T) {
-			res, err := repo.ObjectByID(context.Background(), id, parkedAtGarageWithVector(true), additional.Properties{})
+			res, err := repo.ObjectByID(context.Background(), id, parkedAtGarageWithVector(true), additional.Properties{}, "")
 			require.Nil(t, err)
 
 			assert.Equal(t, expectedSchemaWithRefsWithVector, res.Schema)
 		})
 
 		t.Run("asking for refs of type lot", func(t *testing.T) {
-			res, err := repo.ObjectByID(context.Background(), id, parkedAtLot(), additional.Properties{})
+			res, err := repo.ObjectByID(context.Background(), id, parkedAtLot(), additional.Properties{}, "")
 			require.Nil(t, err)
 
 			assert.Equal(t, expectedSchemaUnresolved, res.Schema)
 		})
 
 		t.Run("asking for refs of both types", func(t *testing.T) {
-			res, err := repo.ObjectByID(context.Background(), id, parkedAtEither(), additional.Properties{})
+			res, err := repo.ObjectByID(context.Background(), id, parkedAtEither(), additional.Properties{}, "")
 			require.Nil(t, err)
 
 			assert.Equal(t, expectedSchemaWithRefs, res.Schema)
@@ -349,35 +350,35 @@ func TestMultipleCrossRefTypes(t *testing.T) {
 		expectedSchemaWithRefsWithVector := getSchemaWithRefs(true)
 
 		t.Run("asking for no refs", func(t *testing.T) {
-			res, err := repo.ObjectByID(context.Background(), id, nil, additional.Properties{})
+			res, err := repo.ObjectByID(context.Background(), id, nil, additional.Properties{}, "")
 			require.Nil(t, err)
 
 			assert.Equal(t, expectedSchemaUnresolved, res.Schema)
 		})
 
 		t.Run("asking for refs of type garage", func(t *testing.T) {
-			res, err := repo.ObjectByID(context.Background(), id, parkedAtGarage(), additional.Properties{})
+			res, err := repo.ObjectByID(context.Background(), id, parkedAtGarage(), additional.Properties{}, "")
 			require.Nil(t, err)
 
 			assert.Equal(t, expectedSchemaUnresolved, res.Schema)
 		})
 
 		t.Run("asking for refs of type lot", func(t *testing.T) {
-			res, err := repo.ObjectByID(context.Background(), id, parkedAtLot(), additional.Properties{})
+			res, err := repo.ObjectByID(context.Background(), id, parkedAtLot(), additional.Properties{}, "")
 			require.Nil(t, err)
 
 			assert.Equal(t, expectedSchemaWithRefs, res.Schema)
 		})
 
 		t.Run("asking for refs with vector of type lot", func(t *testing.T) {
-			res, err := repo.ObjectByID(context.Background(), id, parkedAtLotWithVector(), additional.Properties{})
+			res, err := repo.ObjectByID(context.Background(), id, parkedAtLotWithVector(), additional.Properties{}, "")
 			require.Nil(t, err)
 
 			assert.Equal(t, expectedSchemaWithRefsWithVector, res.Schema)
 		})
 
 		t.Run("asking for refs of both types", func(t *testing.T) {
-			res, err := repo.ObjectByID(context.Background(), id, parkedAtEither(), additional.Properties{})
+			res, err := repo.ObjectByID(context.Background(), id, parkedAtEither(), additional.Properties{}, "")
 			require.Nil(t, err)
 
 			assert.Equal(t, expectedSchemaWithRefs, res.Schema)
@@ -483,49 +484,49 @@ func TestMultipleCrossRefTypes(t *testing.T) {
 		expectedSchemaWithAllRefsWithVector := getExpectedSchemaWithAllRefs(true)
 
 		t.Run("asking for no refs", func(t *testing.T) {
-			res, err := repo.ObjectByID(context.Background(), id, nil, additional.Properties{})
+			res, err := repo.ObjectByID(context.Background(), id, nil, additional.Properties{}, "")
 			require.Nil(t, err)
 
 			assert.Equal(t, expectedSchemaUnresolved, res.Schema)
 		})
 
 		t.Run("asking for refs of type garage", func(t *testing.T) {
-			res, err := repo.ObjectByID(context.Background(), id, parkedAtGarage(), additional.Properties{})
+			res, err := repo.ObjectByID(context.Background(), id, parkedAtGarage(), additional.Properties{}, "")
 			require.Nil(t, err)
 
 			assert.Equal(t, expectedSchemaWithGarageRef, res.Schema)
 		})
 
 		t.Run("asking for refs with vector of type garage", func(t *testing.T) {
-			res, err := repo.ObjectByID(context.Background(), id, parkedAtGarageWithVector(true), additional.Properties{})
+			res, err := repo.ObjectByID(context.Background(), id, parkedAtGarageWithVector(true), additional.Properties{}, "")
 			require.Nil(t, err)
 
 			assert.Equal(t, expectedSchemaWithGarageRefWithVector, res.Schema)
 		})
 
 		t.Run("asking for refs of type lot", func(t *testing.T) {
-			res, err := repo.ObjectByID(context.Background(), id, parkedAtLot(), additional.Properties{})
+			res, err := repo.ObjectByID(context.Background(), id, parkedAtLot(), additional.Properties{}, "")
 			require.Nil(t, err)
 
 			assert.Equal(t, expectedSchemaWithLotRef, res.Schema)
 		})
 
 		t.Run("asking for refs with vector of type lot", func(t *testing.T) {
-			res, err := repo.ObjectByID(context.Background(), id, parkedAtLotWithVector(), additional.Properties{})
+			res, err := repo.ObjectByID(context.Background(), id, parkedAtLotWithVector(), additional.Properties{}, "")
 			require.Nil(t, err)
 
 			assert.Equal(t, expectedSchemaWithLotRefWithVector, res.Schema)
 		})
 
 		t.Run("asking for refs of both types", func(t *testing.T) {
-			res, err := repo.ObjectByID(context.Background(), id, parkedAtEither(), additional.Properties{})
+			res, err := repo.ObjectByID(context.Background(), id, parkedAtEither(), additional.Properties{}, "")
 			require.Nil(t, err)
 
 			assert.Equal(t, expectedSchemaWithAllRefs, res.Schema)
 		})
 
 		t.Run("asking for refs with vectors of both types", func(t *testing.T) {
-			res, err := repo.ObjectByID(context.Background(), id, parkedAtEitherWithVector(), additional.Properties{})
+			res, err := repo.ObjectByID(context.Background(), id, parkedAtEitherWithVector(), additional.Properties{}, "")
 			require.Nil(t, err)
 
 			assert.Equal(t, expectedSchemaWithAllRefsWithVector, res.Schema)
@@ -661,164 +662,6 @@ func parkedAtEitherWithVector() search.SelectProperties {
 					AdditionalProperties: additional.Properties{
 						Vector: true,
 					},
-				},
-			},
-		},
-	}
-}
-
-func drivesCarparkedAtLot() search.SelectProperties {
-	return search.SelectProperties{
-		search.SelectProperty{
-			Name:        "drives",
-			IsPrimitive: false,
-			Refs: []search.SelectClass{
-				{
-					ClassName:     "MultiRefCar",
-					RefProperties: parkedAtLot(),
-				},
-			},
-		},
-	}
-}
-
-func drivesCarparkedAtGarage() search.SelectProperties {
-	return search.SelectProperties{
-		search.SelectProperty{
-			Name:        "drives",
-			IsPrimitive: false,
-			Refs: []search.SelectClass{
-				{
-					ClassName:     "MultiRefCar",
-					RefProperties: parkedAtGarage(),
-				},
-			},
-		},
-	}
-}
-
-func drivesCarparkedAtEither() search.SelectProperties {
-	return search.SelectProperties{
-		search.SelectProperty{
-			Name:        "drives",
-			IsPrimitive: false,
-			Refs: []search.SelectClass{
-				{
-					ClassName:     "MultiRefCar",
-					RefProperties: parkedAtEither(),
-				},
-			},
-		},
-	}
-}
-
-func friendsWithdrivesCarparkedAtLot() search.SelectProperties {
-	return search.SelectProperties{
-		search.SelectProperty{
-			Name:        "friendsWith",
-			IsPrimitive: false,
-			Refs: []search.SelectClass{
-				{
-					ClassName:     "MultiRefDriver",
-					RefProperties: drivesCarparkedAtLot(),
-				},
-			},
-		},
-	}
-}
-
-func friendsWithdrivesCarparkedAtGarage() search.SelectProperties {
-	return search.SelectProperties{
-		search.SelectProperty{
-			Name:        "friendsWith",
-			IsPrimitive: false,
-			Refs: []search.SelectClass{
-				{
-					ClassName:     "MultiRefDriver",
-					RefProperties: drivesCarparkedAtGarage(),
-				},
-			},
-		},
-	}
-}
-
-func friendsWithdrivesCarparkedAtEither() search.SelectProperties {
-	return search.SelectProperties{
-		search.SelectProperty{
-			Name:        "friendsWith",
-			IsPrimitive: false,
-			Refs: []search.SelectClass{
-				{
-					ClassName:     "MultiRefDriver",
-					RefProperties: drivesCarparkedAtEither(),
-				},
-			},
-		},
-	}
-}
-
-func hasMembersfriendsWithdrivesCarparkedAtLot() search.SelectProperties {
-	return search.SelectProperties{
-		search.SelectProperty{
-			Name:        "hasMembers",
-			IsPrimitive: false,
-			Refs: []search.SelectClass{
-				{
-					ClassName:     "MultiRefPerson",
-					RefProperties: friendsWithdrivesCarparkedAtLot(),
-				},
-			},
-		},
-	}
-}
-
-func hasMembersfriendsWithdrivesCarparkedAtGarage() search.SelectProperties {
-	return search.SelectProperties{
-		search.SelectProperty{
-			Name:        "hasMembers",
-			IsPrimitive: false,
-			Refs: []search.SelectClass{
-				{
-					ClassName:     "MultiRefPerson",
-					RefProperties: friendsWithdrivesCarparkedAtGarage(),
-				},
-			},
-		},
-	}
-}
-
-func hasMembersfriendsWithdrivesCarparkedAtEither() search.SelectProperties {
-	return search.SelectProperties{
-		search.SelectProperty{
-			Name:        "hasMembers",
-			IsPrimitive: false,
-			Refs: []search.SelectClass{
-				{
-					ClassName:     "MultiRefPerson",
-					RefProperties: friendsWithdrivesCarparkedAtEither(),
-				},
-			},
-		},
-	}
-}
-
-func refToBothGarages() []interface{} {
-	return []interface{}{
-		search.LocalRef{
-			Class: "MultiRefParkingLot",
-			Fields: map[string]interface{}{
-				"name": "Fancy Parking Lot",
-				"id":   strfmt.UUID("1023967b-9512-475b-8ef9-673a110b695d"),
-			},
-		},
-		search.LocalRef{
-			Class: "MultiRefParkingGarage",
-			Fields: map[string]interface{}{
-				"name": "Luxury Parking Garage",
-				"id":   strfmt.UUID("a7e10b55-1ac4-464f-80df-82508eea1951"),
-				"location": &models.GeoCoordinates{
-					Latitude:  ptFloat32(48.864716),
-					Longitude: ptFloat32(2.349014),
 				},
 			},
 		},

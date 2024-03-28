@@ -4,23 +4,22 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package test
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
-	"github.com/semi-technologies/weaviate/test/docker"
-	"github.com/semi-technologies/weaviate/test/helper"
-	"github.com/semi-technologies/weaviate/test/helper/journey"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/test/docker"
+	"github.com/weaviate/weaviate/test/helper"
+	"github.com/weaviate/weaviate/test/helper/journey"
 )
 
 const (
@@ -46,11 +45,10 @@ func Test_BackupJourney(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 		defer cancel()
 
-		t.Run("pre-instance env setup", func(t *testing.T) {
-			require.Nil(t, os.Setenv(envS3AccessKey, s3BackupJourneyAccessKey))
-			require.Nil(t, os.Setenv(envS3SecretKey, s3BackupJourneySecretKey))
-			require.Nil(t, os.Setenv(envS3Bucket, s3BackupJourneyBucketName))
-		})
+		t.Log("pre-instance env setup")
+		t.Setenv(envS3AccessKey, s3BackupJourneyAccessKey)
+		t.Setenv(envS3SecretKey, s3BackupJourneySecretKey)
+		t.Setenv(envS3Bucket, s3BackupJourneyBucketName)
 
 		compose, err := docker.New().
 			WithBackendS3(s3BackupJourneyBucketName).
@@ -60,7 +58,7 @@ func Test_BackupJourney(t *testing.T) {
 		require.Nil(t, err)
 		defer func() {
 			if err := compose.Terminate(ctx); err != nil {
-				t.Fatalf("failed to terminte test containers: %s", err.Error())
+				t.Fatalf("failed to terminate test containers: %s", err.Error())
 			}
 		}()
 
@@ -71,7 +69,7 @@ func Test_BackupJourney(t *testing.T) {
 
 		t.Run("backup-s3", func(t *testing.T) {
 			journey.BackupJourneyTests_SingleNode(t, compose.GetWeaviate().URI(),
-				"s3", s3BackupJourneyClassName, s3BackupJourneyBackupIDSingleNode)
+				"s3", s3BackupJourneyClassName, s3BackupJourneyBackupIDSingleNode, nil)
 		})
 	})
 
@@ -79,11 +77,10 @@ func Test_BackupJourney(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 		defer cancel()
 
-		t.Run("pre-instance env setup", func(t *testing.T) {
-			require.Nil(t, os.Setenv(envS3AccessKey, s3BackupJourneyAccessKey))
-			require.Nil(t, os.Setenv(envS3SecretKey, s3BackupJourneySecretKey))
-			require.Nil(t, os.Setenv(envS3Bucket, s3BackupJourneyBucketName))
-		})
+		t.Log("pre-instance env setup")
+		t.Setenv(envS3AccessKey, s3BackupJourneyAccessKey)
+		t.Setenv(envS3SecretKey, s3BackupJourneySecretKey)
+		t.Setenv(envS3Bucket, s3BackupJourneyBucketName)
 
 		compose, err := docker.New().
 			WithBackendS3(s3BackupJourneyBucketName).
@@ -93,7 +90,7 @@ func Test_BackupJourney(t *testing.T) {
 		require.Nil(t, err)
 		defer func() {
 			if err := compose.Terminate(ctx); err != nil {
-				t.Fatalf("failed to terminte test containers: %s", err.Error())
+				t.Fatalf("failed to terminate test containers: %s", err.Error())
 			}
 		}()
 
@@ -104,7 +101,8 @@ func Test_BackupJourney(t *testing.T) {
 
 		t.Run("backup-s3", func(t *testing.T) {
 			journey.BackupJourneyTests_Cluster(t, "s3", s3BackupJourneyClassName,
-				s3BackupJourneyBackupIDCluster, compose.GetWeaviate().URI(), compose.GetWeaviateNode2().URI())
+				s3BackupJourneyBackupIDCluster, nil,
+				compose.GetWeaviate().URI(), compose.GetWeaviateNode2().URI())
 		})
 	})
 }

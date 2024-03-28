@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package vectorizer
@@ -15,7 +15,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/semi-technologies/weaviate/entities/moduletools"
+	"github.com/weaviate/weaviate/entities/moduletools"
 )
 
 func Test_classSettings_Validate(t *testing.T) {
@@ -77,6 +77,14 @@ func Test_classSettings_Validate(t *testing.T) {
 			name: "should pass with proper value in imageFields",
 			fields: fields{
 				cfg: newConfigBuilder().addSetting("imageFields", []interface{}{"field"}).build(),
+			},
+		},
+		{
+			name: "should pass with proper value in imageFields and inferenceUrl",
+			fields: fields{
+				cfg: newConfigBuilder().
+					addSetting("inferenceUrl", "http://inference.url").
+					addSetting("imageFields", []interface{}{"field"}).build(),
 			},
 		},
 		{
@@ -162,9 +170,7 @@ func Test_classSettings_Validate(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ic := &classSettings{
-				cfg: tt.fields.cfg,
-			}
+			ic := NewClassSettings(tt.fields.cfg)
 			if err := ic.Validate(); (err != nil) != tt.wantErr {
 				t.Errorf("classSettings.Validate() error = %v, wantErr %v", err, tt.wantErr)
 			}

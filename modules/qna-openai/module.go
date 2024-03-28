@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package modqnaopenai
@@ -15,17 +15,18 @@ import (
 	"context"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/pkg/errors"
-	"github.com/semi-technologies/weaviate/entities/modulecapabilities"
-	"github.com/semi-technologies/weaviate/entities/moduletools"
-	qnaadditional "github.com/semi-technologies/weaviate/modules/qna-openai/additional"
-	qnaadditionalanswer "github.com/semi-technologies/weaviate/modules/qna-openai/additional/answer"
-	qnaask "github.com/semi-technologies/weaviate/modules/qna-openai/ask"
-	"github.com/semi-technologies/weaviate/modules/qna-openai/clients"
-	qnaadependency "github.com/semi-technologies/weaviate/modules/qna-openai/dependency"
-	"github.com/semi-technologies/weaviate/modules/qna-openai/ent"
 	"github.com/sirupsen/logrus"
+	"github.com/weaviate/weaviate/entities/modulecapabilities"
+	"github.com/weaviate/weaviate/entities/moduletools"
+	qnaadditional "github.com/weaviate/weaviate/modules/qna-openai/additional"
+	qnaadditionalanswer "github.com/weaviate/weaviate/modules/qna-openai/additional/answer"
+	qnaask "github.com/weaviate/weaviate/modules/qna-openai/ask"
+	"github.com/weaviate/weaviate/modules/qna-openai/clients"
+	qnaadependency "github.com/weaviate/weaviate/modules/qna-openai/dependency"
+	"github.com/weaviate/weaviate/modules/qna-openai/ent"
 )
 
 const Name = "qna-openai"
@@ -53,13 +54,13 @@ func (m *QnAModule) Name() string {
 }
 
 func (m *QnAModule) Type() modulecapabilities.ModuleType {
-	return modulecapabilities.Text2Text
+	return modulecapabilities.Text2TextQnA
 }
 
 func (m *QnAModule) Init(ctx context.Context,
 	params moduletools.ModuleInitParams,
 ) error {
-	if err := m.initAdditional(ctx, params.GetLogger()); err != nil {
+	if err := m.initAdditional(ctx, params.GetConfig().ModuleHttpClientTimeout, params.GetLogger()); err != nil {
 		return errors.Wrap(err, "init q/a")
 	}
 
@@ -129,12 +130,14 @@ func (m *QnAModule) InitDependency(modules []modulecapabilities.Module) error {
 	return nil
 }
 
-func (m *QnAModule) initAdditional(ctx context.Context,
+func (m *QnAModule) initAdditional(ctx context.Context, timeout time.Duration,
 	logger logrus.FieldLogger,
 ) error {
-	apiKey := os.Getenv("OPENAI_APIKEY")
+	openAIApiKey := os.Getenv("OPENAI_APIKEY")
+	openAIOrganization := os.Getenv("OPENAI_ORGANIZATION")
+	azureApiKey := os.Getenv("AZURE_APIKEY")
 
-	client := clients.New(apiKey, logger)
+	client := clients.New(openAIApiKey, openAIOrganization, azureApiKey, timeout, logger)
 
 	m.qna = client
 

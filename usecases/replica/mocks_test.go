@@ -4,35 +4,56 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package replica
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/go-openapi/strfmt"
-	"github.com/semi-technologies/weaviate/entities/additional"
-	"github.com/semi-technologies/weaviate/entities/search"
-	"github.com/semi-technologies/weaviate/entities/storobj"
-	"github.com/semi-technologies/weaviate/usecases/objects"
-	"github.com/semi-technologies/weaviate/usecases/sharding"
 	"github.com/stretchr/testify/mock"
+	"github.com/weaviate/weaviate/entities/additional"
+	"github.com/weaviate/weaviate/entities/search"
+	"github.com/weaviate/weaviate/entities/storobj"
+	"github.com/weaviate/weaviate/usecases/objects"
 )
 
 type fakeRClient struct {
 	mock.Mock
 }
 
-func (f *fakeRClient) FindObject(ctx context.Context, host, index, shard string,
+func (f *fakeRClient) FetchObject(ctx context.Context, host, index, shard string,
 	id strfmt.UUID, props search.SelectProperties,
 	additional additional.Properties,
-) (*storobj.Object, error) {
+) (objects.Replica, error) {
 	args := f.Called(ctx, host, index, shard, id, props, additional)
-	return args.Get(0).(*storobj.Object), args.Error(1)
+	return args.Get(0).(objects.Replica), args.Error(1)
+}
+
+func (f *fakeRClient) FetchObjects(ctx context.Context, host, index,
+	shard string, ids []strfmt.UUID,
+) ([]objects.Replica, error) {
+	args := f.Called(ctx, host, index, shard, ids)
+	return args.Get(0).([]objects.Replica), args.Error(1)
+}
+
+func (f *fakeRClient) OverwriteObjects(ctx context.Context, host, index, shard string,
+	xs []*objects.VObject,
+) ([]RepairResponse, error) {
+	args := f.Called(ctx, host, index, shard, xs)
+	return args.Get(0).([]RepairResponse), args.Error(1)
+}
+
+func (f *fakeRClient) DigestObjects(ctx context.Context, host, index, shard string,
+	ids []strfmt.UUID,
+) ([]RepairResponse, error) {
+	args := f.Called(ctx, host, index, shard, ids)
+	return args.Get(0).([]RepairResponse), args.Error(1)
 }
 
 type fakeClient struct {
@@ -68,9 +89,9 @@ func (f *fakeClient) PutObjects(ctx context.Context, host, index, shard, request
 }
 
 func (f *fakeClient) DeleteObjects(ctx context.Context, host, index, shard, requestID string,
-	docIDs []uint64, dryRun bool,
+	uuids []strfmt.UUID, dryRun bool,
 ) (SimpleResponse, error) {
-	args := f.Called(ctx, host, index, shard, requestID, docIDs, dryRun)
+	args := f.Called(ctx, host, index, shard, requestID, uuids, dryRun)
 	return args.Get(0).(SimpleResponse), args.Error(1)
 }
 
@@ -91,34 +112,39 @@ func (f *fakeClient) Abort(ctx context.Context, host, index, shard, requestID st
 	return args.Get(0).(SimpleResponse), args.Error(1)
 }
 
-func (f *fakeClient) FindObject(ctx context.Context, host, index, shard string,
-	id strfmt.UUID, props search.SelectProperties,
-	additional additional.Properties,
-) (*storobj.Object, error) {
-	args := f.Called(ctx, host, index, shard, id, props, additional)
-	return args.Get(0).(*storobj.Object), args.Error(1)
-}
-
 // Replica finder
 type fakeShardingState struct {
+	thisNode        string
 	ShardToReplicas map[string][]string
+	nodeResolver    *fakeNodeResolver
 }
 
-func newFakeShardingState(shardToReplicas map[string][]string) *fakeShardingState {
-	return &fakeShardingState{ShardToReplicas: shardToReplicas}
-}
-
-func (f *fakeShardingState) ShardingState(class string) *sharding.State {
-	state := sharding.State{}
-	state.Physical = make(map[string]sharding.Physical)
-	for shard, nodes := range f.ShardToReplicas {
-		state.Physical[shard] = sharding.Physical{BelongsToNodes: nodes}
+func newFakeShardingState(thisNode string, shardToReplicas map[string][]string, resolver *fakeNodeResolver) *fakeShardingState {
+	return &fakeShardingState{
+		thisNode:        thisNode,
+		ShardToReplicas: shardToReplicas,
+		nodeResolver:    resolver,
 	}
-	return &state
 }
 
 func (f *fakeShardingState) NodeName() string {
-	return "Coordinator"
+	return f.thisNode
+}
+
+func (f *fakeShardingState) ResolveParentNodes(_ string, shard string) (map[string]string, error) {
+	replicas, ok := f.ShardToReplicas[shard]
+	if !ok {
+		return nil, fmt.Errorf("sharding state not found")
+	}
+
+	m := make(map[string]string)
+	for _, name := range replicas {
+		addr, _ := f.nodeResolver.NodeHostname(name)
+		m[name] = addr
+
+	}
+
+	return m, nil
 }
 
 // node resolver

@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package lsmkv
@@ -15,7 +15,8 @@ import (
 	"bytes"
 	"sort"
 
-	"github.com/semi-technologies/weaviate/adapters/repos/db/lsmkv/rbtree"
+	"github.com/weaviate/weaviate/adapters/repos/db/lsmkv/rbtree"
+	"github.com/weaviate/weaviate/entities/lsmkv"
 )
 
 type binarySearchTreeMap struct {
@@ -40,7 +41,7 @@ func (t *binarySearchTreeMap) insert(key []byte, pair MapPair) {
 
 func (t *binarySearchTreeMap) get(key []byte) ([]MapPair, error) {
 	if t.root == nil {
-		return nil, NotFound
+		return nil, lsmkv.NotFound
 	}
 
 	return t.root.get(key)
@@ -182,13 +183,13 @@ func (n *binarySearchNodeMap) get(key []byte) ([]MapPair, error) {
 
 	if bytes.Compare(key, n.key) < 0 {
 		if n.left == nil {
-			return nil, NotFound
+			return nil, lsmkv.NotFound
 		}
 
 		return n.left.get(key)
 	} else {
 		if n.right == nil {
-			return nil, NotFound
+			return nil, lsmkv.NotFound
 		}
 
 		return n.right.get(key)

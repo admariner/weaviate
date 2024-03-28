@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package objects
@@ -16,26 +16,26 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/sirupsen/logrus"
-
 	"github.com/go-openapi/strfmt"
 	"github.com/pkg/errors"
-	"github.com/semi-technologies/weaviate/adapters/handlers/graphql/descriptions"
-	"github.com/semi-technologies/weaviate/entities/additional"
-	"github.com/semi-technologies/weaviate/entities/filters"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/modulecapabilities"
-	"github.com/semi-technologies/weaviate/entities/moduletools"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	"github.com/semi-technologies/weaviate/entities/search"
-	"github.com/semi-technologies/weaviate/entities/vectorindex/hnsw"
+	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/mock"
 	"github.com/tailor-inc/graphql"
 	"github.com/tailor-inc/graphql/language/ast"
+	"github.com/weaviate/weaviate/adapters/handlers/graphql/descriptions"
+	"github.com/weaviate/weaviate/entities/additional"
+	"github.com/weaviate/weaviate/entities/filters"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/modulecapabilities"
+	"github.com/weaviate/weaviate/entities/moduletools"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/schema/crossref"
+	"github.com/weaviate/weaviate/entities/search"
+	"github.com/weaviate/weaviate/entities/vectorindex/hnsw"
 )
 
 const FindObjectFn = "func(context.Context, string, strfmt.UUID, " +
-	"search.SelectProperties, additional.Properties) (*search.Result, error)"
+	"search.SelectProperties, additional.Properties, string) (*search.Result, error)"
 
 type fakeSchemaManager struct {
 	CalledWith struct {
@@ -65,6 +65,10 @@ func (f *fakeSchemaManager) UpdatePropertyAddDataType(ctx context.Context, princ
 func (f *fakeSchemaManager) GetSchema(principal *models.Principal) (schema.Schema, error) {
 	return f.GetSchemaResponse, f.GetschemaErr
 }
+
+func (f *fakeSchemaManager) ShardOwner(class, shard string) (string, error) { return "", nil }
+func (f *fakeSchemaManager) TenantShard(class, tenant string) string        { return tenant }
+func (f *fakeSchemaManager) ShardFromUUID(class string, uuid []byte) string { return "" }
 
 func (f *fakeSchemaManager) GetClass(ctx context.Context, principal *models.Principal,
 	name string,
@@ -110,6 +114,26 @@ func (f *fakeSchemaManager) AddClassProperty(ctx context.Context, principal *mod
 				props = []*models.Property{property}
 			}
 			c.Properties = props
+			break
+		}
+	}
+	return nil
+}
+
+func (f *fakeSchemaManager) MergeClassObjectProperty(ctx context.Context, principal *models.Principal,
+	class string, property *models.Property,
+) error {
+	classes := f.GetSchemaResponse.Objects.Classes
+	for _, c := range classes {
+		if c.Class == class {
+			for i, prop := range c.Properties {
+				if prop.Name == property.Name {
+					c.Properties[i].NestedProperties, _ = schema.MergeRecursivelyNestedProperties(
+						c.Properties[i].NestedProperties, property.NestedProperties)
+					break
+				}
+			}
+			break
 		}
 	}
 	return nil
@@ -139,26 +163,25 @@ type fakeVectorRepo struct {
 	mock.Mock
 }
 
-func (f *fakeVectorRepo) Exists(ctx context.Context, class string,
-	id strfmt.UUID,
-) (bool, error) {
+func (f *fakeVectorRepo) Exists(ctx context.Context, class string, id strfmt.UUID, repl *additional.ReplicationProperties, tenant string) (bool, error) {
 	args := f.Called(class, id)
 	return args.Bool(0), args.Error(1)
 }
 
 func (f *fakeVectorRepo) Object(ctx context.Context, cls string, id strfmt.UUID,
 	props search.SelectProperties, additional additional.Properties,
-	repl *additional.ReplicationProperties,
+	repl *additional.ReplicationProperties, tenant string,
 ) (*search.Result, error) {
-	args := f.Called(cls, id, props, additional)
+	args := f.Called(cls, id, props, additional, tenant)
 	if args.Get(0) != nil {
 		return args.Get(0).(*search.Result), args.Error(1)
 	}
 	return nil, args.Error(1)
 }
 
-func (f *fakeVectorRepo) ObjectByID(ctx context.Context,
-	id strfmt.UUID, props search.SelectProperties, additional additional.Properties,
+func (f *fakeVectorRepo) ObjectByID(ctx context.Context, id strfmt.UUID,
+	props search.SelectProperties, additional additional.Properties,
+	tenant string,
 ) (*search.Result, error) {
 	args := f.Called(id, props, additional)
 	if args.Get(0) != nil {
@@ -168,7 +191,7 @@ func (f *fakeVectorRepo) ObjectByID(ctx context.Context,
 }
 
 func (f *fakeVectorRepo) ObjectSearch(ctx context.Context, offset, limit int, filters *filters.LocalFilter,
-	sort []filters.Sort, additional additional.Properties,
+	sort []filters.Sort, additional additional.Properties, tenant string,
 ) (search.Results, error) {
 	args := f.Called(offset, limit, sort, filters, additional)
 	return args.Get(0).([]search.Result), args.Error(1)
@@ -180,45 +203,50 @@ func (f *fakeVectorRepo) Query(ctx context.Context, q *QueryInput) (search.Resul
 	return res, err
 }
 
-func (f *fakeVectorRepo) PutObject(ctx context.Context,
-	concept *models.Object, vector []float32,
+func (f *fakeVectorRepo) PutObject(ctx context.Context, concept *models.Object, vector []float32,
+	vectors models.Vectors, repl *additional.ReplicationProperties,
 ) error {
 	args := f.Called(concept, vector)
 	return args.Error(0)
 }
 
-func (f *fakeVectorRepo) BatchPutObjects(ctx context.Context, batch BatchObjects) (BatchObjects, error) {
+func (f *fakeVectorRepo) BatchPutObjects(ctx context.Context, batch BatchObjects,
+	repl *additional.ReplicationProperties,
+) (BatchObjects, error) {
 	args := f.Called(batch)
 	return batch, args.Error(0)
 }
 
-func (f *fakeVectorRepo) AddBatchReferences(ctx context.Context, batch BatchReferences) (BatchReferences, error) {
+func (f *fakeVectorRepo) AddBatchReferences(ctx context.Context, batch BatchReferences,
+	repl *additional.ReplicationProperties,
+) (BatchReferences, error) {
 	args := f.Called(batch)
 	return batch, args.Error(0)
 }
 
-func (f *fakeVectorRepo) BatchDeleteObjects(ctx context.Context, params BatchDeleteParams) (BatchDeleteResult, error) {
+func (f *fakeVectorRepo) BatchDeleteObjects(ctx context.Context, params BatchDeleteParams,
+	repl *additional.ReplicationProperties, tenant string,
+) (BatchDeleteResult, error) {
 	args := f.Called(params)
 	return args.Get(0).(BatchDeleteResult), args.Error(1)
 }
 
-func (f *fakeVectorRepo) Merge(ctx context.Context, merge MergeDocument) error {
+func (f *fakeVectorRepo) Merge(ctx context.Context, merge MergeDocument, repl *additional.ReplicationProperties, tenant string) error {
 	args := f.Called(merge)
 	return args.Error(0)
 }
 
-func (f *fakeVectorRepo) DeleteObject(ctx context.Context,
-	className string, id strfmt.UUID,
+func (f *fakeVectorRepo) DeleteObject(ctx context.Context, className string,
+	id strfmt.UUID, repl *additional.ReplicationProperties, tenant string,
 ) error {
 	args := f.Called(className, id)
 	return args.Error(0)
 }
 
-func (f *fakeVectorRepo) AddReference(ctx context.Context,
-	class string, source strfmt.UUID, prop string,
-	ref *models.SingleRef,
+func (f *fakeVectorRepo) AddReference(ctx context.Context, source *crossref.RefSource,
+	target *crossref.Ref, repl *additional.ReplicationProperties, tenant string,
 ) error {
-	args := f.Called(class, source, prop, ref)
+	args := f.Called(source, target)
 	return args.Error(0)
 }
 
@@ -243,7 +271,7 @@ func (f *fakeExtender) ExtractAdditionalFn(param []*ast.Argument) interface{} {
 	return nil
 }
 
-func (f *fakeExtender) AdditonalPropertyDefaultValue() interface{} {
+func (f *fakeExtender) AdditionalPropertyDefaultValue() interface{} {
 	return getDefaultParam("nearestNeighbors")
 }
 
@@ -262,7 +290,7 @@ func (f *fakeProjector) ExtractAdditionalFn(param []*ast.Argument) interface{} {
 	return nil
 }
 
-func (f *fakeProjector) AdditonalPropertyDefaultValue() interface{} {
+func (f *fakeProjector) AdditionalPropertyDefaultValue() interface{} {
 	return getDefaultParam("featureProjection")
 }
 
@@ -281,7 +309,7 @@ func (f *fakePathBuilder) ExtractAdditionalFn(param []*ast.Argument) interface{}
 	return nil
 }
 
-func (f *fakePathBuilder) AdditonalPropertyDefaultValue() interface{} {
+func (f *fakePathBuilder) AdditionalPropertyDefaultValue() interface{} {
 	return getDefaultParam("semanticPath")
 }
 
@@ -313,7 +341,7 @@ func (p *fakeModulesProvider) UsingRef2Vec(moduleName string) bool {
 }
 
 func (p *fakeModulesProvider) UpdateVector(ctx context.Context, object *models.Object, class *models.Class,
-	objectDiff *moduletools.ObjectDiff, findObjFn modulecapabilities.FindObjectFn, logger logrus.FieldLogger,
+	findObjFn modulecapabilities.FindObjectFn, logger logrus.FieldLogger,
 ) error {
 	args := p.Called(object, findObjFn)
 	switch vec := args.Get(0).(type) {
@@ -326,6 +354,25 @@ func (p *fakeModulesProvider) UpdateVector(ctx context.Context, object *models.O
 	default:
 		return args.Error(1)
 	}
+}
+
+func (p *fakeModulesProvider) BatchUpdateVector(ctx context.Context, class *models.Class, objects []*models.Object,
+	findObjectFn modulecapabilities.FindObjectFn,
+	logger logrus.FieldLogger,
+) (map[int]error, error) {
+	args := p.Called()
+
+	for _, obj := range objects {
+		switch vec := args.Get(0).(type) {
+		case models.C11yVector:
+			obj.Vector = vec
+		case []float32:
+			obj.Vector = vec
+		default:
+		}
+	}
+
+	return nil, nil
 }
 
 func (p *fakeModulesProvider) VectorizerName(className string) (string, error) {
@@ -577,7 +624,7 @@ func (m *nearCustomTextModule) AdditionalProperties() map[string]modulecapabilit
 
 func (m *nearCustomTextModule) getFeatureProjection() modulecapabilities.AdditionalProperty {
 	return modulecapabilities.AdditionalProperty{
-		DefaultValue: m.fakeProjector.AdditonalPropertyDefaultValue(),
+		DefaultValue: m.fakeProjector.AdditionalPropertyDefaultValue(),
 		GraphQLNames: []string{"featureProjection"},
 		GraphQLFieldFunction: func(classname string) *graphql.Field {
 			return &graphql.Field{
@@ -622,7 +669,7 @@ func (m *nearCustomTextModule) getFeatureProjection() modulecapabilities.Additio
 
 func (m *nearCustomTextModule) getNearestNeighbors() modulecapabilities.AdditionalProperty {
 	return modulecapabilities.AdditionalProperty{
-		DefaultValue: m.fakeExtender.AdditonalPropertyDefaultValue(),
+		DefaultValue: m.fakeExtender.AdditionalPropertyDefaultValue(),
 		GraphQLNames: []string{"nearestNeighbors"},
 		GraphQLFieldFunction: func(classname string) *graphql.Field {
 			return &graphql.Field{
@@ -652,7 +699,7 @@ func (m *nearCustomTextModule) getNearestNeighbors() modulecapabilities.Addition
 
 func (m *nearCustomTextModule) getSemanticPath() modulecapabilities.AdditionalProperty {
 	return modulecapabilities.AdditionalProperty{
-		DefaultValue: m.fakePathBuilder.AdditonalPropertyDefaultValue(),
+		DefaultValue: m.fakePathBuilder.AdditionalPropertyDefaultValue(),
 		GraphQLNames: []string{"semanticPath"},
 		GraphQLFieldFunction: func(classname string) *graphql.Field {
 			return &graphql.Field{

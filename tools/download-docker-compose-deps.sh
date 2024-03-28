@@ -27,13 +27,13 @@ fi
 ##
 # Download the files via the Github API
 ##
-for singleFile in $(curl -s https://api.github.com/repos/semi-technologies/weaviate/contents/docker-compose/runtime?ref=master | jq -r '.[] | @base64'); do
+for singleFile in $(curl -s https://api.github.com/repos/weaviate/weaviate/contents/docker-compose/runtime?ref=master | jq -r '.[] | @base64'); do
     _jq() {
-        echo ${singleFile} | base64 --decode | jq -r ${1}
+        echo "${singleFile}" | base64 --decode | jq -r "${1}"
     }
     URL_RAW=$(_jq '.url') 
     URL_NOPRO=${URL_RAW:7}
     URL_REL=${URL_NOPRO#*/}
     FILENAME=$(basename "/${URL_REL%%\?*}")
-    curl $(_jq '.download_url') --output $FILENAME
+    curl "$(_jq '.download_url')" --output "$FILENAME"
 done

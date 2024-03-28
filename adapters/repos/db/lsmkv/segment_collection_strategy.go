@@ -4,39 +4,35 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package lsmkv
 
 import (
-	"bytes"
 	"encoding/binary"
+	"fmt"
 
-	"github.com/pkg/errors"
-	"github.com/semi-technologies/weaviate/adapters/repos/db/lsmkv/segmentindex"
+	"github.com/weaviate/weaviate/adapters/repos/db/lsmkv/segmentindex"
+	"github.com/weaviate/weaviate/entities/lsmkv"
 )
 
-func (i *segment) getCollection(key []byte) ([]value, error) {
-	if i.strategy != SegmentStrategySetCollection &&
-		i.strategy != SegmentStrategyMapCollection {
-		return nil, errors.Errorf("get only possible for strategies %q, %q",
+func (s *segment) getCollection(key []byte) ([]value, error) {
+	if s.strategy != segmentindex.StrategySetCollection &&
+		s.strategy != segmentindex.StrategyMapCollection {
+		return nil, fmt.Errorf("get only possible for strategies %q, %q",
 			StrategySetCollection, StrategyMapCollection)
 	}
 
-	if !i.bloomFilter.Test(key) {
-		return nil, NotFound
+	if s.useBloomFilter && !s.bloomFilter.Test(key) {
+		return nil, lsmkv.NotFound
 	}
 
-	node, err := i.index.Get(key)
+	node, err := s.index.Get(key)
 	if err != nil {
-		if err == segmentindex.NotFound {
-			return nil, NotFound
-		} else {
-			return nil, err
-		}
+		return nil, err
 	}
 
 	// We need to copy the data we read from the segment exactly once in this
@@ -45,7 +41,7 @@ func (i *segment) getCollection(key []byte) ([]value, error) {
 	// this place it would only be safe to hold this data while still under the
 	// protection of the segmentGroup.maintenanceLock. This lock makes sure that
 	// no compaction is started during an ongoing read. However, as we could show
-	// as part of https://github.com/semi-technologies/weaviate/issues/1837
+	// as part of https://github.com/weaviate/weaviate/issues/1837
 	// further processing, such as map-decoding and eventually map-merging would
 	// happen inside the bucket.MapList() method. This scope has its own lock,
 	// but that lock can only protecting against flushing (i.e. changing the
@@ -53,14 +49,16 @@ func (i *segment) getCollection(key []byte) ([]value, error) {
 	// compaction completes and the old segment is removed, we would be accessing
 	// invalid memory without the copy, thus leading to a SEGFAULT.
 	contentsCopy := make([]byte, node.End-node.Start)
-	copy(contentsCopy, i.contents[node.Start:node.End])
+	if err = s.copyNode(contentsCopy, nodeOffset{node.Start, node.End}); err != nil {
+		return nil, err
+	}
 
-	return i.collectionStratParseData(contentsCopy)
+	return s.collectionStratParseData(contentsCopy)
 }
 
-func (i *segment) collectionStratParseData(in []byte) ([]value, error) {
+func (s *segment) collectionStratParseData(in []byte) ([]value, error) {
 	if len(in) == 0 {
-		return nil, NotFound
+		return nil, lsmkv.NotFound
 	}
 
 	offset := 0
@@ -84,22 +82,4 @@ func (i *segment) collectionStratParseData(in []byte) ([]value, error) {
 	}
 
 	return values, nil
-}
-
-func (i *segment) collectionStratParseDataWithKey(in []byte) (segmentCollectionNode, error) {
-	r := bytes.NewReader(in)
-
-	if len(in) == 0 {
-		return segmentCollectionNode{}, NotFound
-	}
-
-	return ParseCollectionNode(r)
-}
-
-func (i *segment) collectionStratParseDataWithKeyInto(in []byte, node *segmentCollectionNode) error {
-	if len(in) == 0 {
-		return NotFound
-	}
-
-	return ParseCollectionNodeInto(in, node)
 }

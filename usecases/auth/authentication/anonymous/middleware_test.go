@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package anonymous
@@ -16,13 +16,13 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/semi-technologies/weaviate/usecases/config"
 	"github.com/stretchr/testify/assert"
+	"github.com/weaviate/weaviate/usecases/config"
 )
 
 func Test_AnonymousMiddleware_Enabled(t *testing.T) {
 	// when anonymous access is enabled, we don't need to do anything and can
-	// savely call the next next handler
+	// safely call the next next handler
 
 	r := httptest.NewRequest("GET", "/foo", nil)
 	w := httptest.NewRecorder()

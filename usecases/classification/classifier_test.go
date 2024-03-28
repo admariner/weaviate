@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package classification
@@ -16,17 +16,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/go-openapi/strfmt"
-	"github.com/semi-technologies/weaviate/entities/models"
-	testhelper "github.com/semi-technologies/weaviate/test/helper"
 	"github.com/sirupsen/logrus"
 	"github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/entities/models"
+	testhelper "github.com/weaviate/weaviate/test/helper"
 )
 
 func newNullLogger() *logrus.Logger {
@@ -231,7 +230,7 @@ func Test_Classifier_Custom_Classifier(t *testing.T) {
 			Type:               notRecoginzedContextual,
 		}
 
-		t.Run("scheduling an unregonized classification", func(t *testing.T) {
+		t.Run("scheduling an unrecognized classification", func(t *testing.T) {
 			class, err := classifier.Schedule(context.Background(), nil, params)
 			require.Nil(t, err, "should not error")
 			require.NotNil(t, class)
@@ -240,7 +239,7 @@ func Test_Classifier_Custom_Classifier(t *testing.T) {
 			id = class.ID
 		})
 
-		t.Run("retrieving the same classificiation by id", func(t *testing.T) {
+		t.Run("retrieving the same classification by id", func(t *testing.T) {
 			class, err := classifier.Get(context.Background(), nil, id)
 			require.Nil(t, err)
 			require.NotNil(t, class)
@@ -288,7 +287,7 @@ func Test_Classifier_Custom_Classifier(t *testing.T) {
 			id = class.ID
 		})
 
-		t.Run("retrieving the same classificiation by id", func(t *testing.T) {
+		t.Run("retrieving the same classification by id", func(t *testing.T) {
 			class, err := classifier.Get(context.Background(), nil, id)
 			require.Nil(t, err)
 			require.NotNil(t, class)
@@ -433,98 +432,11 @@ func Test_Classifier_WhereFilterValidation(t *testing.T) {
 		vectorRepo := newFakeVectorRepoKNN(testDataToBeClassified(), testDataAlreadyClassified())
 		classifier := New(sg, repo, vectorRepo, authorizer, newNullLogger(), nil)
 
-		t.Run("with invalid sourceFilter", func(t *testing.T) {
-			invalidSourceFilter := &models.WhereFilter{
-				Path:        []string{"description"},
-				Operator:    "Equal",
-				ValueString: ptString("should be valueText"),
-			}
-
-			params := models.Classification{
-				Class:              "Article",
-				BasedOnProperties:  []string{"description"},
-				ClassifyProperties: []string{"exactCategory", "mainCategory"},
-				Settings: map[string]interface{}{
-					"k": json.Number("1"),
-				},
-				Filters: &models.ClassificationFilters{
-					SourceWhere: invalidSourceFilter,
-				},
-				Type: TypeContextual,
-			}
-
-			_, err := classifier.Schedule(context.Background(), nil, params)
-			assert.EqualError(t, err, `invalid sourceWhere: data type filter cannot use "valueString" on type "text", use "valueText" instead`)
-		})
-
-		t.Run("with invalid targetFilter", func(t *testing.T) {
-			sourceFilter := &models.WhereFilter{
-				Path:      []string{"description"},
-				Operator:  "Equal",
-				ValueText: ptString("someValue"),
-			}
-
-			invalidTargetFilter := &models.WhereFilter{
-				Path:        []string{"description"},
-				Operator:    "Equal",
-				ValueString: ptString("someValue"),
-			}
-
-			params := models.Classification{
-				Class:              "Article",
-				BasedOnProperties:  []string{"description"},
-				ClassifyProperties: []string{"exactCategory", "mainCategory"},
-				Settings: map[string]interface{}{
-					"k": json.Number("1"),
-				},
-				Filters: &models.ClassificationFilters{
-					SourceWhere: sourceFilter,
-					TargetWhere: invalidTargetFilter,
-				},
-				Type: TypeContextual,
-			}
-
-			_, err := classifier.Schedule(context.Background(), nil, params)
-			assert.Error(t, err)
-			assert.True(t, strings.Contains(err.Error(), "invalid targetWhere"))
-		})
-
-		t.Run("with invalid trainingFilter", func(t *testing.T) {
-			sourceFilter := &models.WhereFilter{
-				Path:      []string{"description"},
-				Operator:  "Equal",
-				ValueText: ptString("someValue"),
-			}
-			invalidTrainingFilter := &models.WhereFilter{
-				Path:        []string{"description"},
-				Operator:    "Equal",
-				ValueString: ptString("someValue"),
-			}
-
-			params := models.Classification{
-				Class:              "Article",
-				BasedOnProperties:  []string{"description"},
-				ClassifyProperties: []string{"exactCategory", "mainCategory"},
-				Settings: map[string]interface{}{
-					"k": json.Number("1"),
-				},
-				Filters: &models.ClassificationFilters{
-					SourceWhere:      sourceFilter,
-					TrainingSetWhere: invalidTrainingFilter,
-				},
-				Type: TypeKNN,
-			}
-
-			_, err := classifier.Schedule(context.Background(), nil, params)
-			assert.Error(t, err)
-			assert.True(t, strings.Contains(err.Error(), "invalid trainingSetWhere"))
-		})
-
 		t.Run("with only one of the where filters being set", func(t *testing.T) {
 			whereFilter := &models.WhereFilter{
-				Path:        []string{"id"},
-				Operator:    "Like",
-				ValueString: ptString("*"),
+				Path:      []string{"id"},
+				Operator:  "Like",
+				ValueText: ptString("*"),
 			}
 			testData := []struct {
 				name                  string
@@ -594,6 +506,81 @@ func Test_Classifier_WhereFilterValidation(t *testing.T) {
 					waitForStatusToNoLongerBeRunning(t, classifier, class.ID)
 				})
 			}
+		})
+	})
+
+	t.Run("[deprecated string] when valueString whereFilters are received", func(t *testing.T) {
+		sg := &fakeSchemaGetter{testSchema()}
+		repo := newFakeClassificationRepo()
+		authorizer := &fakeAuthorizer{}
+		vectorRepo := newFakeVectorRepoKNN(testDataToBeClassified(), testDataAlreadyClassified())
+		classifier := New(sg, repo, vectorRepo, authorizer, newNullLogger(), nil)
+
+		validFilter := &models.WhereFilter{
+			Path:      []string{"description"},
+			Operator:  "Equal",
+			ValueText: ptString("valueText is valid"),
+		}
+		deprecatedFilter := &models.WhereFilter{
+			Path:        []string{"description"},
+			Operator:    "Equal",
+			ValueString: ptString("valueString is accepted"),
+		}
+
+		t.Run("with deprecated sourceFilter", func(t *testing.T) {
+			params := models.Classification{
+				Class:              "Article",
+				BasedOnProperties:  []string{"description"},
+				ClassifyProperties: []string{"exactCategory", "mainCategory"},
+				Settings: map[string]interface{}{
+					"k": json.Number("1"),
+				},
+				Filters: &models.ClassificationFilters{
+					SourceWhere: deprecatedFilter,
+				},
+				Type: TypeContextual,
+			}
+
+			_, err := classifier.Schedule(context.Background(), nil, params)
+			assert.Nil(t, err)
+		})
+
+		t.Run("with deprecated targetFilter", func(t *testing.T) {
+			params := models.Classification{
+				Class:              "Article",
+				BasedOnProperties:  []string{"description"},
+				ClassifyProperties: []string{"exactCategory", "mainCategory"},
+				Settings: map[string]interface{}{
+					"k": json.Number("1"),
+				},
+				Filters: &models.ClassificationFilters{
+					SourceWhere: validFilter,
+					TargetWhere: deprecatedFilter,
+				},
+				Type: TypeContextual,
+			}
+
+			_, err := classifier.Schedule(context.Background(), nil, params)
+			assert.Nil(t, err)
+		})
+
+		t.Run("with deprecated trainingFilter", func(t *testing.T) {
+			params := models.Classification{
+				Class:              "Article",
+				BasedOnProperties:  []string{"description"},
+				ClassifyProperties: []string{"exactCategory", "mainCategory"},
+				Settings: map[string]interface{}{
+					"k": json.Number("1"),
+				},
+				Filters: &models.ClassificationFilters{
+					SourceWhere:      validFilter,
+					TrainingSetWhere: deprecatedFilter,
+				},
+				Type: TypeKNN,
+			}
+
+			_, err := classifier.Schedule(context.Background(), nil, params)
+			assert.Nil(t, err)
 		})
 	})
 }

@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package modcontextionary
@@ -17,23 +17,23 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
-	"github.com/semi-technologies/weaviate/adapters/handlers/rest/state"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/modulecapabilities"
-	"github.com/semi-technologies/weaviate/entities/moduletools"
-	text2vecadditional "github.com/semi-technologies/weaviate/modules/text2vec-contextionary/additional"
-	text2vecinterpretation "github.com/semi-technologies/weaviate/modules/text2vec-contextionary/additional/interpretation"
-	text2vecnn "github.com/semi-technologies/weaviate/modules/text2vec-contextionary/additional/nearestneighbors"
-	text2vecprojector "github.com/semi-technologies/weaviate/modules/text2vec-contextionary/additional/projector"
-	text2vecsempath "github.com/semi-technologies/weaviate/modules/text2vec-contextionary/additional/sempath"
-	text2vecclassification "github.com/semi-technologies/weaviate/modules/text2vec-contextionary/classification"
-	"github.com/semi-technologies/weaviate/modules/text2vec-contextionary/client"
-	"github.com/semi-technologies/weaviate/modules/text2vec-contextionary/concepts"
-	"github.com/semi-technologies/weaviate/modules/text2vec-contextionary/extensions"
-	text2vecneartext "github.com/semi-technologies/weaviate/modules/text2vec-contextionary/neartext"
-	"github.com/semi-technologies/weaviate/modules/text2vec-contextionary/vectorizer"
-	localvectorizer "github.com/semi-technologies/weaviate/modules/text2vec-contextionary/vectorizer"
 	"github.com/sirupsen/logrus"
+	"github.com/weaviate/weaviate/adapters/handlers/rest/state"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/modulecapabilities"
+	"github.com/weaviate/weaviate/entities/moduletools"
+	text2vecadditional "github.com/weaviate/weaviate/modules/text2vec-contextionary/additional"
+	text2vecinterpretation "github.com/weaviate/weaviate/modules/text2vec-contextionary/additional/interpretation"
+	text2vecnn "github.com/weaviate/weaviate/modules/text2vec-contextionary/additional/nearestneighbors"
+	text2vecsempath "github.com/weaviate/weaviate/modules/text2vec-contextionary/additional/sempath"
+	text2vecclassification "github.com/weaviate/weaviate/modules/text2vec-contextionary/classification"
+	"github.com/weaviate/weaviate/modules/text2vec-contextionary/client"
+	"github.com/weaviate/weaviate/modules/text2vec-contextionary/concepts"
+	"github.com/weaviate/weaviate/modules/text2vec-contextionary/extensions"
+	"github.com/weaviate/weaviate/modules/text2vec-contextionary/vectorizer"
+	localvectorizer "github.com/weaviate/weaviate/modules/text2vec-contextionary/vectorizer"
+	text2vecprojector "github.com/weaviate/weaviate/usecases/modulecomponents/additional/projector"
+	text2vecneartext "github.com/weaviate/weaviate/usecases/modulecomponents/arguments/nearText"
 )
 
 // MinimumRequiredRemoteVersion describes the minimal semver version
@@ -210,16 +210,37 @@ func (m *ContextionaryModule) RootHandler() http.Handler {
 }
 
 func (m *ContextionaryModule) VectorizeObject(ctx context.Context,
-	obj *models.Object, objDiff *moduletools.ObjectDiff, cfg moduletools.ClassConfig,
-) error {
-	icheck := localvectorizer.NewIndexChecker(cfg)
-	return m.vectorizer.Object(ctx, obj, objDiff, icheck)
+	obj *models.Object, cfg moduletools.ClassConfig,
+) ([]float32, models.AdditionalProperties, error) {
+	return m.vectorizer.Object(ctx, obj, cfg)
+}
+
+// VectorizeBatch is _slower_ if many requests are done in parallel. So do all objects sequentially
+func (m *ContextionaryModule) VectorizeBatch(ctx context.Context, objs []*models.Object, skipObject []bool, cfg moduletools.ClassConfig) ([][]float32, []models.AdditionalProperties, map[int]error) {
+	vecs := make([][]float32, len(objs))
+	addProps := make([]models.AdditionalProperties, len(objs))
+	// error should be the exception so dont preallocate
+	errs := make(map[int]error, 0)
+	for i, obj := range objs {
+		if skipObject[i] {
+			continue
+		}
+		vec, addProp, err := m.vectorizer.Object(ctx, obj, cfg)
+		if err != nil {
+			errs[i] = err
+			continue
+		}
+		addProps[i] = addProp
+		vecs[i] = vec
+	}
+
+	return vecs, addProps, errs
 }
 
 func (m *ContextionaryModule) VectorizeInput(ctx context.Context,
 	input string, cfg moduletools.ClassConfig,
 ) ([]float32, error) {
-	return m.vectorizer.Corpi(ctx, []string{input})
+	return m.vectorizer.Texts(ctx, []string{input}, cfg)
 }
 
 func (m *ContextionaryModule) Arguments() map[string]modulecapabilities.GraphQLArgument {
@@ -232,6 +253,10 @@ func (m *ContextionaryModule) VectorSearches() map[string]modulecapabilities.Vec
 
 func (m *ContextionaryModule) AdditionalProperties() map[string]modulecapabilities.AdditionalProperty {
 	return m.additionalPropertiesProvider.AdditionalProperties()
+}
+
+func (m *ContextionaryModule) VectorizableProperties(cfg moduletools.ClassConfig) (bool, []string, error) {
+	return true, nil, nil
 }
 
 func (m *ContextionaryModule) Classifiers() []modulecapabilities.Classifier {

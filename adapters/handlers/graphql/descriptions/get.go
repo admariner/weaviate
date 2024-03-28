@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 // Package descriptions provides the descriptions as used by the graphql endpoint for Weaviate
@@ -43,3 +43,8 @@ const (
 )
 
 const NetworkGetClassUUID = "The UUID of a Object, assigned by the Weaviate network" // TODO check this with @lauraham
+
+const ConsistencyLevel = "Determines how many replicas must acknowledge a request " +
+	"before it is considered successful. Can be 'ONE', 'QUORUM', or 'ALL'"
+
+const Tenant = "The value by which a tenant is identified, specified in the class schema"

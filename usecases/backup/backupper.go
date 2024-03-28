@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package backup
@@ -17,10 +17,12 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/semi-technologies/weaviate/entities/backup"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/usecases/config"
+	enterrors "github.com/weaviate/weaviate/entities/errors"
+
 	"github.com/sirupsen/logrus"
+	"github.com/weaviate/weaviate/entities/backup"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/usecases/config"
 )
 
 type backupper struct {
@@ -101,12 +103,12 @@ func (b *backupper) OnStatus(ctx context.Context, req *StatusRequest) (reqStat, 
 	}
 
 	meta, err := store.Meta(ctx, req.ID, false)
-	if err != nil || meta.Error != "" {
+	if err != nil {
 		path := fmt.Sprintf("%s/%s", req.ID, BackupFile)
-		if meta.Error != "" {
-			err = errors.New(meta.Error)
-		}
-		return reqStat{}, fmt.Errorf("%w: %q: %v", errMetaNotFound, path, err)
+		return reqStat{}, fmt.Errorf("cannot get status while backing up: %w: %q: %v", errMetaNotFound, path, err)
+	}
+	if err != nil || meta.Error != "" {
+		return reqStat{}, errors.New(meta.Error)
 	}
 
 	return reqStat{
@@ -117,7 +119,11 @@ func (b *backupper) OnStatus(ctx context.Context, req *StatusRequest) (reqStat, 
 	}, nil
 }
 
-// Backup is called by the User
+// backup checks if the node is ready to back up (can commit phase)
+//
+// Moreover it starts a goroutine in the background which waits for the
+// next instruction from the coordinator (second phase).
+// It will start the backup as soon as it receives an ack, or abort otherwise
 func (b *backupper) backup(ctx context.Context,
 	store nodeStore, req *Request,
 ) (CanCommitResponse, error) {
@@ -136,8 +142,8 @@ func (b *backupper) backup(ctx context.Context,
 		return ret, fmt.Errorf("backup %s already in progress", prevID)
 	}
 	b.waitingForCoordinatorToCommit.Store(true) // is set to false by wait()
-
-	go func() {
+	// waits for ack from coordinator in order to processed with the backup
+	f := func() {
 		defer b.lastOp.reset()
 		if err := b.waitForCoordinator(expiration, id); err != nil {
 			b.logger.WithField("action", "create_backup").
@@ -146,7 +152,9 @@ func (b *backupper) backup(ctx context.Context,
 			return
 
 		}
-		provider := newUploader(b.sourcer, store, req.ID, b.lastOp.set)
+		provider := newUploader(b.sourcer, store, req.ID, b.lastOp.set, b.logger).
+			withCompression(newZipConfig(req.Compression))
+
 		result := backup.BackupDescriptor{
 			StartedAt:     time.Now().UTC(),
 			ID:            id,
@@ -154,12 +162,23 @@ func (b *backupper) backup(ctx context.Context,
 			Version:       Version,
 			ServerVersion: config.ServerVersion,
 		}
-		if err := provider.all(context.Background(), req.Classes, &result); err != nil {
-			b.logger.WithField("action", "create_backup").
-				Error(err)
+
+		// the coordinator might want to abort the backup
+		done := make(chan struct{})
+		ctx := b.withCancellation(context.Background(), id, done, b.logger)
+		defer close(done)
+
+		logFields := logrus.Fields{"action": "create_backup", "backup_id": req.ID}
+		if err := provider.all(ctx, req.Classes, &result); err != nil {
+			b.logger.WithFields(logFields).Error(err)
+			b.lastAsyncError = err
+
+		} else {
+			b.logger.WithFields(logFields).Info("backup completed successfully")
 		}
 		result.CompletedAt = time.Now().UTC()
-	}()
+	}
+	enterrors.GoWrapper(f, b.logger)
 
 	return ret, nil
 }

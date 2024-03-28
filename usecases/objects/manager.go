@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 // package objects provides managers for all kind-related items, such as objects.
@@ -22,14 +22,14 @@ import (
 
 	"github.com/go-openapi/strfmt"
 	"github.com/google/uuid"
-	"github.com/semi-technologies/weaviate/entities/additional"
-	"github.com/semi-technologies/weaviate/entities/filters"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/modulecapabilities"
-	"github.com/semi-technologies/weaviate/entities/moduletools"
-	"github.com/semi-technologies/weaviate/entities/search"
-	"github.com/semi-technologies/weaviate/usecases/config"
 	"github.com/sirupsen/logrus"
+	"github.com/weaviate/weaviate/entities/additional"
+	"github.com/weaviate/weaviate/entities/filters"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/modulecapabilities"
+	"github.com/weaviate/weaviate/entities/schema/crossref"
+	"github.com/weaviate/weaviate/entities/search"
+	"github.com/weaviate/weaviate/usecases/config"
 )
 
 // Manager manages kind changes at a use-case level, i.e. agnostic of
@@ -89,20 +89,24 @@ type authorizer interface {
 }
 
 type VectorRepo interface {
-	PutObject(ctx context.Context, concept *models.Object, vector []float32) error
-	DeleteObject(ctx context.Context, className string, id strfmt.UUID) error
+	PutObject(ctx context.Context, concept *models.Object, vector []float32, vectors models.Vectors,
+		repl *additional.ReplicationProperties) error
+	DeleteObject(ctx context.Context, className string, id strfmt.UUID,
+		repl *additional.ReplicationProperties, tenant string) error
 	// Object returns object of the specified class giving by its id
 	Object(ctx context.Context, class string, id strfmt.UUID, props search.SelectProperties,
-		additional additional.Properties, repl *additional.ReplicationProperties) (*search.Result, error)
+		additional additional.Properties, repl *additional.ReplicationProperties,
+		tenant string) (*search.Result, error)
 	// Exists returns true if an object of a giving class exists
-	Exists(ctx context.Context, class string, id strfmt.UUID) (bool, error)
+	Exists(ctx context.Context, class string, id strfmt.UUID,
+		repl *additional.ReplicationProperties, tenant string) (bool, error)
 	ObjectByID(ctx context.Context, id strfmt.UUID, props search.SelectProperties,
-		additional additional.Properties) (*search.Result, error)
+		additional additional.Properties, tenant string) (*search.Result, error)
 	ObjectSearch(ctx context.Context, offset, limit int, filters *filters.LocalFilter,
-		sort []filters.Sort, additional additional.Properties) (search.Results, error)
-	AddReference(ctx context.Context, className string,
-		source strfmt.UUID, propName string, ref *models.SingleRef) error
-	Merge(ctx context.Context, merge MergeDocument) error
+		sort []filters.Sort, additional additional.Properties, tenant string) (search.Results, error)
+	AddReference(ctx context.Context, source *crossref.RefSource,
+		target *crossref.Ref, repl *additional.ReplicationProperties, tenant string) error
+	Merge(ctx context.Context, merge MergeDocument, repl *additional.ReplicationProperties, tenant string) error
 	Query(context.Context, *QueryInput) (search.Results, *Error)
 }
 
@@ -112,8 +116,11 @@ type ModulesProvider interface {
 	ListObjectsAdditionalExtend(ctx context.Context, in search.Results,
 		moduleParams map[string]interface{}) (search.Results, error)
 	UsingRef2Vec(className string) bool
-	UpdateVector(ctx context.Context, object *models.Object, class *models.Class, objectDiff *moduletools.ObjectDiff,
-		repo modulecapabilities.FindObjectFn, logger logrus.FieldLogger) error
+	UpdateVector(ctx context.Context, object *models.Object, class *models.Class, repo modulecapabilities.FindObjectFn,
+		logger logrus.FieldLogger) error
+	BatchUpdateVector(ctx context.Context, class *models.Class, objects []*models.Object,
+		findObjectFn modulecapabilities.FindObjectFn,
+		logger logrus.FieldLogger) (map[int]error, error)
 	VectorizerName(className string) (string, error)
 }
 

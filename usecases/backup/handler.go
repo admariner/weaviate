@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package backup
@@ -17,15 +17,19 @@ import (
 	"regexp"
 	"time"
 
-	"github.com/pkg/errors"
-	"github.com/semi-technologies/weaviate/entities/backup"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/modulecapabilities"
 	"github.com/sirupsen/logrus"
+	"github.com/weaviate/weaviate/entities/backup"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/modulecapabilities"
 )
 
 // Version of backup structure
-const Version = "1.0"
+const (
+	// Version > version1 support compression
+	Version = "2.0"
+	// version1 store plain files without compression
+	version1 = "1.0"
+)
 
 // TODO error handling need to be implemented properly.
 // Current error handling is not idiomatic and relays on string comparisons which makes testing very brittle.
@@ -41,12 +45,13 @@ type authorizer interface {
 }
 
 type schemaManger interface {
-	RestoreClass(ctx context.Context, d *backup.ClassDescriptor) error
+	RestoreClass(ctx context.Context, d *backup.ClassDescriptor, nodeMapping map[string]string) error
 	NodeName() string
 }
 
 type nodeResolver interface {
 	NodeHostname(nodeName string) (string, bool)
+	AllNames() []string
 	NodeCount() int
 }
 
@@ -58,7 +63,7 @@ type Status struct {
 	Err         string
 }
 
-type Manager struct {
+type Handler struct {
 	node string
 	// deps
 	logger     logrus.FieldLogger
@@ -68,15 +73,15 @@ type Manager struct {
 	backends   BackupBackendProvider
 }
 
-func NewManager(
+func NewHandler(
 	logger logrus.FieldLogger,
 	authorizer authorizer,
 	schema schemaManger,
 	sourcer Sourcer,
 	backends BackupBackendProvider,
-) *Manager {
+) *Handler {
 	node := schema.NodeName()
-	m := &Manager{
+	m := &Handler{
 		node:       node,
 		logger:     logger,
 		authorizer: authorizer,
@@ -93,7 +98,26 @@ func NewManager(
 	return m
 }
 
+// Compression is the compression configuration.
+type Compression struct {
+	// Level is one of DefaultCompression, BestSpeed, BestCompression
+	Level CompressionLevel
+
+	// ChunkSize represents the desired size for chunks between 1 - 512  MB
+	// However, during compression, the chunk size might
+	// slightly deviate from this value, being either slightly
+	// below or above the specified size
+	ChunkSize int
+
+	// CPUPercentage desired CPU core utilization (1%-80%), default: 50%
+	CPUPercentage int
+}
+
+// BackupRequest a transition request from API to Backend.
 type BackupRequest struct {
+	// Compression is the compression configuration.
+	Compression
+
 	// ID is the backup ID
 	ID string
 	// Backend specify on which backend to store backups (gcs, s3, ..)
@@ -105,85 +129,29 @@ type BackupRequest struct {
 	// Exclude means include all classes but those specified in Exclude
 	// The same class cannot appear in both Include and Exclude in the same request
 	Exclude []string
-}
 
-func (m *Manager) Backup(ctx context.Context, pr *models.Principal, req *BackupRequest,
-) (*models.BackupCreateResponse, error) {
-	store, err := nodeBackend(m.node, m.backends, req.Backend, req.ID)
-	if err != nil {
-		err = fmt.Errorf("no backup backend %q, did you enable the right module?", req.Backend)
-		return nil, backup.NewErrUnprocessable(err)
-	}
-
-	classes, err := m.validateBackupRequest(ctx, store, req)
-	if err != nil {
-		return nil, backup.NewErrUnprocessable(err)
-	}
-
-	if err := store.Initialize(ctx); err != nil {
-		return nil, backup.NewErrUnprocessable(fmt.Errorf("init uploader: %w", err))
-	}
-	if meta, err := m.backupper.Backup(ctx, store, req.ID, classes); err != nil {
-		return nil, err
-	} else {
-		status := string(meta.Status)
-		return &models.BackupCreateResponse{
-			Classes: classes,
-			ID:      req.ID,
-			Backend: req.Backend,
-			Status:  &status,
-			Path:    meta.Path,
-		}, nil
-	}
-}
-
-func (m *Manager) Restore(ctx context.Context, pr *models.Principal,
-	req *BackupRequest,
-) (*models.BackupRestoreResponse, error) {
-	store, err := nodeBackend(m.node, m.backends, req.Backend, req.ID)
-	if err != nil {
-		err = fmt.Errorf("no backup backend %q, did you enable the right module?", req.Backend)
-		return nil, backup.NewErrUnprocessable(err)
-	}
-	meta, err := m.validateRestoreRequest(ctx, store, req)
-	if err != nil {
-		return nil, err
-	}
-	cs := meta.List()
-	if cls := m.restorer.AnyExists(cs); cls != "" {
-		err := fmt.Errorf("cannot restore class %q because it already exists", cls)
-		return nil, backup.NewErrUnprocessable(err)
-	}
-	rreq := Request{
-		Method:  OpRestore,
-		ID:      meta.ID,
-		Backend: req.Backend,
-		Classes: cs,
-	}
-	data, err := m.restorer.Restore(ctx, &rreq, meta, store)
-	if err != nil {
-		return nil, backup.NewErrUnprocessable(err)
-	}
-
-	return data, nil
-}
-
-func (m *Manager) BackupStatus(ctx context.Context, principal *models.Principal,
-	backend, backupID string,
-) (*models.BackupCreateStatusResponse, error) {
-	return m.backupper.Status(ctx, backend, backupID)
-}
-
-func (m *Manager) RestorationStatus(ctx context.Context, principal *models.Principal, backend, ID string,
-) (_ Status, err error) {
-	return m.restorer.status(backend, ID)
+	// NodeMapping is a map of node name replacement where key is the old name and value is the new name
+	// No effect if the map is empty
+	NodeMapping map[string]string
 }
 
 // OnCanCommit will be triggered when coordinator asks the node to participate
 // in a distributed backup operation
-func (m *Manager) OnCanCommit(ctx context.Context, req *Request) *CanCommitResponse {
+func (m *Handler) OnCanCommit(ctx context.Context, req *Request) *CanCommitResponse {
 	ret := &CanCommitResponse{Method: req.Method, ID: req.ID}
-	store, err := nodeBackend(m.node, m.backends, req.Backend, req.ID)
+
+	nodeName := m.node
+	// If we are doing a restore and have a nodeMapping specified, ensure we use the "old" node name from the backup to retrieve/store the
+	// backup information.
+	if req.Method == OpRestore {
+		for oldNodeName, newNodeName := range req.NodeMapping {
+			if nodeName == newNodeName {
+				nodeName = oldNodeName
+				break
+			}
+		}
+	}
+	store, err := nodeBackend(nodeName, m.backends, req.Backend, req.ID)
 	if err != nil {
 		ret.Err = fmt.Sprintf("no backup backend %q, did you enable the right module?", req.Backend)
 		return ret
@@ -226,7 +194,7 @@ func (m *Manager) OnCanCommit(ctx context.Context, req *Request) *CanCommitRespo
 }
 
 // OnCommit will be triggered when the coordinator confirms the execution of a previous operation
-func (m *Manager) OnCommit(ctx context.Context, req *StatusRequest) (err error) {
+func (m *Handler) OnCommit(ctx context.Context, req *StatusRequest) (err error) {
 	switch req.Method {
 	case OpCreate:
 		return m.backupper.OnCommit(ctx, req)
@@ -238,7 +206,7 @@ func (m *Manager) OnCommit(ctx context.Context, req *StatusRequest) (err error) 
 }
 
 // OnAbort will be triggered when the coordinator abort the execution of a previous operation
-func (m *Manager) OnAbort(ctx context.Context, req *AbortRequest) error {
+func (m *Handler) OnAbort(ctx context.Context, req *AbortRequest) error {
 	switch req.Method {
 	case OpCreate:
 		return m.backupper.OnAbort(ctx, req)
@@ -250,7 +218,7 @@ func (m *Manager) OnAbort(ctx context.Context, req *AbortRequest) error {
 	}
 }
 
-func (m *Manager) OnStatus(ctx context.Context, req *StatusRequest) *StatusResponse {
+func (m *Handler) OnStatus(ctx context.Context, req *StatusRequest) *StatusResponse {
 	ret := StatusResponse{
 		Method: req.Method,
 		ID:     req.ID,
@@ -281,56 +249,6 @@ func (m *Manager) OnStatus(ctx context.Context, req *StatusRequest) *StatusRespo
 	return &ret
 }
 
-func (m *Manager) validateBackupRequest(ctx context.Context, store nodeStore, req *BackupRequest) ([]string, error) {
-	if err := validateID(req.ID); err != nil {
-		return nil, err
-	}
-	if len(req.Include) > 0 && len(req.Exclude) > 0 {
-		return nil, fmt.Errorf("malformed request: 'include' and 'exclude' cannot both contain values")
-	}
-	classes := req.Include
-	if len(classes) == 0 {
-		classes = m.backupper.sourcer.ListBackupable()
-	}
-	if classes = filterClasses(classes, req.Exclude); len(classes) == 0 {
-		return nil, fmt.Errorf("empty class list: please choose from : %v", classes)
-	}
-
-	if err := m.backupper.sourcer.Backupable(ctx, classes); err != nil {
-		return nil, err
-	}
-	destPath := store.HomeDir()
-	// there is no backup with given id on the backend, regardless of its state (valid or corrupted)
-	_, err := store.Meta(ctx, req.ID, false)
-	if err == nil {
-		return nil, fmt.Errorf("backup %q already exists at %q", req.ID, destPath)
-	}
-	if _, ok := err.(backup.ErrNotFound); !ok {
-		return nil, fmt.Errorf("check if backup %q exists at %q: %w", req.ID, destPath, err)
-	}
-	return classes, nil
-}
-
-func (m *Manager) validateRestoreRequest(ctx context.Context, store nodeStore, req *BackupRequest) (*backup.BackupDescriptor, error) {
-	if len(req.Include) > 0 && len(req.Exclude) > 0 {
-		err := fmt.Errorf("malformed request: 'include' and 'exclude' cannot both contain values")
-		return nil, backup.NewErrUnprocessable(err)
-	}
-	meta, cs, err := m.restorer.validate(ctx, &store, &Request{ID: req.ID, Classes: req.Include})
-	if err != nil {
-		if errors.Is(err, errMetaNotFound) {
-			return nil, backup.NewErrNotFound(err)
-		}
-		return nil, backup.NewErrUnprocessable(err)
-	}
-	meta.Exclude(req.Exclude)
-	if len(meta.Classes) == 0 {
-		err = fmt.Errorf("empty class list: please choose from : %v", cs)
-		return nil, backup.NewErrUnprocessable(err)
-	}
-	return meta, nil
-}
-
 func validateID(backupID string) error {
 	if !regExpID.MatchString(backupID) {
 		return fmt.Errorf("invalid backup id: allowed characters are lowercase, 0-9, _, -")
@@ -355,15 +273,21 @@ func filterClasses(classes, excludes []string) []string {
 	if len(excludes) == 0 {
 		return classes
 	}
-	cs := classes[:0]
-	xmap := make(map[string]struct{}, len(excludes))
-	for _, c := range excludes {
-		xmap[c] = struct{}{}
-	}
+	m := make(map[string]struct{}, len(classes))
 	for _, c := range classes {
-		if _, ok := xmap[c]; !ok {
-			cs = append(cs, c)
+		m[c] = struct{}{}
+	}
+	for _, x := range excludes {
+		delete(m, x)
+	}
+	if len(classes) != len(m) {
+		classes = classes[:len(m)]
+		i := 0
+		for k := range m {
+			classes[i] = k
+			i++
 		}
 	}
-	return cs
+
+	return classes
 }

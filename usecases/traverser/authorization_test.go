@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package traverser
@@ -18,12 +18,13 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/semi-technologies/weaviate/entities/aggregation"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/usecases/config"
 	"github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/entities/aggregation"
+	"github.com/weaviate/weaviate/entities/dto"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/usecases/config"
 )
 
 // A component-test like test suite that makes sure that every available UC is
@@ -40,7 +41,7 @@ func Test_Traverser_Authorization(t *testing.T) {
 	tests := []testCase{
 		{
 			methodName:       "GetClass",
-			additionalArgs:   []interface{}{GetParams{}},
+			additionalArgs:   []interface{}{dto.GetParams{}},
 			expectedVerb:     "get",
 			expectedResource: "traversal/*",
 		},
@@ -82,7 +83,7 @@ func Test_Traverser_Authorization(t *testing.T) {
 			schemaGetter := &fakeSchemaGetter{}
 
 			manager := NewTraverser(&config.WeaviateConfig{}, locks, logger, authorizer,
-				vectorRepo, explorer, schemaGetter, nil, nil)
+				vectorRepo, explorer, schemaGetter, nil, nil, -1)
 
 			args := append([]interface{}{context.Background(), principal}, test.additionalArgs...)
 			out, _ := callFuncByName(manager, test.methodName, args...)
@@ -91,7 +92,7 @@ func Test_Traverser_Authorization(t *testing.T) {
 			assert.Equal(t, errors.New("just a test fake"), out[len(out)-1].Interface(),
 				"execution must abort with authorizer error")
 			assert.Equal(t, authorizeCall{principal, test.expectedVerb, test.expectedResource},
-				authorizer.calls[0], "correct paramteres must have been used on authorizer")
+				authorizer.calls[0], "correct parameters must have been used on authorizer")
 		}
 	})
 }

@@ -4,141 +4,225 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package replica
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"strings"
+
+	enterrors "github.com/weaviate/weaviate/entities/errors"
 
 	"github.com/go-openapi/strfmt"
-	"github.com/pkg/errors"
-	"github.com/semi-technologies/weaviate/entities/additional"
-	"github.com/semi-technologies/weaviate/entities/search"
-	"github.com/semi-technologies/weaviate/entities/storobj"
-	"golang.org/x/sync/errgroup"
+	"github.com/sirupsen/logrus"
+	"github.com/weaviate/weaviate/entities/additional"
+	"github.com/weaviate/weaviate/entities/search"
+	"github.com/weaviate/weaviate/entities/storobj"
+	"github.com/weaviate/weaviate/usecases/objects"
+)
+
+var (
+	// msgCLevel consistency level cannot be achieved
+	msgCLevel = "cannot achieve consistency level"
+
+	errReplicas = errors.New("cannot reach enough replicas")
+	errRepair   = errors.New("read repair error")
+	errRead     = errors.New("read error")
+)
+
+type (
+	// senderReply is a container for the data received from a replica
+	senderReply[T any] struct {
+		sender     string // hostname of the sender
+		Version    int64  // sender's current version of the object
+		Data       T      // the data sent by the sender
+		UpdateTime int64  // sender's current update time
+		DigestRead bool
+	}
+	findOneReply senderReply[objects.Replica]
+	existReply   struct {
+		Sender string
+		RepairResponse
+	}
 )
 
 // Finder finds replicated objects
 type Finder struct {
-	RClient            // needed to commit and abort operation
-	resolver *resolver // host names of replicas
-	class    string
+	resolver     *resolver // host names of replicas
+	finderStream           // stream of objects
 }
 
+// NewFinder constructs a new finder instance
 func NewFinder(className string,
-	stateGetter shardingState, nodeResolver nodeResolver,
-	client RClient,
+	resolver *resolver,
+	client rClient,
+	l logrus.FieldLogger,
 ) *Finder {
+	cl := finderClient{client}
 	return &Finder{
-		class: className,
-		resolver: &resolver{
-			schema:       stateGetter,
-			nodeResolver: nodeResolver,
-			class:        className,
+		resolver: resolver,
+		finderStream: finderStream{
+			repairer: repairer{
+				class:  className,
+				client: cl,
+				logger: l,
+			},
+			log: l,
 		},
-		RClient: client,
 	}
 }
 
-// FindOne finds one object which satisfies the giving consistency
-func (f *Finder) FindOne(ctx context.Context, l ConsistencyLevel, shard string,
-	id strfmt.UUID, props search.SelectProperties, additional additional.Properties,
+// GetOne gets object which satisfies the giving consistency
+func (f *Finder) GetOne(ctx context.Context,
+	l ConsistencyLevel, shard string,
+	id strfmt.UUID,
+	props search.SelectProperties,
+	adds additional.Properties,
 ) (*storobj.Object, error) {
-	var level int
-	state, err := f.resolver.State(shard)
-	if err == nil {
-		level, err = state.ConsistencyLevel(l)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("%w : class %q shard %q", err, f.class, shard)
-	}
-
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	writer := func() <-chan tuple {
-		responses := make(chan tuple, len(state.Hosts))
-		var g errgroup.Group
-		for i, host := range state.Hosts {
-			i, host := i, host
-			g.Go(func() error {
-				o, err := f.FindObject(ctx, host, f.class, shard, id, props, additional)
-				responses <- tuple{o, i, err}
-				return nil
-			})
+	c := newReadCoordinator[findOneReply](f, shard)
+	op := func(ctx context.Context, host string, fullRead bool) (findOneReply, error) {
+		if fullRead {
+			r, err := f.client.FullRead(ctx, host, f.class, shard, id, props, adds)
+			return findOneReply{host, 0, r, r.UpdateTime(), false}, err
+		} else {
+			xs, err := f.client.DigestReads(ctx, host, f.class, shard, []strfmt.UUID{id})
+			var x RepairResponse
+			if len(xs) == 1 {
+				x = xs[0]
+			}
+			r := objects.Replica{ID: id, Deleted: x.Deleted}
+			return findOneReply{host, x.Version, r, x.UpdateTime, true}, err
 		}
-		go func() { g.Wait(); close(responses) }()
-		return responses
+	}
+	replyCh, state, err := c.Pull(ctx, l, op, "")
+	if err != nil {
+		f.log.WithField("op", "pull.one").Error(err)
+		return nil, fmt.Errorf("%s %q: %w", msgCLevel, l, errReplicas)
+	}
+	result := <-f.readOne(ctx, shard, id, replyCh, state)
+	if err = result.Err; err != nil {
+		err = fmt.Errorf("%s %q: %w", msgCLevel, l, err)
+	}
+	return result.Value, err
+}
+
+type ShardDesc struct {
+	Name string
+	Node string
+}
+
+// CheckConsistency for objects belonging to different physical shards.
+//
+// For each x in xs the fields BelongsToNode and BelongsToShard must be set non empty
+func (f *Finder) CheckConsistency(ctx context.Context,
+	l ConsistencyLevel, xs []*storobj.Object,
+) (retErr error) {
+	if len(xs) == 0 {
+		return nil
+	}
+	for i, x := range xs { // check shard and node name are set
+		if x == nil {
+			return fmt.Errorf("contains nil at object at index %d", i)
+		}
+		if x.BelongsToNode == "" || x.BelongsToShard == "" {
+			return fmt.Errorf("missing node or shard at index %d", i)
+		}
 	}
 
-	return readObject(writer(), level, state.Hosts, state.Len())
+	if l == One { // already consistent
+		for i := range xs {
+			xs[i].IsConsistent = true
+		}
+		return nil
+	}
+	// check shard consistency concurrently
+	gr, ctx := enterrors.NewErrorGroupWithContextWrapper(f.logger, ctx)
+	for _, part := range cluster(createBatch(xs)) {
+		part := part
+		gr.Go(func() error {
+			_, err := f.checkShardConsistency(ctx, l, part)
+			if err != nil {
+				f.log.WithField("op", "check_shard_consistency").
+					WithField("shard", part.Shard).Error(err)
+			}
+			return err
+		}, part)
+	}
+	return gr.Wait()
+}
+
+// Exists checks if an object exists which satisfies the giving consistency
+func (f *Finder) Exists(ctx context.Context,
+	l ConsistencyLevel,
+	shard string,
+	id strfmt.UUID,
+) (bool, error) {
+	c := newReadCoordinator[existReply](f, shard)
+	op := func(ctx context.Context, host string, _ bool) (existReply, error) {
+		xs, err := f.client.DigestReads(ctx, host, f.class, shard, []strfmt.UUID{id})
+		var x RepairResponse
+		if len(xs) == 1 {
+			x = xs[0]
+		}
+		return existReply{host, x}, err
+	}
+	replyCh, state, err := c.Pull(ctx, l, op, "")
+	if err != nil {
+		f.log.WithField("op", "pull.exist").Error(err)
+		return false, fmt.Errorf("%s %q: %w", msgCLevel, l, errReplicas)
+	}
+	result := <-f.readExistence(ctx, shard, id, replyCh, state)
+	if err = result.Err; err != nil {
+		err = fmt.Errorf("%s %q: %w", msgCLevel, l, err)
+	}
+	return result.Value, err
 }
 
 // NodeObject gets object from a specific node.
 // it is used mainly for debugging purposes
-func (f *Finder) NodeObject(ctx context.Context, nodeName, shard string,
-	id strfmt.UUID, props search.SelectProperties, additional additional.Properties,
+func (f *Finder) NodeObject(ctx context.Context,
+	nodeName,
+	shard string,
+	id strfmt.UUID,
+	props search.SelectProperties, adds additional.Properties,
 ) (*storobj.Object, error) {
 	host, ok := f.resolver.NodeHostname(nodeName)
 	if !ok || host == "" {
 		return nil, fmt.Errorf("cannot resolve node name: %s", nodeName)
 	}
-	return f.RClient.FindObject(ctx, host, f.class, shard, id, props, additional)
+	r, err := f.client.FullRead(ctx, host, f.class, shard, id, props, adds)
+	return r.Object, err
 }
 
-func readObject(responses <-chan tuple, cl int, hosts []string, N int) (*storobj.Object, error) {
-	counters := make([]tuple, len(hosts))
-	nnf := 0
-	for r := range responses {
-		if r.err != nil {
-			counters[r.i] = tuple{nil, 0, r.err}
-			continue
-		} else if r.o == nil {
-			nnf++
-			continue
-		}
-		counters[r.i] = tuple{r.o, 1, nil}
-		max := 0
-		for i := range counters {
-			if counters[i].o != nil && i != r.i && counters[i].o.LastUpdateTimeUnix() == r.o.LastUpdateTimeUnix() {
-				counters[i].i++
-			}
-			if max < counters[i].i {
-				max = counters[i].i
-			}
-			if max >= cl {
-				return counters[i].o, nil
-			}
-		}
-	}
-	if nnf == N { // object doesn't exist
-		return nil, nil
-	}
-
-	var sb strings.Builder
-	for i, c := range counters {
-		if i != 0 {
-			sb.WriteString(", ")
-		}
-		if c.err != nil {
-			fmt.Fprintf(&sb, "%s: %s", hosts[i], c.err.Error())
-		} else if c.o == nil {
-			fmt.Fprintf(&sb, "%s: 0", hosts[i])
+// checkShardConsistency checks consistency for a set of objects belonging to a shard
+// It returns the most recent objects or and error
+func (f *Finder) checkShardConsistency(ctx context.Context,
+	l ConsistencyLevel,
+	batch shardPart,
+) ([]*storobj.Object, error) {
+	var (
+		c         = newReadCoordinator[batchReply](f, batch.Shard)
+		shard     = batch.Shard
+		data, ids = batch.Extract() // extract from current content
+	)
+	op := func(ctx context.Context, host string, fullRead bool) (batchReply, error) {
+		if fullRead { // we already have the content
+			return batchReply{Sender: host, IsDigest: false, FullData: data}, nil
 		} else {
-			fmt.Fprintf(&sb, "%s: %d", hosts[i], c.o.LastUpdateTimeUnix())
+			xs, err := f.client.DigestReads(ctx, host, f.class, shard, ids)
+			return batchReply{Sender: host, IsDigest: true, DigestData: xs}, err
 		}
 	}
-	return nil, errors.New(sb.String())
-}
 
-type tuple struct {
-	o   *storobj.Object
-	i   int
-	err error
+	replyCh, state, err := c.Pull(ctx, l, op, batch.Node)
+	if err != nil {
+		return nil, fmt.Errorf("pull shard: %w", errReplicas)
+	}
+	result := <-f.readBatchPart(ctx, batch, ids, replyCh, state)
+	return result.Value, result.Err
 }

@@ -4,32 +4,30 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package objects
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
-	"github.com/pkg/errors"
-	"github.com/semi-technologies/weaviate/adapters/handlers/rest/filterext"
-	"github.com/semi-technologies/weaviate/entities/filters"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/schema"
-)
-
-const (
-	OutputMinimal = "minimal"
-	OutputVerbose = "verbose"
+	"github.com/weaviate/weaviate/adapters/handlers/rest/filterext"
+	"github.com/weaviate/weaviate/entities/additional"
+	"github.com/weaviate/weaviate/entities/filters"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/verbosity"
 )
 
 // DeleteObjects deletes objects in batch based on the match filter
 func (b *BatchManager) DeleteObjects(ctx context.Context, principal *models.Principal,
 	match *models.BatchDeleteMatch, dryRun *bool, output *string,
+	repl *additional.ReplicationProperties, tenant string,
 ) (*BatchDeleteResponse, error) {
 	err := b.authorizer.Authorize(principal, "delete", "batch/objects")
 	if err != nil {
@@ -45,20 +43,43 @@ func (b *BatchManager) DeleteObjects(ctx context.Context, principal *models.Prin
 	b.metrics.BatchDeleteInc()
 	defer b.metrics.BatchDeleteDec()
 
-	return b.deleteObjects(ctx, principal, match, dryRun, output)
+	return b.deleteObjects(ctx, principal, match, dryRun, output, repl, tenant)
+}
+
+// DeleteObjectsFromGRPC deletes objects in batch based on the match filter
+func (b *BatchManager) DeleteObjectsFromGRPC(ctx context.Context, principal *models.Principal,
+	params BatchDeleteParams,
+	repl *additional.ReplicationProperties, tenant string,
+) (BatchDeleteResult, error) {
+	err := b.authorizer.Authorize(principal, "delete", "batch/objects")
+	if err != nil {
+		return BatchDeleteResult{}, err
+	}
+
+	unlock, err := b.locks.LockConnector()
+	if err != nil {
+		return BatchDeleteResult{}, NewErrInternal("could not acquire lock: %v", err)
+	}
+	defer unlock()
+
+	b.metrics.BatchDeleteInc()
+	defer b.metrics.BatchDeleteDec()
+
+	return b.vectorRepo.BatchDeleteObjects(ctx, params, repl, tenant)
 }
 
 func (b *BatchManager) deleteObjects(ctx context.Context, principal *models.Principal,
 	match *models.BatchDeleteMatch, dryRun *bool, output *string,
+	repl *additional.ReplicationProperties, tenant string,
 ) (*BatchDeleteResponse, error) {
 	params, err := b.validateBatchDelete(ctx, principal, match, dryRun, output)
 	if err != nil {
 		return nil, NewErrInvalidUserInput("validate: %v", err)
 	}
 
-	result, err := b.vectorRepo.BatchDeleteObjects(ctx, *params)
+	result, err := b.vectorRepo.BatchDeleteObjects(ctx, *params, repl, tenant)
 	if err != nil {
-		return nil, NewErrInternal("batch delete objects: %#v", err)
+		return nil, fmt.Errorf("batch delete objects: %w", err)
 	}
 
 	return b.toResponse(match, params.Output, result)
@@ -121,15 +142,9 @@ func (b *BatchManager) validateBatchDelete(ctx context.Context, principal *model
 		dryRunParam = *dryRun
 	}
 
-	outputParam := OutputMinimal
-	if output != nil {
-		switch *output {
-		case OutputMinimal, OutputVerbose:
-			outputParam = *output
-		default:
-			return nil, fmt.Errorf(`invalid output: "%s", possible values are: "%s", "%s"`,
-				*output, OutputMinimal, OutputVerbose)
-		}
+	outputParam, err := verbosity.ParseOutput(output)
+	if err != nil {
+		return nil, err
 	}
 
 	params := &BatchDeleteParams{

@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package traverser
@@ -17,11 +17,11 @@ import (
 	"testing"
 
 	"github.com/go-openapi/strfmt"
-	"github.com/semi-technologies/weaviate/entities/additional"
-	"github.com/semi-technologies/weaviate/entities/schema/crossref"
-	"github.com/semi-technologies/weaviate/entities/search"
-	"github.com/semi-technologies/weaviate/entities/searchparams"
 	"github.com/stretchr/testify/assert"
+	"github.com/weaviate/weaviate/entities/additional"
+	"github.com/weaviate/weaviate/entities/schema/crossref"
+	"github.com/weaviate/weaviate/entities/search"
+	"github.com/weaviate/weaviate/entities/searchparams"
 )
 
 func Test_nearParamsVector_validateNearParams(t *testing.T) {
@@ -270,7 +270,7 @@ func Test_nearParamsVector_vectorFromParams(t *testing.T) {
 				modulesProvider: &fakeModulesProvider{},
 				search:          &fakeNearParamsSearcher{},
 			}
-			got, err := e.vectorFromParams(tt.args.ctx, tt.args.nearVector, tt.args.nearObject, tt.args.moduleParams, tt.args.className)
+			got, targetVector, err := e.vectorFromParams(tt.args.ctx, tt.args.nearVector, tt.args.nearObject, tt.args.moduleParams, tt.args.className, "")
 			if (err != nil) != tt.wantErr {
 				t.Errorf("nearParamsVector.vectorFromParams() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -278,6 +278,7 @@ func Test_nearParamsVector_vectorFromParams(t *testing.T) {
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("nearParamsVector.vectorFromParams() = %v, want %v", got, tt.want)
 			}
+			assert.Equal(t, "", targetVector)
 		})
 	}
 }
@@ -372,7 +373,7 @@ func Test_nearParamsVector_extractCertaintyFromParams(t *testing.T) {
 type fakeNearParamsSearcher struct{}
 
 func (f *fakeNearParamsSearcher) ObjectsByID(ctx context.Context, id strfmt.UUID,
-	props search.SelectProperties, additional additional.Properties,
+	props search.SelectProperties, additional additional.Properties, tenant string,
 ) (search.Results, error) {
 	return search.Results{
 		{Vector: []float32{1.0, 1.0, 1.0}},
@@ -381,7 +382,7 @@ func (f *fakeNearParamsSearcher) ObjectsByID(ctx context.Context, id strfmt.UUID
 
 func (f *fakeNearParamsSearcher) Object(ctx context.Context, className string, id strfmt.UUID,
 	props search.SelectProperties, additional additional.Properties,
-	repl *additional.ReplicationProperties,
+	repl *additional.ReplicationProperties, tenant string,
 ) (*search.Result, error) {
 	if className == "SpecifiedClass" {
 		return &search.Result{

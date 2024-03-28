@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package filterext
@@ -15,9 +15,9 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/semi-technologies/weaviate/entities/filters"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/filters"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
 )
 
 func parseValue(in *models.WhereFilter) (*filters.Value, error) {
@@ -66,14 +66,6 @@ var valueExtractors = []valueExtractorFunc{
 
 		return valueFilter(*in.ValueNumber, schema.DataTypeNumber), nil
 	},
-	// string
-	func(in *models.WhereFilter) (*filters.Value, error) {
-		if in.ValueString == nil {
-			return nil, nil
-		}
-
-		return valueFilter(*in.ValueString, schema.DataTypeString), nil
-	},
 	// text
 	func(in *models.WhereFilter) (*filters.Value, error) {
 		if in.ValueText == nil {
@@ -98,6 +90,52 @@ var valueExtractors = []valueExtractorFunc{
 
 		return valueFilter(*in.ValueBoolean, schema.DataTypeBoolean), nil
 	},
+
+	// int array
+	func(in *models.WhereFilter) (*filters.Value, error) {
+		if len(in.ValueIntArray) == 0 {
+			return nil, nil
+		}
+
+		valueInts := make([]int, len(in.ValueIntArray))
+		for i := range in.ValueIntArray {
+			valueInts[i] = int(in.ValueIntArray[i])
+		}
+		return valueFilter(valueInts, schema.DataTypeInt), nil
+	},
+	// number array
+	func(in *models.WhereFilter) (*filters.Value, error) {
+		if len(in.ValueNumberArray) == 0 {
+			return nil, nil
+		}
+
+		return valueFilter(in.ValueNumberArray, schema.DataTypeNumber), nil
+	},
+	// text array
+	func(in *models.WhereFilter) (*filters.Value, error) {
+		if len(in.ValueTextArray) == 0 {
+			return nil, nil
+		}
+
+		return valueFilter(in.ValueTextArray, schema.DataTypeText), nil
+	},
+	// date (as string) array
+	func(in *models.WhereFilter) (*filters.Value, error) {
+		if len(in.ValueDateArray) == 0 {
+			return nil, nil
+		}
+
+		return valueFilter(in.ValueDateArray, schema.DataTypeDate), nil
+	},
+	// boolean
+	func(in *models.WhereFilter) (*filters.Value, error) {
+		if len(in.ValueBooleanArray) == 0 {
+			return nil, nil
+		}
+
+		return valueFilter(in.ValueBooleanArray, schema.DataTypeBoolean), nil
+	},
+
 	// geo range
 	func(in *models.WhereFilter) (*filters.Value, error) {
 		if in.ValueGeoRange == nil {
@@ -123,6 +161,22 @@ var valueExtractors = []valueExtractorFunc{
 				Longitude: in.ValueGeoRange.GeoCoordinates.Longitude,
 			},
 		}, schema.DataTypeGeoCoordinates), nil
+	},
+	// deprecated string
+	func(in *models.WhereFilter) (*filters.Value, error) {
+		if in.ValueString == nil {
+			return nil, nil
+		}
+
+		return valueFilter(*in.ValueString, schema.DataTypeString), nil
+	},
+	// deprecated string array
+	func(in *models.WhereFilter) (*filters.Value, error) {
+		if len(in.ValueStringArray) == 0 {
+			return nil, nil
+		}
+
+		return valueFilter(in.ValueStringArray, schema.DataTypeString), nil
 	},
 }
 

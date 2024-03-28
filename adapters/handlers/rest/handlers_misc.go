@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package rest
@@ -16,12 +16,14 @@ import (
 	"net/url"
 
 	middleware "github.com/go-openapi/runtime/middleware"
-	"github.com/semi-technologies/weaviate/adapters/handlers/rest/operations"
-	"github.com/semi-technologies/weaviate/adapters/handlers/rest/operations/meta"
-	"github.com/semi-technologies/weaviate/adapters/handlers/rest/operations/well_known"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	"github.com/semi-technologies/weaviate/usecases/config"
+	"github.com/sirupsen/logrus"
+	"github.com/weaviate/weaviate/adapters/handlers/rest/operations"
+	"github.com/weaviate/weaviate/adapters/handlers/rest/operations/meta"
+	"github.com/weaviate/weaviate/adapters/handlers/rest/operations/well_known"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/usecases/config"
+	"github.com/weaviate/weaviate/usecases/monitoring"
 )
 
 type schemaManager interface {
@@ -30,8 +32,9 @@ type schemaManager interface {
 }
 
 func setupMiscHandlers(api *operations.WeaviateAPI, serverConfig *config.WeaviateConfig,
-	schemaManager schemaManager, modulesProvider ModulesProvider,
+	schemaManager schemaManager, modulesProvider ModulesProvider, metrics *monitoring.PrometheusMetrics, logger logrus.FieldLogger,
 ) {
+	metricRequestsTotal := newMiscRequestsTotal(metrics, logger)
 	api.MetaMetaGetHandler = meta.MetaGetHandlerFunc(func(params meta.MetaGetParams, principal *models.Principal) middleware.Responder {
 		var (
 			metaInfos = map[string]interface{}{}
@@ -41,6 +44,7 @@ func setupMiscHandlers(api *operations.WeaviateAPI, serverConfig *config.Weaviat
 		if modulesProvider != nil {
 			metaInfos, err = modulesProvider.GetMeta()
 			if err != nil {
+				metricRequestsTotal.logError("", err)
 				return meta.NewMetaGetInternalServerError().WithPayload(errPayloadFromSingleErr(err))
 			}
 		}
@@ -50,17 +54,20 @@ func setupMiscHandlers(api *operations.WeaviateAPI, serverConfig *config.Weaviat
 			Version:  config.ServerVersion,
 			Modules:  metaInfos,
 		}
+		metricRequestsTotal.logOk("")
 		return meta.NewMetaGetOK().WithPayload(res)
 	})
 
 	api.WellKnownGetWellKnownOpenidConfigurationHandler = well_known.GetWellKnownOpenidConfigurationHandlerFunc(
 		func(params well_known.GetWellKnownOpenidConfigurationParams, principal *models.Principal) middleware.Responder {
 			if !serverConfig.Config.Authentication.OIDC.Enabled {
+				metricRequestsTotal.logUserError("")
 				return well_known.NewGetWellKnownOpenidConfigurationNotFound()
 			}
 
 			target, err := url.JoinPath(serverConfig.Config.Authentication.OIDC.Issuer, "/.well-known/openid-configuration")
 			if err != nil {
+				metricRequestsTotal.logError("", err)
 				return well_known.NewGetWellKnownOpenidConfigurationInternalServerError().WithPayload(errPayloadFromSingleErr(err))
 			}
 			clientID := serverConfig.Config.Authentication.OIDC.ClientID
@@ -71,6 +78,7 @@ func setupMiscHandlers(api *operations.WeaviateAPI, serverConfig *config.Weaviat
 				Scopes:   scopes,
 			}
 
+			metricRequestsTotal.logOk("")
 			return well_known.NewGetWellKnownOpenidConfigurationOK().WithPayload(body)
 		})
 
@@ -86,55 +94,59 @@ func setupMiscHandlers(api *operations.WeaviateAPI, serverConfig *config.Weaviat
 					{
 						Name:              "view complete schema",
 						Href:              fmt.Sprintf("%s/v1/schema", origin),
-						DocumentationHref: "https://weaviate.io/developers/weaviate/current/restful-api-references/schema.html",
+						DocumentationHref: "https://weaviate.io/developers/weaviate/api/rest/schema",
 					},
 					{
 						Name:              "CRUD schema",
 						Href:              fmt.Sprintf("%s/v1/schema{/:className}", origin),
-						DocumentationHref: "https://weaviate.io/developers/weaviate/current/restful-api-references/schema.html",
+						DocumentationHref: "https://weaviate.io/developers/weaviate/api/rest/schema",
 					},
 					{
 						Name:              "CRUD objects",
 						Href:              fmt.Sprintf("%s/v1/objects{/:id}", origin),
-						DocumentationHref: "https://weaviate.io/developers/weaviate/current/restful-api-references/objects.html",
+						DocumentationHref: "https://weaviate.io/developers/weaviate/api/rest/objects",
 					},
 					{
 						Name:              "trigger and view status of classifications",
 						Href:              fmt.Sprintf("%s/v1/classifications{/:id}", origin),
-						DocumentationHref: "https://weaviate.io/developers/weaviate/current/modules/text2vec-contextionary.html#contextual-classification,https://weaviate.io/developers/weaviate/current/restful-api-references/classification.html#knn-classification",
+						DocumentationHref: "https://weaviate.io/developers/weaviate/api/rest/classification,https://weaviate.io/developers/weaviate/api/rest/classification#knn-classification",
 					},
 					{
 						Name:              "check if Weaviate is live (returns 200 on GET when live)",
 						Href:              fmt.Sprintf("%s/v1/.well-known/live", origin),
-						DocumentationHref: "https://weaviate.io/developers/weaviate/current/restful-api-references/well-known.html#liveness",
+						DocumentationHref: "https://weaviate.io/developers/weaviate/api/rest/well-known#liveness",
 					},
 					{
 						Name:              "check if Weaviate is ready (returns 200 on GET when ready)",
 						Href:              fmt.Sprintf("%s/v1/.well-known/ready", origin),
-						DocumentationHref: "https://weaviate.io/developers/weaviate/current/restful-api-references/well-known.html#readiness",
+						DocumentationHref: "https://weaviate.io/developers/weaviate/api/rest/well-known#readiness",
 					},
 					{
 						Name:              "view link to openid configuration (returns 404 on GET if no openid is configured)",
 						Href:              fmt.Sprintf("%s/v1/.well-known/openid-configuration", origin),
-						DocumentationHref: "https://weaviate.io/developers/weaviate/current/restful-api-references/well-known.html#openid-configuration",
-					},
-
-					// TODO: part of the text2vec-contextionary module
-					{
-						Name:              "search contextionary for concepts (part of the text2vec-contextionary module)",
-						Href:              fmt.Sprintf("%s/v1/modules/text2vec-contextionary/concepts/:concept", origin),
-						DocumentationHref: "https://weaviate.io/developers/weaviate/current/retriever-vectorizer-modules/text2vec-contextionary.html#module-endpoints-api-reference",
-					},
-
-					// TODO: part of the text2vec-contextionary module
-					{
-						Name:              "extend contextionary with custom extensions (part of the text2vec-contextionary module)",
-						Href:              fmt.Sprintf("%s/v1/modules/text2vec-contextionary/extensions", origin),
-						DocumentationHref: "https://weaviate.io/developers/weaviate/current/retriever-vectorizer-modules/text2vec-contextionary.html#module-endpoints-api-reference",
+						DocumentationHref: "https://weaviate.io/developers/weaviate/api/rest/well-known#openid-configuration",
 					},
 				},
 			}
 
+			metricRequestsTotal.logOk("")
 			return operations.NewWeaviateRootOK().WithPayload(body)
 		})
+}
+
+type miscRequestsTotal struct {
+	*restApiRequestsTotalImpl
+}
+
+func newMiscRequestsTotal(metrics *monitoring.PrometheusMetrics, logger logrus.FieldLogger) restApiRequestsTotal {
+	return &miscRequestsTotal{
+		restApiRequestsTotalImpl: &restApiRequestsTotalImpl{newRequestsTotalMetric(metrics, "rest"), "rest", "misc", logger},
+	}
+}
+
+func (e *miscRequestsTotal) logError(className string, err error) {
+	switch err.(type) {
+	default:
+		e.logServerError(className, err)
+	}
 }

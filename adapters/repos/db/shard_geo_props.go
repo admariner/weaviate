@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package db
@@ -16,22 +16,32 @@ import (
 	"fmt"
 
 	"github.com/pkg/errors"
-	"github.com/semi-technologies/weaviate/adapters/repos/db/propertyspecific"
-	"github.com/semi-technologies/weaviate/adapters/repos/db/vector/geo"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	"github.com/semi-technologies/weaviate/entities/storagestate"
-	"github.com/semi-technologies/weaviate/entities/storobj"
+	"github.com/weaviate/weaviate/adapters/repos/db/propertyspecific"
+	"github.com/weaviate/weaviate/adapters/repos/db/vector/geo"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/storagestate"
+	"github.com/weaviate/weaviate/entities/storobj"
 )
 
 func (s *Shard) initGeoProp(prop *models.Property) error {
+	// starts geo props cycles if actual geo property is present
+	// (safe to start multiple times)
+	s.index.cycleCallbacks.geoPropsCommitLoggerCycle.Start()
+	s.index.cycleCallbacks.geoPropsTombstoneCleanupCycle.Start()
+
 	idx, err := geo.NewIndex(geo.Config{
-		ID:                 geoPropID(s.ID(), prop.Name),
-		RootPath:           s.index.Config.RootPath,
+		ID:                 geoPropID(prop.Name),
+		RootPath:           s.path(),
 		CoordinatesForID:   s.makeCoordinatesForID(prop.Name),
 		DisablePersistence: false,
 		Logger:             s.index.logger,
-	})
+	},
+		s.cycleCallbacks.geoPropsCommitLoggerCallbacks,
+		s.cycleCallbacks.geoPropsTombstoneCleanupCallbacks,
+		s.cycleCallbacks.compactionCallbacks,
+		s.cycleCallbacks.flushCallbacks,
+	)
 	if err != nil {
 		return errors.Wrapf(err, "create geo index for prop %q", prop.Name)
 	}
@@ -77,8 +87,8 @@ func (s *Shard) makeCoordinatesForID(propName string) geo.CoordinatesForID {
 	}
 }
 
-func geoPropID(shardID string, propName string) string {
-	return fmt.Sprintf("%s_%s", shardID, propName)
+func geoPropID(propName string) string {
+	return fmt.Sprintf("geo.%s", propName)
 }
 
 func (s *Shard) updatePropertySpecificIndices(object *storobj.Object,
@@ -117,6 +127,11 @@ func (s *Shard) updateGeoIndex(propName string, index propertyspecific.Index,
 ) error {
 	if s.isReadOnly() {
 		return storagestate.ErrStatusReadOnly
+	}
+
+	// geo props were not changed
+	if status.docIDPreserved || status.skipUpsert {
+		return nil
 	}
 
 	if status.docIDChanged {

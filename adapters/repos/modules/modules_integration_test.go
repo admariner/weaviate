@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 //go:build integrationTest
@@ -15,20 +15,27 @@
 package modulestorage
 
 import (
+	"crypto/rand"
 	"fmt"
-	"math/rand"
+	"math/big"
 	"os"
 	"testing"
-	"time"
 
 	"github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
+func mustRandIntn(max int64) int {
+	randInt, err := rand.Int(rand.Reader, big.NewInt(max))
+	if err != nil {
+		panic(fmt.Sprintf("mustRandIntn error: %v", err))
+	}
+	return int(randInt.Int64())
+}
+
 func Test_ModuleStorage(t *testing.T) {
-	rand.Seed(time.Now().UnixNano())
-	dirName := fmt.Sprintf("./testdata/%d", rand.Intn(10000000))
+	dirName := fmt.Sprintf("./testdata/%d", mustRandIntn(10000000))
 	os.MkdirAll(dirName, 0o777)
 	defer func() {
 		err := os.RemoveAll(dirName)

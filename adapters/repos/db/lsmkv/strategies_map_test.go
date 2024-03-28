@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package lsmkv
@@ -158,7 +158,7 @@ func TestMapEncoderDecoderJourney(t *testing.T) {
 			}
 			res, err := newMapDecoder().Do(encoded, false)
 			require.Nil(t, err)
-			// NOTE: we are accpeting that the order can be lost on updates
+			// NOTE: we are accepting that the order can be lost on updates
 			assert.ElementsMatch(t, test.out, res)
 		})
 	}
@@ -206,7 +206,7 @@ func TestDecoderRemoveTombstones(t *testing.T) {
 		assert.Equal(t, expected, actual)
 	})
 
-	t.Run("single entry, single tombstone, then readded", func(t *testing.T) {
+	t.Run("single entry, single tombstone, then read", func(t *testing.T) {
 		m := newMapDecoder()
 		input := mustEncode([]MapPair{
 			{

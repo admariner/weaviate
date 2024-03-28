@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package objects
@@ -15,17 +15,19 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/semi-technologies/weaviate/entities/additional"
-	"github.com/semi-technologies/weaviate/entities/filters"
-	"github.com/semi-technologies/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/additional"
+	"github.com/weaviate/weaviate/entities/filters"
+	"github.com/weaviate/weaviate/entities/models"
 )
 
 type QueryInput struct {
 	Class      string
 	Offset     int
 	Limit      int
+	Cursor     *filters.Cursor
 	Filters    *filters.LocalFilter
 	Sort       []filters.Sort
+	Tenant     string
 	Additional additional.Properties
 }
 
@@ -33,8 +35,10 @@ type QueryParams struct {
 	Class      string
 	Offset     *int64
 	Limit      *int64
+	After      *string
 	Sort       *string
 	Order      *string
+	Tenant     *string
 	Additional additional.Properties
 }
 
@@ -43,16 +47,25 @@ func (q *QueryParams) inputs(m *Manager) (*QueryInput, error) {
 	if err != nil {
 		return nil, err
 	}
+	sort := m.getSort(q.Sort, q.Order)
+	cursor := m.getCursor(q.After, q.Limit)
+	tenant := ""
+	if q.Tenant != nil {
+		tenant = *q.Tenant
+	}
 	return &QueryInput{
 		Class:      q.Class,
 		Offset:     smartOffset,
 		Limit:      smartLimit,
-		Sort:       m.getSort(q.Sort, q.Order),
+		Sort:       sort,
+		Cursor:     cursor,
+		Tenant:     tenant,
 		Additional: q.Additional,
 	}, nil
 }
 
-func (m *Manager) Query(ctx context.Context, principal *models.Principal, params *QueryParams) ([]*models.Object, *Error) {
+func (m *Manager) Query(ctx context.Context, principal *models.Principal, params *QueryParams,
+) ([]*models.Object, *Error) {
 	path := fmt.Sprintf("objects/%s", params.Class)
 	if err := m.authorizer.Authorize(principal, "list", path); err != nil {
 		return nil, &Error{path, StatusForbidden, err}

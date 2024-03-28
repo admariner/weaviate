@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package commitlog
@@ -16,6 +16,7 @@ import (
 	"os"
 
 	"github.com/pkg/errors"
+	"github.com/weaviate/weaviate/adapters/repos/db/vector/compressionhelpers"
 )
 
 type Logger struct {
@@ -37,8 +38,9 @@ const (
 	ClearLinks
 	DeleteNode
 	ResetIndex
-	ClearLinksAtLevel // added in v1.8.0-rc.1, see https://github.com/semi-technologies/weaviate/issues/1701
-	AddLinksAtLevel   // added in v1.8.0-rc.1, see https://github.com/semi-technologies/weaviate/issues/1705
+	ClearLinksAtLevel // added in v1.8.0-rc.1, see https://github.com/weaviate/weaviate/issues/1701
+	AddLinksAtLevel   // added in v1.8.0-rc.1, see https://github.com/weaviate/weaviate/issues/1705
+	AddPQ
 )
 
 func NewLogger(fileName string) *Logger {
@@ -51,7 +53,7 @@ func NewLogger(fileName string) *Logger {
 }
 
 func NewLoggerWithFile(file *os.File) *Logger {
-	return &Logger{file: file, bufw: NewWriterSize(file, 1024*1024)}
+	return &Logger{file: file, bufw: NewWriterSize(file, 32*1024)}
 }
 
 func (l *Logger) SetEntryPointWithMaxLayer(id uint64, level int) error {
@@ -68,6 +70,27 @@ func (l *Logger) AddNode(id uint64, level int) error {
 	toWrite[0] = byte(AddNode)
 	binary.LittleEndian.PutUint64(toWrite[1:9], id)
 	binary.LittleEndian.PutUint16(toWrite[9:11], uint16(level))
+	_, err := l.bufw.Write(toWrite)
+	return err
+}
+
+func (l *Logger) AddPQ(data compressionhelpers.PQData) error {
+	toWrite := make([]byte, 10)
+	toWrite[0] = byte(AddPQ)
+	binary.LittleEndian.PutUint16(toWrite[1:3], data.Dimensions)
+	toWrite[3] = byte(data.EncoderType)
+	binary.LittleEndian.PutUint16(toWrite[4:6], data.Ks)
+	binary.LittleEndian.PutUint16(toWrite[6:8], data.M)
+	toWrite[8] = data.EncoderDistribution
+	if data.UseBitsEncoding {
+		toWrite[9] = 1
+	} else {
+		toWrite[9] = 0
+	}
+
+	for _, encoder := range data.Encoders {
+		toWrite = append(toWrite, encoder.ExposeDataForRestore()...)
+	}
 	_, err := l.bufw.Write(toWrite)
 	return err
 }

@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package cluster
@@ -23,7 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSuccesfulOutgoingWriteTransaction(t *testing.T) {
+func TestSuccessfulOutgoingWriteTransaction(t *testing.T) {
 	payload := "my-payload"
 	trType := TransactionType("my-type")
 	ctx := context.Background()
@@ -100,7 +100,7 @@ func TestTryingToCommitTransactionPastTTL(t *testing.T) {
 	require.Nil(t, err)
 }
 
-func TestTryingToCommitIncommingTransactionPastTTL(t *testing.T) {
+func TestTryingToCommitIncomingTransactionPastTTL(t *testing.T) {
 	payload := "my-payload"
 	trType := TransactionType("my-type")
 	ctx := context.Background()
@@ -229,7 +229,9 @@ func TestSuccessfulDistributedWriteTransaction(t *testing.T) {
 		remoteState = tx.Payload
 		return nil
 	})
-	local := NewTxManager(&wrapTxManagerAsBroadcaster{remote}, remote.logger)
+	local := NewTxManager(&wrapTxManagerAsBroadcaster{remote},
+		&fakeTxPersistence{}, remote.logger)
+	local.StartAcceptIncoming()
 
 	payload := "my-payload"
 	trType := TransactionType("my-type")
@@ -252,7 +254,8 @@ func TestConcurrentDistributedTransaction(t *testing.T) {
 		remoteState = tx.Payload
 		return nil
 	})
-	local := NewTxManager(&wrapTxManagerAsBroadcaster{remote}, remote.logger)
+	local := NewTxManager(&wrapTxManagerAsBroadcaster{remote},
+		&fakeTxPersistence{}, remote.logger)
 
 	payload := "my-payload"
 	trType := TransactionType("my-type")
@@ -328,7 +331,8 @@ type wrapTxManagerAsBroadcaster struct {
 func (w *wrapTxManagerAsBroadcaster) BroadcastTransaction(ctx context.Context,
 	tx *Transaction,
 ) error {
-	return w.txManager.IncomingBeginTransaction(ctx, tx)
+	_, err := w.txManager.IncomingBeginTransaction(ctx, tx)
+	return err
 }
 
 func (w *wrapTxManagerAsBroadcaster) BroadcastAbortTransaction(ctx context.Context,
@@ -354,7 +358,7 @@ func (b *slowMultiBroadcaster) BroadcastTransaction(ctx context.Context,
 ) error {
 	time.Sleep(b.delay)
 	for _, node := range b.nodes {
-		if err := node.IncomingBeginTransaction(ctx, tx); err != nil {
+		if _, err := node.IncomingBeginTransaction(ctx, tx); err != nil {
 			return err
 		}
 	}
@@ -390,12 +394,13 @@ func TestSuccessfulDistributedReadTransaction(t *testing.T) {
 	payload := "my-payload"
 
 	remote := newTestTxManager()
-	remote.SetResponseFn(func(ctx context.Context, tx *Transaction) error {
+	remote.SetResponseFn(func(ctx context.Context, tx *Transaction) ([]byte, error) {
 		tx.Payload = payload
-		return nil
+		return nil, nil
 	})
-	local := NewTxManager(&wrapTxManagerAsBroadcaster{remote}, remote.logger)
-	// TODO local.SetConsenusFn
+	local := NewTxManager(&wrapTxManagerAsBroadcaster{remote},
+		&fakeTxPersistence{}, remote.logger)
+	// TODO local.SetConsensusFn
 
 	trType := TransactionType("my-read-tx")
 
@@ -404,6 +409,32 @@ func TestSuccessfulDistributedReadTransaction(t *testing.T) {
 
 	local.CloseReadTransaction(ctx, tx)
 
+	assert.Equal(t, "my-payload", tx.Payload)
+}
+
+func TestSuccessfulDistributedTransactionSetAllowUnready(t *testing.T) {
+	ctx := context.Background()
+	payload := "my-payload"
+
+	types := []TransactionType{"type0", "type1"}
+	remote := newTestTxManagerAllowUnready(types)
+	remote.SetResponseFn(func(ctx context.Context, tx *Transaction) ([]byte, error) {
+		tx.Payload = payload
+		return nil, nil
+	})
+	local := NewTxManager(&wrapTxManagerAsBroadcaster{remote},
+		&fakeTxPersistence{}, remote.logger)
+	local.SetAllowUnready(types)
+
+	trType := TransactionType("my-read-tx")
+
+	tx, err := local.BeginTransaction(ctx, trType, nil, 0)
+	require.Nil(t, err)
+
+	local.CloseReadTransaction(ctx, tx)
+
+	assert.ElementsMatch(t, types, remote.allowUnready)
+	assert.ElementsMatch(t, types, local.allowUnready)
 	assert.Equal(t, "my-payload", tx.Payload)
 }
 
@@ -445,15 +476,50 @@ func TestTxWithDeadline(t *testing.T) {
 
 func newTestTxManager() *TxManager {
 	logger, _ := test.NewNullLogger()
-	return NewTxManager(&fakeBroadcaster{}, logger)
+	m := NewTxManager(&fakeBroadcaster{}, &fakeTxPersistence{}, logger)
+	m.StartAcceptIncoming()
+	return m
 }
 
 func newTestTxManagerWithRemote(remote Remote) *TxManager {
 	logger, _ := test.NewNullLogger()
-	return NewTxManager(remote, logger)
+	m := NewTxManager(remote, &fakeTxPersistence{}, logger)
+	m.StartAcceptIncoming()
+	return m
 }
 
 func newTestTxManagerWithRemoteLoggerHook(remote Remote) (*TxManager, *test.Hook) {
 	logger, hook := test.NewNullLogger()
-	return NewTxManager(remote, logger), hook
+	m := NewTxManager(remote, &fakeTxPersistence{}, logger)
+	m.StartAcceptIncoming()
+	return m, hook
+}
+
+func newTestTxManagerAllowUnready(types []TransactionType) *TxManager {
+	logger, _ := test.NewNullLogger()
+	m := NewTxManager(&fakeBroadcaster{}, &fakeTxPersistence{}, logger)
+	m.SetAllowUnready(types)
+	m.StartAcceptIncoming()
+	return m
+}
+
+// does nothing as these do not involve crashes
+type fakeTxPersistence struct{}
+
+func (f *fakeTxPersistence) StoreTx(ctx context.Context,
+	tx *Transaction,
+) error {
+	return nil
+}
+
+func (f *fakeTxPersistence) DeleteTx(ctx context.Context,
+	txID string,
+) error {
+	return nil
+}
+
+func (f *fakeTxPersistence) IterateAll(ctx context.Context,
+	cb func(tx *Transaction),
+) error {
+	return nil
 }

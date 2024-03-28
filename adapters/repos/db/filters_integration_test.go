@@ -4,67 +4,85 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 //go:build integrationTest
-// +build integrationTest
 
 package db
 
 import (
 	"context"
 	"fmt"
-	"math/rand"
 	"testing"
 	"time"
 
 	"github.com/go-openapi/strfmt"
 	"github.com/google/uuid"
-	"github.com/semi-technologies/weaviate/entities/filters"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	enthnsw "github.com/semi-technologies/weaviate/entities/vectorindex/hnsw"
-	"github.com/semi-technologies/weaviate/usecases/traverser"
 	"github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/entities/dto"
+	"github.com/weaviate/weaviate/entities/filters"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
+	enthnsw "github.com/weaviate/weaviate/entities/vectorindex/hnsw"
 )
 
 func TestFilters(t *testing.T) {
-	rand.Seed(time.Now().UnixNano())
 	dirName := t.TempDir()
 
 	logger, _ := test.NewNullLogger()
-	schemaGetter := &fakeSchemaGetter{shardState: singleShardState()}
-	repo := New(logger, Config{
-		MemtablesFlushIdleAfter:   60,
+	schemaGetter := &fakeSchemaGetter{
+		schema:     schema.Schema{Objects: &models.Schema{Classes: nil}},
+		shardState: singleShardState(),
+	}
+	repo, err := New(logger, Config{
+		MemtablesFlushDirtyAfter:  60,
 		RootPath:                  dirName,
 		QueryMaximumResults:       10000,
 		MaxImportGoroutinesFactor: 1,
 	}, &fakeRemoteClient{}, &fakeNodeResolver{}, &fakeRemoteNodeClient{}, &fakeReplicationClient{}, nil)
-	repo.SetSchemaGetter(schemaGetter)
-	err := repo.WaitForStartup(testCtx())
 	require.Nil(t, err)
+	repo.SetSchemaGetter(schemaGetter)
+	require.Nil(t, repo.WaitForStartup(testCtx()))
 	defer repo.Shutdown(testCtx())
 
 	migrator := NewMigrator(repo, logger)
-	t.Run("prepare test schema and data ",
-		prepareCarTestSchemaAndData(repo, migrator, schemaGetter))
+	t.Run("prepare test schema and data ", prepareCarTestSchemaAndData(repo, migrator, schemaGetter))
 
-	t.Run("primitve props without nesting",
-		testPrimitiveProps(repo))
+	t.Run("primitive props without nesting", testPrimitiveProps(repo))
 
-	t.Run("primitve props with limit",
-		testPrimitivePropsWithLimit(repo))
+	t.Run("primitive props with limit", testPrimitivePropsWithLimit(repo))
 
-	t.Run("chained primitive props",
-		testChainedPrimitiveProps(repo, migrator))
+	t.Run("chained primitive props", testChainedPrimitiveProps(repo, migrator))
 
-	t.Run("sort props",
-		testSortProperties(repo))
+	t.Run("sort props", testSortProperties(repo))
+}
+
+func TestFiltersNoLengthIndex(t *testing.T) {
+	dirName := t.TempDir()
+
+	logger, _ := test.NewNullLogger()
+	schemaGetter := &fakeSchemaGetter{
+		schema:     schema.Schema{Objects: &models.Schema{Classes: nil}},
+		shardState: singleShardState(),
+	}
+	repo, err := New(logger, Config{
+		MemtablesFlushDirtyAfter:  60,
+		RootPath:                  dirName,
+		QueryMaximumResults:       10000,
+		MaxImportGoroutinesFactor: 1,
+	}, &fakeRemoteClient{}, &fakeNodeResolver{}, &fakeRemoteNodeClient{}, &fakeReplicationClient{}, nil)
+	require.Nil(t, err)
+	repo.SetSchemaGetter(schemaGetter)
+	require.Nil(t, repo.WaitForStartup(testCtx()))
+	defer repo.Shutdown(testCtx())
+	migrator := NewMigrator(repo, logger)
+	t.Run("prepare test schema and data ", prepareCarTestSchemaAndDataNoLength(repo, migrator, schemaGetter))
+	t.Run("primitive props without nesting", testPrimitivePropsWithNoLengthIndex(repo))
 }
 
 var (
@@ -78,14 +96,12 @@ var (
 	gte  = filters.OperatorGreaterThanEqual
 	wgr  = filters.OperatorWithinGeoRange
 	and  = filters.OperatorAnd
-	or   = filters.OperatorOr
 	null = filters.OperatorIsNull
 
 	// datatypes
 	dtInt            = schema.DataTypeInt
 	dtBool           = schema.DataTypeBoolean
 	dtNumber         = schema.DataTypeNumber
-	dtString         = schema.DataTypeString
 	dtText           = schema.DataTypeText
 	dtDate           = schema.DataTypeDate
 	dtGeoCoordinates = schema.DataTypeGeoCoordinates
@@ -108,7 +124,91 @@ func prepareCarTestSchemaAndData(repo *DB,
 		for i, fixture := range cars {
 			t.Run(fmt.Sprintf("importing car %d", i), func(t *testing.T) {
 				require.Nil(t,
-					repo.PutObject(context.Background(), &fixture, carVectors[i]))
+					repo.PutObject(context.Background(), &fixture, carVectors[i], nil, nil))
+			})
+		}
+	}
+}
+
+func prepareCarTestSchemaAndDataNoLength(repo *DB,
+	migrator *Migrator, schemaGetter *fakeSchemaGetter,
+) func(t *testing.T) {
+	return func(t *testing.T) {
+		t.Run("creating the class", func(t *testing.T) {
+			require.Nil(t,
+				migrator.AddClass(context.Background(), carClassNoLengthIndex, schemaGetter.shardState))
+			schemaGetter.schema.Objects = &models.Schema{
+				Classes: []*models.Class{
+					carClassNoLengthIndex,
+				},
+			}
+		})
+
+		for i, fixture := range cars {
+			t.Run(fmt.Sprintf("importing car %d", i), func(t *testing.T) {
+				require.Nil(t,
+					repo.PutObject(context.Background(), &fixture, carVectors[i], nil, nil))
+			})
+		}
+	}
+}
+
+func testPrimitivePropsWithNoLengthIndex(repo *DB) func(t *testing.T) {
+	return func(t *testing.T) {
+		type test struct {
+			name        string
+			filter      *filters.LocalFilter
+			expectedIDs []strfmt.UUID
+			limit       int
+			ErrMsg      string
+		}
+
+		tests := []test{
+			{
+				name:        "Filter by unsupported geo-coordinates",
+				filter:      buildFilter("len(parkedAt)", 0, eq, dtInt),
+				expectedIDs: []strfmt.UUID{},
+				ErrMsg:      "Property length must be indexed to be filterable! add `IndexPropertyLength: true` to the invertedIndexConfig in",
+			},
+			{
+				name:        "Filter by unsupported number",
+				filter:      buildFilter("len(horsepower)", 1, eq, dtInt),
+				expectedIDs: []strfmt.UUID{},
+				ErrMsg:      "Property length must be indexed to be filterable",
+			},
+			{
+				name:        "Filter by unsupported date",
+				filter:      buildFilter("len(released)", 1, eq, dtInt),
+				expectedIDs: []strfmt.UUID{},
+				ErrMsg:      "Property length must be indexed to be filterable! add `IndexPropertyLength: true` to the invertedIndexConfig in",
+			},
+		}
+
+		for _, test := range tests {
+			t.Run(test.name, func(t *testing.T) {
+				if test.limit == 0 {
+					test.limit = 100
+				}
+				params := dto.GetParams{
+					SearchVector: []float32{0.1, 0.1, 0.1, 1.1, 0.1},
+					ClassName:    carClass.Class,
+					Pagination:   &filters.Pagination{Limit: test.limit},
+					Filters:      test.filter,
+				}
+				res, err := repo.Search(context.Background(), params)
+				if len(test.ErrMsg) > 0 {
+					require.Contains(t, err.Error(), test.ErrMsg)
+				} else {
+					require.Nil(t, err)
+					require.Len(t, res, len(test.expectedIDs))
+
+					ids := make([]strfmt.UUID, len(test.expectedIDs))
+					for pos, concept := range res {
+						ids[pos] = concept.ID
+					}
+					assert.ElementsMatch(t, ids, test.expectedIDs, "ids don't match")
+
+				}
 			})
 		}
 	}
@@ -152,17 +252,17 @@ func testPrimitiveProps(repo *DB) func(t *testing.T) {
 			},
 			{
 				name:        "modelName != sprinter",
-				filter:      buildFilter("modelName", "sprinter", neq, dtString),
-				expectedIDs: []strfmt.UUID{carE63sID, carPoloID, carNilID},
+				filter:      buildFilter("modelName", "sprinter", neq, dtText),
+				expectedIDs: []strfmt.UUID{carE63sID, carPoloID, carNilID, carEmpty},
 			},
 			{
-				name:        "modelName = spr*er (optimizable) dtString",
-				filter:      buildFilter("modelName", "spr*er", like, dtString),
+				name:        "modelName = spr*er (optimizable) dtText",
+				filter:      buildFilter("modelName", "spr*er", like, dtText),
 				expectedIDs: []strfmt.UUID{carSprinterID},
 			},
 			{
-				name:        "modelName = *rinte? (non-optimizable) dtString",
-				filter:      buildFilter("modelName", "*rinte?", like, dtString),
+				name:        "modelName = *rinte? (non-optimizable) dtText",
+				filter:      buildFilter("modelName", "*rinte?", like, dtText),
 				expectedIDs: []strfmt.UUID{carSprinterID},
 			},
 			{
@@ -238,11 +338,11 @@ func testPrimitiveProps(repo *DB) func(t *testing.T) {
 			{
 				name:        "not equal to 1995-08-17T12:47:00+02:00",
 				filter:      buildFilter("released", mustParseTime("1995-08-17T12:47:00+02:00"), neq, dtDate),
-				expectedIDs: []strfmt.UUID{carPoloID, carE63sID},
+				expectedIDs: []strfmt.UUID{carPoloID, carE63sID, carEmpty, carNilID},
 			},
 			{
 				name:        "exactly matching a specific contact email",
-				filter:      buildFilter("contact", "john@heavycars.example.com", eq, dtString),
+				filter:      buildFilter("contact", "john@heavycars.example.com", eq, dtText),
 				expectedIDs: []strfmt.UUID{carSprinterID},
 			},
 			{
@@ -271,43 +371,38 @@ func testPrimitiveProps(repo *DB) func(t *testing.T) {
 				expectedIDs: []strfmt.UUID{carE63sID},
 			},
 			{
-				name:        "matching words with special characters with string value",
-				filter:      buildFilter("description", "it's also not exactly lightweight.", eq, dtString),
-				expectedIDs: []strfmt.UUID{},
-			},
-			{
 				name:        "matching words without special characters",
-				filter:      buildFilter("description", "also not exactly lightweight", eq, dtString),
+				filter:      buildFilter("description", "also not exactly lightweight", eq, dtText),
 				expectedIDs: []strfmt.UUID{carE63sID},
 			},
 			{
 				name:        "by id",
-				filter:      buildFilter("id", carPoloID.String(), eq, dtString),
+				filter:      buildFilter("id", carPoloID.String(), eq, dtText),
 				expectedIDs: []strfmt.UUID{carPoloID},
 			},
 			{
 				name:        "by id not equal",
-				filter:      buildFilter("id", carE63sID.String(), neq, dtString),
+				filter:      buildFilter("id", carE63sID.String(), neq, dtText),
 				expectedIDs: []strfmt.UUID{carPoloID, carSprinterID, carNilID, carEmpty},
 			},
 			{
 				name:        "by id less then equal",
-				filter:      buildFilter("id", carPoloID.String(), lte, dtString),
+				filter:      buildFilter("id", carPoloID.String(), lte, dtText),
 				expectedIDs: []strfmt.UUID{carPoloID, carE63sID},
 			},
 			{
 				name:        "by id less then",
-				filter:      buildFilter("id", carPoloID.String(), lt, dtString),
+				filter:      buildFilter("id", carPoloID.String(), lt, dtText),
 				expectedIDs: []strfmt.UUID{carE63sID},
 			},
 			{
 				name:        "by id greater then equal",
-				filter:      buildFilter("id", carPoloID.String(), gte, dtString),
+				filter:      buildFilter("id", carPoloID.String(), gte, dtText),
 				expectedIDs: []strfmt.UUID{carPoloID, carSprinterID, carNilID, carEmpty},
 			},
 			{
 				name:        "by id greater then",
-				filter:      buildFilter("id", carPoloID.String(), gt, dtString),
+				filter:      buildFilter("id", carPoloID.String(), gt, dtText),
 				expectedIDs: []strfmt.UUID{carSprinterID, carNilID, carEmpty},
 			},
 			{
@@ -323,67 +418,67 @@ func testPrimitiveProps(repo *DB) func(t *testing.T) {
 			},
 			// {
 			// 	name:        "by id like",
-			// 	filter:      buildFilter("id", carPoloID.String(), like, dtString),
+			// 	filter:      buildFilter("id", carPoloID.String(), like, dtText),
 			// 	expectedIDs: []strfmt.UUID{carPoloID},
 			// },
 			{
 				name:        "by color with word tokenization",
-				filter:      buildFilter("colorWord", "grey", eq, dtString),
+				filter:      buildFilter("colorWhitespace", "grey", eq, dtText),
 				expectedIDs: []strfmt.UUID{carE63sID, carSprinterID, carPoloID},
 			},
 			{
 				name:        "by color with word tokenization multiword (1)",
-				filter:      buildFilter("colorWord", "light grey", eq, dtString),
+				filter:      buildFilter("colorWhitespace", "light grey", eq, dtText),
 				expectedIDs: []strfmt.UUID{carE63sID, carSprinterID},
 			},
 			{
 				name:        "by color with word tokenization multiword (2)",
-				filter:      buildFilter("colorWord", "dark grey", eq, dtString),
+				filter:      buildFilter("colorWhitespace", "dark grey", eq, dtText),
 				expectedIDs: []strfmt.UUID{carPoloID},
 			},
 			{
 				name:        "by color with field tokenization",
-				filter:      buildFilter("colorField", "grey", eq, dtString),
+				filter:      buildFilter("colorField", "grey", eq, dtText),
 				expectedIDs: []strfmt.UUID{},
 			},
 			{
 				name:        "by color with field tokenization multiword (1)",
-				filter:      buildFilter("colorField", "light grey", eq, dtString),
+				filter:      buildFilter("colorField", "light grey", eq, dtText),
 				expectedIDs: []strfmt.UUID{carSprinterID},
 			},
 			{
 				name:        "by color with field tokenization multiword (2)",
-				filter:      buildFilter("colorField", "dark grey", eq, dtString),
+				filter:      buildFilter("colorField", "dark grey", eq, dtText),
 				expectedIDs: []strfmt.UUID{carPoloID},
 			},
 			{
 				name:        "by color array with word tokenization",
-				filter:      buildFilter("colorArrayWord", "grey", eq, dtString),
+				filter:      buildFilter("colorArrayWhitespace", "grey", eq, dtText),
 				expectedIDs: []strfmt.UUID{carE63sID, carSprinterID, carPoloID},
 			},
 			{
 				name:        "by color array with word tokenization multiword (1)",
-				filter:      buildFilter("colorArrayWord", "light grey", eq, dtString),
+				filter:      buildFilter("colorArrayWhitespace", "light grey", eq, dtText),
 				expectedIDs: []strfmt.UUID{carE63sID, carSprinterID},
 			},
 			{
 				name:        "by color array with word tokenization multiword (2)",
-				filter:      buildFilter("colorArrayWord", "dark grey", eq, dtString),
+				filter:      buildFilter("colorArrayWhitespace", "dark grey", eq, dtText),
 				expectedIDs: []strfmt.UUID{carPoloID},
 			},
 			{
 				name:        "by color array with field tokenization",
-				filter:      buildFilter("colorArrayField", "grey", eq, dtString),
+				filter:      buildFilter("colorArrayField", "grey", eq, dtText),
 				expectedIDs: []strfmt.UUID{carE63sID, carPoloID},
 			},
 			{
 				name:        "by color with array field tokenization multiword (1)",
-				filter:      buildFilter("colorArrayField", "light grey", eq, dtString),
+				filter:      buildFilter("colorArrayField", "light grey", eq, dtText),
 				expectedIDs: []strfmt.UUID{carSprinterID},
 			},
 			{
 				name:        "by color with array field tokenization multiword (2)",
-				filter:      buildFilter("colorArrayField", "dark grey", eq, dtString),
+				filter:      buildFilter("colorArrayField", "dark grey", eq, dtText),
 				expectedIDs: []strfmt.UUID{},
 			},
 			{
@@ -423,26 +518,8 @@ func testPrimitiveProps(repo *DB) func(t *testing.T) {
 			},
 			{
 				name:        "length 0 (not added and empty)",
-				filter:      buildFilter("len(colorArrayWord)", 0, eq, dtInt),
+				filter:      buildFilter("len(colorArrayWhitespace)", 0, eq, dtInt),
 				expectedIDs: []strfmt.UUID{carNilID, carEmpty},
-			},
-			{
-				name:        "Filter by unsupported geo-coordinates",
-				filter:      buildFilter("len(parkedAt)", 0, eq, dtInt),
-				expectedIDs: []strfmt.UUID{},
-				ErrMsg:      "Property length must be indexed to be filterable",
-			},
-			{
-				name:        "Filter by unsupported number",
-				filter:      buildFilter("len(horsepower)", 1, eq, dtInt),
-				expectedIDs: []strfmt.UUID{},
-				ErrMsg:      "Property length must be indexed to be filterable",
-			},
-			{
-				name:        "Filter by unsupported date",
-				filter:      buildFilter("len(released)", 1, eq, dtInt),
-				expectedIDs: []strfmt.UUID{},
-				ErrMsg:      "Property length must be indexed to be filterable",
 			},
 			{
 				name:        "Filter unicode strings",
@@ -451,7 +528,7 @@ func testPrimitiveProps(repo *DB) func(t *testing.T) {
 			},
 			{
 				name:        "Filter unicode texts",
-				filter:      buildFilter("len(description)", 109, eq, dtInt),
+				filter:      buildFilter("len(description)", 110, eq, dtInt),
 				expectedIDs: []strfmt.UUID{carPoloID},
 			},
 			{
@@ -466,8 +543,28 @@ func testPrimitiveProps(repo *DB) func(t *testing.T) {
 			},
 			{
 				name:        "Empty array by length",
-				filter:      buildFilter("len(colorArrayWord)", 0, eq, dtInt),
+				filter:      buildFilter("len(colorArrayWhitespace)", 0, eq, dtInt),
 				expectedIDs: []strfmt.UUID{carEmpty, carNilID},
+			},
+			{
+				name:        "made by Mercedes ... I mean manufacturer1",
+				filter:      buildFilter("manufacturerId", manufacturer1.String(), eq, dtText),
+				expectedIDs: []strfmt.UUID{carE63sID, carSprinterID},
+			},
+			{
+				name:        "made by manufacturer2",
+				filter:      buildFilter("manufacturerId", manufacturer2.String(), eq, dtText),
+				expectedIDs: []strfmt.UUID{carPoloID},
+			},
+			{
+				name:        "available at the north dealership",
+				filter:      buildFilter("availableAtDealerships", dealershipNorth.String(), eq, dtText),
+				expectedIDs: []strfmt.UUID{carE63sID, carSprinterID},
+			},
+			{
+				name:        "available at the south dealership",
+				filter:      buildFilter("availableAtDealerships", dealershipSouth.String(), eq, dtText),
+				expectedIDs: []strfmt.UUID{carPoloID, carSprinterID},
 			},
 		}
 
@@ -476,24 +573,25 @@ func testPrimitiveProps(repo *DB) func(t *testing.T) {
 				if test.limit == 0 {
 					test.limit = 100
 				}
-				params := traverser.GetParams{
+				params := dto.GetParams{
 					SearchVector: []float32{0.1, 0.1, 0.1, 1.1, 0.1},
 					ClassName:    carClass.Class,
 					Pagination:   &filters.Pagination{Limit: test.limit},
 					Filters:      test.filter,
 				}
-				res, err := repo.ClassSearch(context.Background(), params)
+				res, err := repo.Search(context.Background(), params)
 				if len(test.ErrMsg) > 0 {
 					require.Contains(t, err.Error(), test.ErrMsg)
 				} else {
 					require.Nil(t, err)
+
 					require.Len(t, res, len(test.expectedIDs))
 
-					ids := make([]strfmt.UUID, len(test.expectedIDs), len(test.expectedIDs))
+					ids := make([]strfmt.UUID, len(test.expectedIDs))
 					for pos, concept := range res {
 						ids[pos] = concept.ID
 					}
-					assert.ElementsMatch(t, ids, test.expectedIDs, "ids dont match")
+					assert.ElementsMatch(t, ids, test.expectedIDs, "ids don't match")
 
 				}
 			})
@@ -506,13 +604,13 @@ func testPrimitivePropsWithLimit(repo *DB) func(t *testing.T) {
 		t.Run("greater than", func(t *testing.T) {
 			limit := 1
 
-			params := traverser.GetParams{
+			params := dto.GetParams{
 				SearchVector: []float32{0.1, 0.1, 0.1, 1.1, 0.1},
 				ClassName:    carClass.Class,
 				Pagination:   &filters.Pagination{Limit: limit},
 				Filters:      buildFilter("horsepower", 2, gt, dtInt), // would otherwise return 3 results
 			}
-			res, err := repo.ClassSearch(context.Background(), params)
+			res, err := repo.Search(context.Background(), params)
 			require.Nil(t, err)
 			assert.Len(t, res, limit)
 		})
@@ -520,13 +618,13 @@ func testPrimitivePropsWithLimit(repo *DB) func(t *testing.T) {
 		t.Run("less than", func(t *testing.T) {
 			limit := 1
 
-			params := traverser.GetParams{
+			params := dto.GetParams{
 				SearchVector: []float32{0.1, 0.1, 0.1, 1.1, 0.1},
 				ClassName:    carClass.Class,
 				Pagination:   &filters.Pagination{Limit: limit},
 				Filters:      buildFilter("horsepower", 20000, lt, dtInt), // would otherwise return 3 results
 			}
-			res, err := repo.ClassSearch(context.Background(), params)
+			res, err := repo.Search(context.Background(), params)
 			require.Nil(t, err)
 			assert.Len(t, res, limit)
 		})
@@ -547,7 +645,7 @@ func testChainedPrimitiveProps(repo *DB,
 			{
 				name: "modelName == sprinter AND  weight > 3000",
 				filter: filterAnd(
-					buildFilter("modelName", "sprinter", eq, dtString),
+					buildFilter("modelName", "sprinter", eq, dtText),
 					buildFilter("weight", float64(3000), gt, dtNumber),
 				),
 				expectedIDs: []strfmt.UUID{carSprinterID},
@@ -555,16 +653,16 @@ func testChainedPrimitiveProps(repo *DB,
 			{
 				name: "modelName == sprinter OR modelName == e63s",
 				filter: filterOr(
-					buildFilter("modelName", "sprinter", eq, dtString),
-					buildFilter("modelName", "e63s", eq, dtString),
+					buildFilter("modelName", "sprinter", eq, dtText),
+					buildFilter("modelName", "e63s", eq, dtText),
 				),
 				expectedIDs: []strfmt.UUID{carSprinterID, carE63sID},
 			},
 			// test{
 			// 	name: "NOT modelName == sprinter, modelName == e63s",
 			// 	filter: filterNot(
-			// 		buildFilter("modelName", "sprinter", eq, dtString),
-			// 		buildFilter("modelName", "e63s", eq, dtString),
+			// 		buildFilter("modelName", "sprinter", eq, dtText),
+			// 		buildFilter("modelName", "e63s", eq, dtText),
 			// 	),
 			// 	expectedIDs: []strfmt.UUID{carPoloID},
 			// },
@@ -589,7 +687,7 @@ func testChainedPrimitiveProps(repo *DB,
 			},
 
 			// this test prevents a regression on
-			// https://github.com/semi-technologies/weaviate/issues/1638
+			// https://github.com/weaviate/weaviate/issues/1638
 			{
 				name: "Like ca* AND Like eng*",
 				filter: filterAnd(
@@ -602,17 +700,17 @@ func testChainedPrimitiveProps(repo *DB,
 
 		for _, test := range tests {
 			t.Run(test.name, func(t *testing.T) {
-				params := traverser.GetParams{
+				params := dto.GetParams{
 					// SearchVector: []float32{0.1, 0.1, 0.1, 1.1, 0.1},
 					ClassName:  carClass.Class,
 					Pagination: &filters.Pagination{Limit: 100},
 					Filters:    test.filter,
 				}
-				res, err := repo.ClassSearch(context.Background(), params)
+				res, err := repo.Search(context.Background(), params)
 				require.Nil(t, err)
 				require.Len(t, res, len(test.expectedIDs))
 
-				ids := make([]strfmt.UUID, len(test.expectedIDs), len(test.expectedIDs))
+				ids := make([]strfmt.UUID, len(test.expectedIDs))
 				for pos, concept := range res {
 					ids[pos] = concept.ID
 				}
@@ -645,7 +743,7 @@ func buildSortFilter(path []string, order string) filters.Sort {
 func compoundFilter(operator filters.Operator,
 	operands ...*filters.LocalFilter,
 ) *filters.LocalFilter {
-	clauses := make([]filters.Clause, len(operands), len(operands))
+	clauses := make([]filters.Clause, len(operands))
 	for i, filter := range operands {
 		clauses[i] = *filter.Root
 	}
@@ -666,10 +764,6 @@ func filterOr(operands ...*filters.LocalFilter) *filters.LocalFilter {
 	return compoundFilter(filters.OperatorOr, operands...)
 }
 
-func filterNot(operands ...*filters.LocalFilter) *filters.LocalFilter {
-	return compoundFilter(filters.OperatorNot, operands...)
-}
-
 // test data
 var carClass = &models.Class{
 	Class:               "FilterTestCar",
@@ -677,19 +771,19 @@ var carClass = &models.Class{
 	InvertedIndexConfig: invertedConfig(),
 	Properties: []*models.Property{
 		{
-			DataType:     []string{string(schema.DataTypeString)},
+			DataType:     schema.DataTypeText.PropString(),
 			Name:         "modelName",
-			Tokenization: "word",
+			Tokenization: models.PropertyTokenizationWhitespace,
 		},
 		{
-			DataType:     []string{string(schema.DataTypeString)},
+			DataType:     schema.DataTypeText.PropString(),
 			Name:         "contact",
-			Tokenization: "word",
+			Tokenization: models.PropertyTokenizationWhitespace,
 		},
 		{
-			DataType:     []string{string(schema.DataTypeText)},
+			DataType:     schema.DataTypeText.PropString(),
 			Name:         "description",
-			Tokenization: "word",
+			Tokenization: models.PropertyTokenizationWord,
 		},
 		{
 			DataType: []string{string(schema.DataTypeInt)},
@@ -708,24 +802,107 @@ var carClass = &models.Class{
 			Name:     "released",
 		},
 		{
-			DataType:     []string{string(schema.DataTypeString)},
-			Name:         "colorWord",
-			Tokenization: "word",
+			DataType:     schema.DataTypeText.PropString(),
+			Name:         "colorWhitespace",
+			Tokenization: models.PropertyTokenizationWhitespace,
 		},
 		{
-			DataType:     []string{string(schema.DataTypeString)},
+			DataType:     schema.DataTypeText.PropString(),
 			Name:         "colorField",
-			Tokenization: "field",
+			Tokenization: models.PropertyTokenizationField,
 		},
 		{
-			DataType:     []string{string(schema.DataTypeStringArray)},
-			Name:         "colorArrayWord",
-			Tokenization: "word",
+			DataType:     schema.DataTypeTextArray.PropString(),
+			Name:         "colorArrayWhitespace",
+			Tokenization: models.PropertyTokenizationWhitespace,
 		},
 		{
-			DataType:     []string{string(schema.DataTypeStringArray)},
+			DataType:     schema.DataTypeTextArray.PropString(),
 			Name:         "colorArrayField",
-			Tokenization: "field",
+			Tokenization: models.PropertyTokenizationField,
+		},
+		{
+			DataType: []string{string(schema.DataTypeUUID)},
+			Name:     "manufacturerId",
+		},
+		{
+			DataType: []string{string(schema.DataTypeUUIDArray)},
+			Name:     "availableAtDealerships",
+		},
+	},
+}
+
+// test data
+var carClassNoLengthIndex = &models.Class{
+	Class:             "FilterTestCar",
+	VectorIndexConfig: enthnsw.NewDefaultUserConfig(),
+	InvertedIndexConfig: &models.InvertedIndexConfig{
+		CleanupIntervalSeconds: 60,
+		Stopwords: &models.StopwordConfig{
+			Preset: "none",
+		},
+		IndexNullState:      true,
+		IndexPropertyLength: false,
+	},
+	Properties: []*models.Property{
+		{
+			DataType:     schema.DataTypeText.PropString(),
+			Name:         "modelName",
+			Tokenization: models.PropertyTokenizationWhitespace,
+		},
+		{
+			DataType:     schema.DataTypeText.PropString(),
+			Name:         "contact",
+			Tokenization: models.PropertyTokenizationWhitespace,
+		},
+		{
+			DataType:     schema.DataTypeText.PropString(),
+			Name:         "description",
+			Tokenization: models.PropertyTokenizationWord,
+		},
+		{
+			DataType: []string{string(schema.DataTypeInt)},
+			Name:     "horsepower",
+		},
+		{
+			DataType: []string{string(schema.DataTypeNumber)},
+			Name:     "weight",
+		},
+		{
+			DataType: []string{string(schema.DataTypeGeoCoordinates)},
+			Name:     "parkedAt",
+		},
+		{
+			DataType: []string{string(schema.DataTypeDate)},
+			Name:     "released",
+		},
+		{
+			DataType:     schema.DataTypeText.PropString(),
+			Name:         "colorWhitespace",
+			Tokenization: models.PropertyTokenizationWhitespace,
+		},
+		{
+			DataType:     schema.DataTypeText.PropString(),
+			Name:         "colorField",
+			Tokenization: models.PropertyTokenizationField,
+		},
+		{
+			DataType:     schema.DataTypeTextArray.PropString(),
+			Name:         "colorArrayWhitespace",
+			Tokenization: models.PropertyTokenizationWhitespace,
+		},
+		{
+			DataType:     schema.DataTypeTextArray.PropString(),
+			Name:         "colorArrayField",
+			Tokenization: models.PropertyTokenizationField,
+		},
+		{
+			DataType: []string{string(schema.DataTypeUUID)},
+			Name:     "manufacturerId",
+		},
+		{
+			DataType: []string{string(schema.DataTypeUUIDArray)},
+			Name:     "availableAtDealerships",
 		},
 	},
 }
@@ -736,6 +913,13 @@ var (
 	carPoloID     strfmt.UUID = "b444e1d8-d73a-4d53-a417-8d6501c27f2e"
 	carNilID      strfmt.UUID = "b444e1d8-d73a-4d53-a417-8d6501c27f3e"
 	carEmpty      strfmt.UUID = "b444e1d8-d73a-4d53-a417-8d6501c27f4e"
+
+	// these UUIDs are not primary IDs of objects, but rather values for uuid and
+	// uuid[] fields
+	manufacturer1   = uuid.MustParse("11111111-2222-3333-4444-000000000001")
+	manufacturer2   = uuid.MustParse("11111111-2222-3333-4444-000000000002")
+	dealershipNorth = uuid.MustParse("99999999-9999-9999-9999-000000000001")
+	dealershipSouth = uuid.MustParse("99999999-9999-9999-9999-000000000002")
 )
 
 func mustParseTime(in string) time.Time {
@@ -759,12 +943,14 @@ var cars = []models.Object{
 				Latitude:  ptFloat32(34.052235),
 				Longitude: ptFloat32(-118.243683),
 			},
-			"contact":         "john@heavycars.example.com",
-			"description":     "This car resembles a large van that can still be driven with a regular license. Contact john@heavycars.example.com for details",
-			"colorWord":       "light grey",
-			"colorField":      "light grey",
-			"colorArrayWord":  []interface{}{"light grey"},
-			"colorArrayField": []interface{}{"light grey"},
+			"contact":                "john@heavycars.example.com",
+			"description":            "This car resembles a large van that can still be driven with a regular license. Contact john@heavycars.example.com for details",
+			"colorWhitespace":        "light grey",
+			"colorField":             "light grey",
+			"colorArrayWhitespace":   []interface{}{"light grey"},
+			"colorArrayField":        []interface{}{"light grey"},
+			"manufacturerId":         manufacturer1,
+			"availableAtDealerships": []uuid.UUID{dealershipNorth, dealershipSouth},
 		},
 	},
 	{
@@ -779,28 +965,32 @@ var cars = []models.Object{
 				Latitude:  ptFloat32(40.730610),
 				Longitude: ptFloat32(-73.935242),
 			},
-			"contact":         "jessica-世界@unicode.example.com",
-			"description":     "This car has a huge motor, but it's also not exactly lightweight.",
-			"colorWord":       "very light grey",
-			"colorField":      "very light grey",
-			"colorArrayWord":  []interface{}{"very light", "grey"},
-			"colorArrayField": []interface{}{"very light", "grey"},
+			"contact":                "jessica-世界@unicode.example.com",
+			"description":            "This car has a huge motor, but it's also not exactly lightweight.",
+			"colorWhitespace":        "very light grey",
+			"colorField":             "very light grey",
+			"colorArrayWhitespace":   []interface{}{"very light", "grey"},
+			"colorArrayField":        []interface{}{"very light", "grey"},
+			"manufacturerId":         manufacturer1,
+			"availableAtDealerships": []uuid.UUID{dealershipNorth},
 		},
 	},
 	{
 		Class: carClass.Class,
 		ID:    carPoloID,
 		Properties: map[string]interface{}{
-			"released":        mustParseTime("1975-01-01T10:12:00+02:00"),
-			"modelName":       "polo",
-			"horsepower":      int64(100),
-			"weight":          1200.0,
-			"contact":         "sandra@efficientcars.example.com",
-			"description":     "This small car has a small engine and unicode labels (ąę), but it's very light, so it feels fater than it is.",
-			"colorWord":       "dark grey",
-			"colorField":      "dark grey",
-			"colorArrayWord":  []interface{}{"dark", "grey"},
-			"colorArrayField": []interface{}{"dark", "grey"},
+			"released":               mustParseTime("1975-01-01T10:12:00+02:00"),
+			"modelName":              "polo",
+			"horsepower":             int64(100),
+			"weight":                 1200.0,
+			"contact":                "sandra@efficientcars.example.com",
+			"description":            "This small car has a small engine and unicode labels (ąę), but it's very light, so it feels faster than it is.",
+			"colorWhitespace":        "dark grey",
+			"colorField":             "dark grey",
+			"colorArrayWhitespace":   []interface{}{"dark", "grey"},
+			"colorArrayField":        []interface{}{"dark", "grey"},
+			"manufacturerId":         manufacturer2,
+			"availableAtDealerships": []uuid.UUID{dealershipSouth},
 		},
 	},
 	{
@@ -814,13 +1004,13 @@ var cars = []models.Object{
 		Class: carClass.Class,
 		ID:    carEmpty,
 		Properties: map[string]interface{}{
-			"modelName":       "",
-			"contact":         "",
-			"description":     "",
-			"colorWord":       "",
-			"colorField":      "",
-			"colorArrayWord":  []interface{}{},
-			"colorArrayField": []interface{}{},
+			"modelName":            "",
+			"contact":              "",
+			"description":          "",
+			"colorWhitespace":      "",
+			"colorField":           "",
+			"colorArrayWhitespace": []interface{}{},
+			"colorArrayField":      []interface{}{},
 		},
 	},
 }
@@ -834,20 +1024,22 @@ var carVectors = [][]float32{
 }
 
 func TestGeoPropUpdateJourney(t *testing.T) {
-	rand.Seed(time.Now().UnixNano())
 	dirName := t.TempDir()
 
 	logger, _ := test.NewNullLogger()
-	schemaGetter := &fakeSchemaGetter{shardState: singleShardState()}
-	repo := New(logger, Config{
-		MemtablesFlushIdleAfter:   60,
+	schemaGetter := &fakeSchemaGetter{
+		schema:     schema.Schema{Objects: &models.Schema{Classes: nil}},
+		shardState: singleShardState(),
+	}
+	repo, err := New(logger, Config{
+		MemtablesFlushDirtyAfter:  60,
 		RootPath:                  dirName,
 		QueryMaximumResults:       10000,
 		MaxImportGoroutinesFactor: 1,
 	}, &fakeRemoteClient{}, &fakeNodeResolver{}, &fakeRemoteNodeClient{}, &fakeReplicationClient{}, nil)
-	repo.SetSchemaGetter(schemaGetter)
-	err := repo.WaitForStartup(testCtx())
 	require.Nil(t, err)
+	repo.SetSchemaGetter(schemaGetter)
+	require.Nil(t, repo.WaitForStartup(testCtx()))
 	defer repo.Shutdown(context.Background())
 
 	migrator := NewMigrator(repo, logger)
@@ -876,88 +1068,86 @@ func TestGeoPropUpdateJourney(t *testing.T) {
 		"1477aed8-f677-4131-a3ad-4deef6176066",
 	}
 
-	coordinates := [][]float32{
-		{7, 1},
-		{8, 2},
-	}
-
 	searchQuery := filters.GeoRange{
 		GeoCoordinates: &models.GeoCoordinates{
 			Latitude:  ptFloat32(6.0),
 			Longitude: ptFloat32(-2.0),
 		},
-		Distance: 100000000, // should be enough to cover the entire earth
+		Distance: 400000, // distance to filter only 1 closest object in both test cases
 	}
 
-	upsert := func(t *testing.T) {
-		for i, id := range ids {
-			repo.PutObject(context.Background(), &models.Object{
-				Class: "GeoUpdateTestClass",
-				ID:    id,
-				Properties: map[string]interface{}{
-					"location": &models.GeoCoordinates{
-						Latitude:  &coordinates[i][0],
-						Longitude: &coordinates[i][1],
+	upsertFn := func(coordinates [][]float32) func(t *testing.T) {
+		return func(t *testing.T) {
+			for i, id := range ids {
+				repo.PutObject(context.Background(), &models.Object{
+					Class: "GeoUpdateTestClass",
+					ID:    id,
+					Properties: map[string]interface{}{
+						"location": &models.GeoCoordinates{
+							Latitude:  &coordinates[i][0],
+							Longitude: &coordinates[i][1],
+						},
 					},
-				},
-			}, []float32{0.5})
+				}, []float32{0.5}, nil, nil)
+			}
 		}
 	}
 
-	t.Run("import items", upsert)
+	t.Run("import items", upsertFn([][]float32{
+		{7, 1},
+		{8, 2},
+	}))
 
-	t.Run("verify original order", func(t *testing.T) {
-		res, err := repo.ClassSearch(context.Background(),
+	t.Run("verify 1st object found", func(t *testing.T) {
+		res, err := repo.Search(context.Background(),
 			getParamsWithFilter("GeoUpdateTestClass", buildFilter(
 				"location", searchQuery, wgr, schema.DataTypeGeoCoordinates,
 			)))
 
 		require.Nil(t, err)
-		require.Len(t, res, 2)
+		require.Len(t, res, 1)
 		assert.Equal(t, ids[0], res[0].ID)
-		assert.Equal(t, ids[1], res[1].ID)
 	})
 
-	coordinates = [][]float32{
+	t.Run("import items", upsertFn([][]float32{
 		// move item 0 farther away from the search query and item 1 closer to it
 		{23, 14},
 		{6.5, -1},
-	}
+	}))
 
-	t.Run("import items", upsert)
-
-	t.Run("verify updated order", func(t *testing.T) {
-		res, err := repo.ClassSearch(context.Background(),
+	t.Run("verify 2nd object found", func(t *testing.T) {
+		res, err := repo.Search(context.Background(),
 			getParamsWithFilter("GeoUpdateTestClass", buildFilter(
 				"location", searchQuery, wgr, schema.DataTypeGeoCoordinates,
 			)))
 
 		require.Nil(t, err)
-		require.Len(t, res, 2)
+		require.Len(t, res, 1)
 
 		// notice the opposite order
 		assert.Equal(t, ids[1], res[0].ID)
-		assert.Equal(t, ids[0], res[1].ID)
 	})
 }
 
 // This test prevents a regression on
-// https://github.com/semi-technologies/weaviate/issues/1426
+// https://github.com/weaviate/weaviate/issues/1426
 func TestCasingOfOperatorCombinations(t *testing.T) {
-	rand.Seed(time.Now().UnixNano())
 	dirName := t.TempDir()
 
 	logger, _ := test.NewNullLogger()
-	schemaGetter := &fakeSchemaGetter{shardState: singleShardState()}
-	repo := New(logger, Config{
-		MemtablesFlushIdleAfter:   60,
+	schemaGetter := &fakeSchemaGetter{
+		schema:     schema.Schema{Objects: &models.Schema{Classes: nil}},
+		shardState: singleShardState(),
+	}
+	repo, err := New(logger, Config{
+		MemtablesFlushDirtyAfter:  60,
 		RootPath:                  dirName,
 		QueryMaximumResults:       10000,
 		MaxImportGoroutinesFactor: 1,
 	}, &fakeRemoteClient{}, &fakeNodeResolver{}, &fakeRemoteNodeClient{}, &fakeReplicationClient{}, nil)
-	repo.SetSchemaGetter(schemaGetter)
-	err := repo.WaitForStartup(testCtx())
 	require.Nil(t, err)
+	repo.SetSchemaGetter(schemaGetter)
+	require.Nil(t, repo.WaitForStartup(testCtx()))
 	defer repo.Shutdown(context.Background())
 
 	migrator := NewMigrator(repo, logger)
@@ -969,18 +1159,18 @@ func TestCasingOfOperatorCombinations(t *testing.T) {
 		Properties: []*models.Property{
 			{
 				Name:         "name",
-				DataType:     []string{string(schema.DataTypeString)},
-				Tokenization: "word",
+				DataType:     schema.DataTypeText.PropString(),
+				Tokenization: models.PropertyTokenizationWhitespace,
 			},
 			{
-				Name:         "textProp",
-				DataType:     []string{string(schema.DataTypeText)},
-				Tokenization: "word",
+				Name:         "textPropWord",
+				DataType:     schema.DataTypeText.PropString(),
+				Tokenization: models.PropertyTokenizationWord,
 			},
 			{
-				Name:         "stringProp",
-				DataType:     []string{string(schema.DataTypeString)},
-				Tokenization: "word",
+				Name:         "textPropWhitespace",
+				DataType:     schema.DataTypeText.PropString(),
+				Tokenization: models.PropertyTokenizationWhitespace,
 			},
 		},
 	}
@@ -990,9 +1180,9 @@ func TestCasingOfOperatorCombinations(t *testing.T) {
 			Class: class.Class,
 			ID:    strfmt.UUID(uuid.New().String()),
 			Properties: map[string]interface{}{
-				"name":       "all lowercase",
-				"stringProp": "apple banana orange",
-				"textProp":   "apple banana orange",
+				"name":               "all lowercase",
+				"textPropWhitespace": "apple banana orange",
+				"textPropWord":       "apple banana orange",
 			},
 			Vector: []float32{0.1},
 		},
@@ -1000,9 +1190,9 @@ func TestCasingOfOperatorCombinations(t *testing.T) {
 			Class: class.Class,
 			ID:    strfmt.UUID(uuid.New().String()),
 			Properties: map[string]interface{}{
-				"name":       "mixed case",
-				"stringProp": "apple Banana ORANGE",
-				"textProp":   "apple Banana ORANGE",
+				"name":               "mixed case",
+				"textPropWhitespace": "apple Banana ORANGE",
+				"textPropWord":       "apple Banana ORANGE",
 			},
 			Vector: []float32{0.1},
 		},
@@ -1010,9 +1200,9 @@ func TestCasingOfOperatorCombinations(t *testing.T) {
 			Class: class.Class,
 			ID:    strfmt.UUID(uuid.New().String()),
 			Properties: map[string]interface{}{
-				"name":       "first letter uppercase",
-				"stringProp": "Apple Banana Orange",
-				"textProp":   "Apple Banana Orange",
+				"name":               "first letter uppercase",
+				"textPropWhitespace": "Apple Banana Orange",
+				"textPropWord":       "Apple Banana Orange",
 			},
 			Vector: []float32{0.1},
 		},
@@ -1020,9 +1210,9 @@ func TestCasingOfOperatorCombinations(t *testing.T) {
 			Class: class.Class,
 			ID:    strfmt.UUID(uuid.New().String()),
 			Properties: map[string]interface{}{
-				"name":       "all uppercase",
-				"stringProp": "APPLE BANANA ORANGE",
-				"textProp":   "APPLE BANANA ORANGE",
+				"name":               "all uppercase",
+				"textPropWhitespace": "APPLE BANANA ORANGE",
+				"textPropWord":       "APPLE BANANA ORANGE",
 			},
 			Vector: []float32{0.1},
 		},
@@ -1042,7 +1232,7 @@ func TestCasingOfOperatorCombinations(t *testing.T) {
 		for i, obj := range objects {
 			t.Run(fmt.Sprintf("importing object %d", i), func(t *testing.T) {
 				require.Nil(t,
-					repo.PutObject(context.Background(), obj, obj.Vector))
+					repo.PutObject(context.Background(), obj, obj.Vector, nil, nil))
 			})
 		}
 	})
@@ -1056,140 +1246,92 @@ func TestCasingOfOperatorCombinations(t *testing.T) {
 		}
 
 		tests := []test{
-			// pT stands for propType, meaning this the type the object has according
-			// to the schema
-			// sT stands for searchType, meaning the type the user specified at
-			// search time
 			{
-				name:   "pT==sT, text, lowercase, single word, should match all",
-				filter: buildFilter("textProp", "apple", eq, dtText),
+				name:   "text word, lowercase, single word, should match all",
+				filter: buildFilter("textPropWord", "apple", eq, dtText),
 				expectedNames: []string{
 					"all uppercase", "all lowercase", "mixed case",
 					"first letter uppercase",
 				},
 			},
 			{
-				name:   "pT==sT, text, lowercase, multiple words, should match all",
-				filter: buildFilter("textProp", "apple banana orange", eq, dtText),
+				name:   "text word, lowercase, multiple words, should match all",
+				filter: buildFilter("textPropWord", "apple banana orange", eq, dtText),
 				expectedNames: []string{
 					"all uppercase", "all lowercase", "mixed case",
 					"first letter uppercase",
 				},
 			},
 			{
-				name:   "pT==sT, text, mixed case, single word, should match all",
-				filter: buildFilter("textProp", "Apple", eq, dtText),
+				name:   "text word, mixed case, single word, should match all",
+				filter: buildFilter("textPropWord", "Apple", eq, dtText),
 				expectedNames: []string{
 					"all uppercase", "all lowercase", "mixed case",
 					"first letter uppercase",
 				},
 			},
 			{
-				name:   "pT==sT, text, mixed case, multiple words, should match all",
-				filter: buildFilter("textProp", "Apple Banana Orange", eq, dtText),
+				name:   "text word, mixed case, multiple words, should match all",
+				filter: buildFilter("textPropWord", "Apple Banana Orange", eq, dtText),
 				expectedNames: []string{
 					"all uppercase", "all lowercase", "mixed case",
 					"first letter uppercase",
 				},
 			},
 			{
-				name:   "pT==sT, text, uppercase, single word, should match all",
-				filter: buildFilter("textProp", "APPLE", eq, dtText),
+				name:   "text word, uppercase, single word, should match all",
+				filter: buildFilter("textPropWord", "APPLE", eq, dtText),
 				expectedNames: []string{
 					"all uppercase", "all lowercase", "mixed case",
 					"first letter uppercase",
 				},
 			},
 			{
-				name:   "pT==sT, text, uppercase, multiple words, should match all",
-				filter: buildFilter("textProp", "APPLE BANANA ORANGE", eq, dtText),
+				name:   "text word, uppercase, multiple words, should match all",
+				filter: buildFilter("textPropWord", "APPLE BANANA ORANGE", eq, dtText),
 				expectedNames: []string{
 					"all uppercase", "all lowercase", "mixed case",
 					"first letter uppercase",
 				},
 			},
 			{
-				name:   "pT==sT, string, lowercase, single word, should match exact casing",
-				filter: buildFilter("stringProp", "apple", eq, dtString),
+				name:   "text whitespace, lowercase, single word, should match exact casing",
+				filter: buildFilter("textPropWhitespace", "apple", eq, dtText),
 				expectedNames: []string{
 					"all lowercase", "mixed case", // mixed matches because the first word is all lowercase
 				},
 			},
 			{
-				name:          "pT==sT, string, lowercase, multiple words, should match all-lowercase",
-				filter:        buildFilter("stringProp", "apple banana orange", eq, dtString),
+				name:          "text whitespace, lowercase, multiple words, should match all-lowercase",
+				filter:        buildFilter("textPropWhitespace", "apple banana orange", eq, dtText),
 				expectedNames: []string{"all lowercase"},
 			},
 			{
-				name:   "pT==sT, string, mixed case, single word, should match exact matches",
-				filter: buildFilter("stringProp", "Banana", eq, dtString),
+				name:   "text whitespace, mixed case, single word, should match exact matches",
+				filter: buildFilter("textPropWhitespace", "Banana", eq, dtText),
 				expectedNames: []string{
 					"mixed case", "first letter uppercase",
 				},
 			},
 			{
-				name:   "pT==sT, string, mixed case, multiple words, should match exact matches",
-				filter: buildFilter("stringProp", "apple Banana ORANGE", eq, dtString),
+				name:   "text whitespace, mixed case, multiple words, should match exact matches",
+				filter: buildFilter("textPropWhitespace", "apple Banana ORANGE", eq, dtText),
 				expectedNames: []string{
 					"mixed case",
 				},
 			},
 			{
-				name:   "pT==sT, string, uppercase, single word, should match all upper",
-				filter: buildFilter("stringProp", "APPLE", eq, dtString),
+				name:   "text whitespace, uppercase, single word, should match all upper",
+				filter: buildFilter("textPropWhitespace", "APPLE", eq, dtText),
 				expectedNames: []string{
 					"all uppercase",
 				},
 			},
 			{
-				name:   "pT==sT, string, uppercase, multiple words, should match only all upper",
-				filter: buildFilter("stringProp", "APPLE BANANA ORANGE", eq, dtString),
+				name:   "text whitespace, uppercase, multiple words, should match only all upper",
+				filter: buildFilter("textPropWhitespace", "APPLE BANANA ORANGE", eq, dtText),
 				expectedNames: []string{
 					"all uppercase",
-				},
-			},
-
-			// The next four tests mix up the datatype specified in the prop and
-			// specified at search time. It is questionable if there is any value in
-			// intentionally mixing them up, however, these tests also serve as
-			// documentation to what would happen if they are used as such.
-
-			{
-				// sT==string means the casing is not altered in the index, so you
-				// would search exactly as it is stored in the inverted index since
-				// pT==text lowercased at import time, this matches
-				name:   "pT==text, sT==string, lowercase, single word, matches all",
-				filter: buildFilter("textProp", "apple", eq, dtString),
-				expectedNames: []string{
-					"all uppercase", "all lowercase", "mixed case",
-					"first letter uppercase",
-				},
-			},
-			{
-				// lowercased in the index, but sT==string means casing unchanged
-				// -> no matches
-				name:          "pT==text, sT==string, uppercase, single word, matches none",
-				filter:        buildFilter("textProp", "APPLE", eq, dtString),
-				expectedNames: []string{},
-			},
-			{
-				// sT==text means the search term will be lowercased
-				// since pT=string does not alter the casing only lowercase objects
-				// would be found
-				name:   "pT==string, sT==text, lowercase, single word",
-				filter: buildFilter("stringProp", "apple", eq, dtText),
-				expectedNames: []string{
-					"all lowercase", "mixed case",
-				},
-			},
-			{
-				// sT==text means the search term will be lowercased
-				// since pT=string does not alter the casing only lowercase objects
-				// would be found
-				name:   "pT==string, sT==text, uppercase, single word",
-				filter: buildFilter("stringProp", "APPLE", eq, dtText),
-				expectedNames: []string{
-					"all lowercase", "mixed case",
 				},
 			},
 		}
@@ -1199,12 +1341,12 @@ func TestCasingOfOperatorCombinations(t *testing.T) {
 				if test.limit == 0 {
 					test.limit = 100
 				}
-				params := traverser.GetParams{
+				params := dto.GetParams{
 					ClassName:  class.Class,
 					Pagination: &filters.Pagination{Limit: test.limit},
 					Filters:    test.filter,
 				}
-				res, err := repo.ClassSearch(context.Background(), params)
+				res, err := repo.Search(context.Background(), params)
 				require.Nil(t, err)
 				require.Len(t, res, len(test.expectedNames))
 
@@ -1212,7 +1354,7 @@ func TestCasingOfOperatorCombinations(t *testing.T) {
 				for pos, obj := range res {
 					names[pos] = obj.Schema.(map[string]interface{})["name"].(string)
 				}
-				assert.ElementsMatch(t, names, test.expectedNames, "names dont match")
+				assert.ElementsMatch(t, names, test.expectedNames, "names don't match")
 			})
 		}
 	})
@@ -1327,16 +1469,16 @@ func testSortProperties(repo *DB) func(t *testing.T) {
 				expectedIDs: []strfmt.UUID{carPoloID, carSprinterID, carE63sID, carEmpty, carNilID},
 			},
 			{
-				name: "colorArrayWord asc",
+				name: "colorArrayWhitespace asc",
 				sort: []filters.Sort{
-					buildSortFilter([]string{"colorArrayWord"}, "asc"),
+					buildSortFilter([]string{"colorArrayWhitespace"}, "asc"),
 				},
 				expectedIDs: []strfmt.UUID{carNilID, carEmpty, carPoloID, carSprinterID, carE63sID},
 			},
 			{
-				name: "colorArrayWord desc",
+				name: "colorArrayWhitespace desc",
 				sort: []filters.Sort{
-					buildSortFilter([]string{"colorArrayWord"}, "desc"),
+					buildSortFilter([]string{"colorArrayWhitespace"}, "desc"),
 				},
 				expectedIDs: []strfmt.UUID{carE63sID, carSprinterID, carPoloID, carNilID, carEmpty},
 			},
@@ -1368,12 +1510,12 @@ func testSortProperties(repo *DB) func(t *testing.T) {
 		}
 		for _, test := range tests {
 			t.Run(test.name, func(t *testing.T) {
-				params := traverser.GetParams{
+				params := dto.GetParams{
 					ClassName:  carClass.Class,
 					Pagination: &filters.Pagination{Limit: 100},
 					Sort:       test.sort,
 				}
-				res, err := repo.ClassSearch(context.Background(), params)
+				res, err := repo.Search(context.Background(), params)
 				if test.wantErr {
 					require.NotNil(t, err)
 					require.Contains(t, err.Error(), test.errMessage)
@@ -1381,7 +1523,7 @@ func testSortProperties(repo *DB) func(t *testing.T) {
 					require.Nil(t, err)
 					require.Len(t, res, len(test.expectedIDs))
 
-					ids := make([]strfmt.UUID, len(test.expectedIDs), len(test.expectedIDs))
+					ids := make([]strfmt.UUID, len(test.expectedIDs))
 					for pos, concept := range res {
 						ids[pos] = concept.ID
 					}
@@ -1393,20 +1535,22 @@ func testSortProperties(repo *DB) func(t *testing.T) {
 }
 
 func TestFilteringAfterDeletion(t *testing.T) {
-	rand.Seed(time.Now().UnixNano())
 	dirName := t.TempDir()
 
 	logger, _ := test.NewNullLogger()
-	schemaGetter := &fakeSchemaGetter{shardState: singleShardState()}
-	repo := New(logger, Config{
-		MemtablesFlushIdleAfter:   60,
+	schemaGetter := &fakeSchemaGetter{
+		schema:     schema.Schema{Objects: &models.Schema{Classes: nil}},
+		shardState: singleShardState(),
+	}
+	repo, err := New(logger, Config{
+		MemtablesFlushDirtyAfter:  60,
 		RootPath:                  dirName,
 		QueryMaximumResults:       10000,
 		MaxImportGoroutinesFactor: 1,
 	}, &fakeRemoteClient{}, &fakeNodeResolver{}, &fakeRemoteNodeClient{}, &fakeReplicationClient{}, nil)
-	repo.SetSchemaGetter(schemaGetter)
-	err := repo.WaitForStartup(testCtx())
 	require.Nil(t, err)
+	repo.SetSchemaGetter(schemaGetter)
+	require.Nil(t, repo.WaitForStartup(testCtx()))
 	defer repo.Shutdown(context.Background())
 
 	migrator := NewMigrator(repo, logger)
@@ -1417,12 +1561,13 @@ func TestFilteringAfterDeletion(t *testing.T) {
 		Properties: []*models.Property{
 			{
 				Name:         "name",
-				DataType:     []string{string(schema.DataTypeString)},
-				Tokenization: "word",
+				DataType:     schema.DataTypeText.PropString(),
+				Tokenization: models.PropertyTokenizationWhitespace,
 			},
 			{
-				Name:     "other",
-				DataType: []string{string(schema.DataTypeString)},
+				Name:         "other",
+				DataType:     schema.DataTypeText.PropString(),
+				Tokenization: models.PropertyTokenizationWhitespace,
 			},
 		},
 	}
@@ -1458,55 +1603,55 @@ func TestFilteringAfterDeletion(t *testing.T) {
 		for i, obj := range objects {
 			t.Run(fmt.Sprintf("importing object %d", i), func(t *testing.T) {
 				require.Nil(t,
-					repo.PutObject(context.Background(), obj, obj.Vector))
+					repo.PutObject(context.Background(), obj, obj.Vector, nil, nil))
 			})
 		}
 	})
 
 	t.Run("Filter before deletion", func(t *testing.T) {
 		filterNil := buildFilter("other", true, null, dtBool)
-		paramsNil := traverser.GetParams{
+		paramsNil := dto.GetParams{
 			ClassName:  class.Class,
 			Pagination: &filters.Pagination{Limit: 2},
 			Filters:    filterNil,
 		}
-		resNil, err := repo.ClassSearch(context.Background(), paramsNil)
+		resNil, err := repo.Search(context.Background(), paramsNil)
 		assert.Nil(t, err)
 		assert.Equal(t, 1, len(resNil))
 		assert.Equal(t, UUID2, resNil[0].ID)
 
 		filterLen := buildFilter("len(name)", 9, eq, dtInt)
-		paramsLen := traverser.GetParams{
+		paramsLen := dto.GetParams{
 			ClassName:  class.Class,
 			Pagination: &filters.Pagination{Limit: 2},
 			Filters:    filterLen,
 		}
-		resLen, err := repo.ClassSearch(context.Background(), paramsLen)
+		resLen, err := repo.Search(context.Background(), paramsLen)
 		assert.Nil(t, err)
 		assert.Equal(t, 1, len(resLen))
 		assert.Equal(t, UUID2, resLen[0].ID)
 	})
 
 	t.Run("Delete object and filter again", func(t *testing.T) {
-		repo.DeleteObject(context.Background(), "DeletionClass", UUID2)
+		repo.DeleteObject(context.Background(), "DeletionClass", UUID2, nil, "")
 
 		filterNil := buildFilter("other", true, null, dtBool)
-		paramsNil := traverser.GetParams{
+		paramsNil := dto.GetParams{
 			ClassName:  class.Class,
 			Pagination: &filters.Pagination{Limit: 2},
 			Filters:    filterNil,
 		}
-		resNil, err := repo.ClassSearch(context.Background(), paramsNil)
+		resNil, err := repo.Search(context.Background(), paramsNil)
 		assert.Nil(t, err)
 		assert.Equal(t, 0, len(resNil))
 
 		filterLen := buildFilter("len(name)", 9, eq, dtInt)
-		paramsLen := traverser.GetParams{
+		paramsLen := dto.GetParams{
 			ClassName:  class.Class,
 			Pagination: &filters.Pagination{Limit: 2},
 			Filters:    filterLen,
 		}
-		resLen, err := repo.ClassSearch(context.Background(), paramsLen)
+		resLen, err := repo.Search(context.Background(), paramsLen)
 		assert.Nil(t, err)
 		assert.Equal(t, 0, len(resLen))
 	})

@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package explore
@@ -15,12 +15,13 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/semi-technologies/weaviate/adapters/handlers/graphql/local/common_filters"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/search"
-	"github.com/semi-technologies/weaviate/usecases/traverser"
 	"github.com/tailor-inc/graphql"
 	"github.com/tailor-inc/graphql/language/ast"
+	"github.com/weaviate/weaviate/adapters/handlers/graphql/local/common_filters"
+	enterrors "github.com/weaviate/weaviate/entities/errors"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/search"
+	"github.com/weaviate/weaviate/usecases/traverser"
 )
 
 // Resolver is a local interface that can be composed with other interfaces to
@@ -66,6 +67,14 @@ func newResolver(modulesProvider ModulesProvider) *resolver {
 }
 
 func (r *resolver) resolve(p graphql.ResolveParams) (interface{}, error) {
+	result, err := r.resolveExplore(p)
+	if err != nil {
+		return result, enterrors.NewErrGraphQLUser(err, "Explore", "")
+	}
+	return result, nil
+}
+
+func (r *resolver) resolveExplore(p graphql.ResolveParams) (interface{}, error) {
 	resources, err := newResources(p.Source)
 	if err != nil {
 		return nil, err

@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package clusterapi
@@ -18,7 +18,7 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/semi-technologies/weaviate/usecases/backup"
+	"github.com/weaviate/weaviate/usecases/backup"
 )
 
 type backupManager interface {
@@ -30,14 +30,19 @@ type backupManager interface {
 
 type backups struct {
 	manager backupManager
+	auth    auth
 }
 
-func NewBackups(manager backupManager) *backups {
-	return &backups{manager: manager}
+func NewBackups(manager backupManager, auth auth) *backups {
+	return &backups{manager: manager, auth: auth}
 }
 
 func (b *backups) CanCommit() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return b.auth.handleFunc(b.canCommitHandler())
+}
+
+func (b *backups) canCommitHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			status := http.StatusInternalServerError
@@ -63,7 +68,7 @@ func (b *backups) CanCommit() http.Handler {
 
 		w.WriteHeader(http.StatusOK)
 		w.Write(b)
-	})
+	}
 }
 
 func (b *backups) Commit() http.Handler {

@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 //go:build integrationTest
@@ -17,25 +17,25 @@ package hnsw
 import (
 	"context"
 	"fmt"
-	"math/rand"
 	"os"
 	"path"
 	"testing"
-	"time"
 
-	"github.com/semi-technologies/weaviate/adapters/repos/db/vector/hnsw/distancer"
-	hnswent "github.com/semi-technologies/weaviate/entities/vectorindex/hnsw"
 	"github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/adapters/repos/db/vector/hnsw/distancer"
+	"github.com/weaviate/weaviate/adapters/repos/db/vector/testinghelpers"
+	"github.com/weaviate/weaviate/entities/cyclemanager"
+	hnswent "github.com/weaviate/weaviate/entities/vectorindex/hnsw"
 )
 
 func TestStartupWithCorruptCondenseFiles(t *testing.T) {
-	rand.Seed(time.Now().UnixNano())
 	rootPath := t.TempDir()
 
 	logger, _ := test.NewNullLogger()
-	original, err := NewCommitLogger(rootPath, "corrupt_test", 0, logger)
+	original, err := NewCommitLogger(rootPath, "corrupt_test", logger,
+		cyclemanager.NewCallbackGroupNoop())
 	require.Nil(t, err)
 
 	data := [][]float32{
@@ -67,7 +67,8 @@ func TestStartupWithCorruptCondenseFiles(t *testing.T) {
 			MaxConnections:         100,
 			EFConstruction:         100,
 			CleanupIntervalSeconds: 0,
-		})
+		}, cyclemanager.NewCallbackGroupNoop(), cyclemanager.NewCallbackGroupNoop(),
+			cyclemanager.NewCallbackGroupNoop(), testinghelpers.NewDummyStore(t))
 		require.Nil(t, err)
 		index = idx
 	})
@@ -118,7 +119,8 @@ func TestStartupWithCorruptCondenseFiles(t *testing.T) {
 			MaxConnections:         100,
 			EFConstruction:         100,
 			CleanupIntervalSeconds: 0,
-		})
+		}, cyclemanager.NewCallbackGroupNoop(), cyclemanager.NewCallbackGroupNoop(),
+			cyclemanager.NewCallbackGroupNoop(), testinghelpers.NewDummyStore(t))
 		require.Nil(t, err)
 		index = idx
 	})

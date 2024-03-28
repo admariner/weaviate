@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 //go:build integrationTest
@@ -24,37 +24,41 @@ import (
 
 	"github.com/go-openapi/strfmt"
 	"github.com/google/uuid"
-	"github.com/semi-technologies/weaviate/adapters/repos/db/vector/hnsw/distancer"
-	"github.com/semi-technologies/weaviate/entities/filters"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	"github.com/semi-technologies/weaviate/entities/search"
-	enthnsw "github.com/semi-technologies/weaviate/entities/vectorindex/hnsw"
-	"github.com/semi-technologies/weaviate/usecases/objects"
-	"github.com/semi-technologies/weaviate/usecases/traverser"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/adapters/repos/db/vector/hnsw/distancer"
+	"github.com/weaviate/weaviate/entities/dto"
+	"github.com/weaviate/weaviate/entities/filters"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/search"
+	enthnsw "github.com/weaviate/weaviate/entities/vectorindex/hnsw"
+	"github.com/weaviate/weaviate/usecases/objects"
 )
 
 func TestBatchPutObjectsWithDimensions(t *testing.T) {
-	rand.Seed(time.Now().UnixNano())
 	dirName := t.TempDir()
 
 	logger := logrus.New()
-	schemaGetter := &fakeSchemaGetter{shardState: singleShardState()}
-	repo := New(logger, Config{
-		MemtablesFlushIdleAfter:   60,
+	schemaGetter := &fakeSchemaGetter{
+		schema:     schema.Schema{Objects: &models.Schema{Classes: nil}},
+		shardState: singleShardState(),
+	}
+	repo, err := New(logger, Config{
+		MemtablesFlushDirtyAfter:  60,
 		RootPath:                  dirName,
 		QueryMaximumResults:       10000,
 		MaxImportGoroutinesFactor: 1,
 		TrackVectorDimensions:     true,
 	}, &fakeRemoteClient{}, &fakeNodeResolver{}, &fakeRemoteNodeClient{}, &fakeReplicationClient{}, nil)
-	repo.SetSchemaGetter(schemaGetter)
-	err := repo.WaitForStartup(testCtx())
 	require.Nil(t, err)
+	repo.SetSchemaGetter(schemaGetter)
+	require.Nil(t, repo.WaitForStartup(testCtx()))
 
-	defer repo.Shutdown(context.Background())
+	defer func() {
+		require.Nil(t, repo.Shutdown(context.Background()))
+	}()
 	migrator := NewMigrator(repo, logger)
 
 	t.Run("creating the thing class", testAddBatchObjectClass(repo, migrator, schemaGetter))
@@ -69,23 +73,27 @@ func TestBatchPutObjectsWithDimensions(t *testing.T) {
 }
 
 func TestBatchPutObjects(t *testing.T) {
-	rand.Seed(time.Now().UnixNano())
 	dirName := t.TempDir()
 
 	logger := logrus.New()
-	schemaGetter := &fakeSchemaGetter{shardState: singleShardState()}
-	repo := New(logger, Config{
-		MemtablesFlushIdleAfter:   60,
+	schemaGetter := &fakeSchemaGetter{
+		schema:     schema.Schema{Objects: &models.Schema{Classes: nil}},
+		shardState: singleShardState(),
+	}
+	repo, err := New(logger, Config{
+		MemtablesFlushDirtyAfter:  60,
 		RootPath:                  dirName,
 		QueryMaximumResults:       10000,
 		MaxImportGoroutinesFactor: 1,
 		TrackVectorDimensions:     true,
 	}, &fakeRemoteClient{}, &fakeNodeResolver{}, &fakeRemoteNodeClient{}, &fakeReplicationClient{}, nil)
-	repo.SetSchemaGetter(schemaGetter)
-	err := repo.WaitForStartup(testCtx())
 	require.Nil(t, err)
+	repo.SetSchemaGetter(schemaGetter)
+	require.Nil(t, repo.WaitForStartup(testCtx()))
 
-	defer repo.Shutdown(context.Background())
+	defer func() {
+		require.Nil(t, repo.Shutdown(context.Background()))
+	}()
 	migrator := NewMigrator(repo, logger)
 
 	t.Run("creating the thing class", testAddBatchObjectClass(repo, migrator, schemaGetter))
@@ -95,23 +103,27 @@ func TestBatchPutObjects(t *testing.T) {
 }
 
 func TestBatchPutObjectsNoVectorsWithDimensions(t *testing.T) {
-	rand.Seed(time.Now().UnixNano())
 	dirName := t.TempDir()
 
 	logger := logrus.New()
-	schemaGetter := &fakeSchemaGetter{shardState: singleShardState()}
-	repo := New(logger, Config{
-		MemtablesFlushIdleAfter:   60,
+	schemaGetter := &fakeSchemaGetter{
+		schema:     schema.Schema{Objects: &models.Schema{Classes: nil}},
+		shardState: singleShardState(),
+	}
+	repo, err := New(logger, Config{
+		MemtablesFlushDirtyAfter:  60,
 		RootPath:                  dirName,
 		QueryMaximumResults:       10000,
 		MaxImportGoroutinesFactor: 1,
 		TrackVectorDimensions:     true,
 	}, &fakeRemoteClient{}, &fakeNodeResolver{}, &fakeRemoteNodeClient{}, &fakeReplicationClient{}, nil)
-	repo.SetSchemaGetter(schemaGetter)
-	err := repo.WaitForStartup(testCtx())
 	require.Nil(t, err)
+	repo.SetSchemaGetter(schemaGetter)
+	require.Nil(t, repo.WaitForStartup(testCtx()))
 
-	defer repo.Shutdown(context.Background())
+	defer func() {
+		require.Nil(t, repo.Shutdown(context.Background()))
+	}()
 	migrator := NewMigrator(repo, logger)
 
 	t.Run("creating the thing class", testAddBatchObjectClass(repo, migrator,
@@ -127,22 +139,26 @@ func TestBatchPutObjectsNoVectorsWithDimensions(t *testing.T) {
 }
 
 func TestBatchPutObjectsNoVectors(t *testing.T) {
-	rand.Seed(time.Now().UnixNano())
 	dirName := t.TempDir()
 
 	logger := logrus.New()
-	schemaGetter := &fakeSchemaGetter{shardState: singleShardState()}
-	repo := New(logger, Config{
-		MemtablesFlushIdleAfter:   60,
+	schemaGetter := &fakeSchemaGetter{
+		schema:     schema.Schema{Objects: &models.Schema{Classes: nil}},
+		shardState: singleShardState(),
+	}
+	repo, err := New(logger, Config{
+		MemtablesFlushDirtyAfter:  60,
 		RootPath:                  dirName,
 		QueryMaximumResults:       10000,
 		MaxImportGoroutinesFactor: 1,
 	}, &fakeRemoteClient{}, &fakeNodeResolver{}, &fakeRemoteNodeClient{}, &fakeReplicationClient{}, nil)
-	repo.SetSchemaGetter(schemaGetter)
-	err := repo.WaitForStartup(testCtx())
 	require.Nil(t, err)
+	repo.SetSchemaGetter(schemaGetter)
+	require.Nil(t, repo.WaitForStartup(testCtx()))
 
-	defer repo.Shutdown(context.Background())
+	defer func() {
+		require.Nil(t, repo.Shutdown(context.Background()))
+	}()
 	migrator := NewMigrator(repo, logger)
 
 	t.Run("creating the thing class", testAddBatchObjectClass(repo, migrator, schemaGetter))
@@ -152,22 +168,26 @@ func TestBatchPutObjectsNoVectors(t *testing.T) {
 
 func TestBatchDeleteObjectsWithDimensions(t *testing.T) {
 	className := "ThingForBatching"
-	rand.Seed(time.Now().UnixNano())
 	dirName := t.TempDir()
 
 	logger := logrus.New()
-	schemaGetter := &fakeSchemaGetter{shardState: singleShardState()}
-	repo := New(logger, Config{
-		MemtablesFlushIdleAfter:   1,
+	schemaGetter := &fakeSchemaGetter{
+		schema:     schema.Schema{Objects: &models.Schema{Classes: nil}},
+		shardState: singleShardState(),
+	}
+	repo, err := New(logger, Config{
+		MemtablesFlushDirtyAfter:  1,
 		RootPath:                  dirName,
 		QueryMaximumResults:       10000,
 		MaxImportGoroutinesFactor: 1,
 		TrackVectorDimensions:     true,
 	}, &fakeRemoteClient{}, &fakeNodeResolver{}, &fakeRemoteNodeClient{}, &fakeReplicationClient{}, nil)
-	repo.SetSchemaGetter(schemaGetter)
-	err := repo.WaitForStartup(testCtx())
 	require.Nil(t, err)
-	defer repo.Shutdown(context.Background())
+	repo.SetSchemaGetter(schemaGetter)
+	require.Nil(t, repo.WaitForStartup(testCtx()))
+	defer func() {
+		require.Nil(t, repo.Shutdown(context.Background()))
+	}()
 
 	migrator := NewMigrator(repo, logger)
 
@@ -188,62 +208,65 @@ func TestBatchDeleteObjectsWithDimensions(t *testing.T) {
 }
 
 func delete2Objects(t *testing.T, repo *DB, className string) {
-	batchDeleteRes, err := repo.BatchDeleteObjects(context.Background(),
-		objects.BatchDeleteParams{
-			ClassName: "ThingForBatching",
-			Filters: &filters.LocalFilter{
-				Root: &filters.Clause{
-					Operator: filters.OperatorOr,
-					Operands: []filters.Clause{
-						{
-							Operator: filters.OperatorEqual,
-							On: &filters.Path{
-								Class:    "ThingForBatching",
-								Property: schema.PropertyName("id"),
-							},
-							Value: &filters.Value{
-								Value: "8d5a3aa2-3c8d-4589-9ae1-3f638f506003",
-								Type:  schema.DataTypeString,
-							},
+	batchDeleteRes, err := repo.BatchDeleteObjects(context.Background(), objects.BatchDeleteParams{
+		ClassName: "ThingForBatching",
+		Filters: &filters.LocalFilter{
+			Root: &filters.Clause{
+				Operator: filters.OperatorOr,
+				Operands: []filters.Clause{
+					{
+						Operator: filters.OperatorEqual,
+						On: &filters.Path{
+							Class:    "ThingForBatching",
+							Property: schema.PropertyName("id"),
 						},
-						{
-							Operator: filters.OperatorEqual,
-							On: &filters.Path{
-								Class:    "ThingForBatching",
-								Property: schema.PropertyName("id"),
-							},
-							Value: &filters.Value{
-								Value: "8d5a3aa2-3c8d-4589-9ae1-3f638f506004",
-								Type:  schema.DataTypeString,
-							},
+						Value: &filters.Value{
+							Value: "8d5a3aa2-3c8d-4589-9ae1-3f638f506003",
+							Type:  schema.DataTypeText,
+						},
+					},
+					{
+						Operator: filters.OperatorEqual,
+						On: &filters.Path{
+							Class:    "ThingForBatching",
+							Property: schema.PropertyName("id"),
+						},
+						Value: &filters.Value{
+							Value: "8d5a3aa2-3c8d-4589-9ae1-3f638f506004",
+							Type:  schema.DataTypeText,
 						},
 					},
 				},
 			},
-			DryRun: false,
-			Output: "verbose",
-		})
+		},
+		DryRun: false,
+		Output: "verbose",
+	}, nil, "")
 	require.Nil(t, err)
 	require.Equal(t, 2, len(batchDeleteRes.Objects), "Objects deleted")
 }
 
 func TestBatchDeleteObjects(t *testing.T) {
-	rand.Seed(time.Now().UnixNano())
 	dirName := t.TempDir()
 
 	logger := logrus.New()
-	schemaGetter := &fakeSchemaGetter{shardState: singleShardState()}
-	repo := New(logger, Config{
-		MemtablesFlushIdleAfter:   60,
+	schemaGetter := &fakeSchemaGetter{
+		schema:     schema.Schema{Objects: &models.Schema{Classes: nil}},
+		shardState: singleShardState(),
+	}
+	repo, err := New(logger, Config{
+		MemtablesFlushDirtyAfter:  60,
 		RootPath:                  dirName,
 		QueryMaximumResults:       10000,
 		MaxImportGoroutinesFactor: 1,
 		TrackVectorDimensions:     true,
 	}, &fakeRemoteClient{}, &fakeNodeResolver{}, &fakeRemoteNodeClient{}, &fakeReplicationClient{}, nil)
-	repo.SetSchemaGetter(schemaGetter)
-	err := repo.WaitForStartup(testCtx())
 	require.Nil(t, err)
-	defer repo.Shutdown(context.Background())
+	repo.SetSchemaGetter(schemaGetter)
+	require.Nil(t, repo.WaitForStartup(testCtx()))
+	defer func() {
+		require.Nil(t, repo.Shutdown(context.Background()))
+	}()
 	migrator := NewMigrator(repo, logger)
 
 	t.Run("creating the thing class", testAddBatchObjectClass(repo, migrator, schemaGetter))
@@ -254,23 +277,27 @@ func TestBatchDeleteObjects(t *testing.T) {
 }
 
 func TestBatchDeleteObjects_JourneyWithDimensions(t *testing.T) {
-	rand.Seed(time.Now().UnixNano())
 	dirName := t.TempDir()
 
 	queryMaximumResults := int64(200)
 	logger := logrus.New()
-	schemaGetter := &fakeSchemaGetter{shardState: singleShardState()}
-	repo := New(logger, Config{
-		MemtablesFlushIdleAfter:   60,
+	schemaGetter := &fakeSchemaGetter{
+		schema:     schema.Schema{Objects: &models.Schema{Classes: nil}},
+		shardState: singleShardState(),
+	}
+	repo, err := New(logger, Config{
+		MemtablesFlushDirtyAfter:  60,
 		RootPath:                  dirName,
 		QueryMaximumResults:       queryMaximumResults,
 		MaxImportGoroutinesFactor: 1,
 		TrackVectorDimensions:     true,
 	}, &fakeRemoteClient{}, &fakeNodeResolver{}, &fakeRemoteNodeClient{}, &fakeReplicationClient{}, nil)
-	repo.SetSchemaGetter(schemaGetter)
-	err := repo.WaitForStartup(testCtx())
 	require.Nil(t, err)
-	defer repo.Shutdown(context.Background())
+	repo.SetSchemaGetter(schemaGetter)
+	require.Nil(t, repo.WaitForStartup(testCtx()))
+	defer func() {
+		require.Nil(t, repo.Shutdown(context.Background()))
+	}()
 	migrator := NewMigrator(repo, logger)
 
 	t.Run("creating the thing class", testAddBatchObjectClass(repo, migrator, schemaGetter))
@@ -290,22 +317,26 @@ func TestBatchDeleteObjects_JourneyWithDimensions(t *testing.T) {
 }
 
 func TestBatchDeleteObjects_Journey(t *testing.T) {
-	rand.Seed(time.Now().UnixNano())
 	dirName := t.TempDir()
 
 	queryMaximumResults := int64(20)
 	logger := logrus.New()
-	schemaGetter := &fakeSchemaGetter{shardState: singleShardState()}
-	repo := New(logger, Config{
-		MemtablesFlushIdleAfter:   60,
+	schemaGetter := &fakeSchemaGetter{
+		schema:     schema.Schema{Objects: &models.Schema{Classes: nil}},
+		shardState: singleShardState(),
+	}
+	repo, err := New(logger, Config{
+		MemtablesFlushDirtyAfter:  60,
 		RootPath:                  dirName,
 		QueryMaximumResults:       queryMaximumResults,
 		MaxImportGoroutinesFactor: 1,
 	}, &fakeRemoteClient{}, &fakeNodeResolver{}, &fakeRemoteNodeClient{}, &fakeReplicationClient{}, nil)
-	repo.SetSchemaGetter(schemaGetter)
-	err := repo.WaitForStartup(testCtx())
 	require.Nil(t, err)
-	defer repo.Shutdown(context.Background())
+	repo.SetSchemaGetter(schemaGetter)
+	require.Nil(t, repo.WaitForStartup(testCtx()))
+	defer func() {
+		require.Nil(t, repo.Shutdown(context.Background()))
+	}()
 	migrator := NewMigrator(repo, logger)
 
 	t.Run("creating the thing class", testAddBatchObjectClass(repo, migrator,
@@ -325,8 +356,8 @@ func testAddBatchObjectClass(repo *DB, migrator *Migrator,
 			Properties: []*models.Property{
 				{
 					Name:         "stringProp",
-					DataType:     []string{string(schema.DataTypeString)},
-					Tokenization: "word",
+					DataType:     schema.DataTypeText.PropString(),
+					Tokenization: models.PropertyTokenizationWhitespace,
 				},
 				{
 					Name:     "location",
@@ -386,19 +417,19 @@ func testBatchImportObjectsNoVector(repo *DB) func(t *testing.T) {
 			}
 
 			t.Run("can import", func(t *testing.T) {
-				batchRes, err := repo.BatchPutObjects(context.Background(), batch)
+				batchRes, err := repo.BatchPutObjects(context.Background(), batch, nil)
 				require.Nil(t, err)
 
 				assert.Nil(t, batchRes[0].Err)
 				assert.Nil(t, batchRes[2].Err)
 			})
 
-			params := traverser.GetParams{
+			params := dto.GetParams{
 				ClassName:  "ThingForBatching",
 				Pagination: &filters.Pagination{Limit: 10},
 				Filters:    nil,
 			}
-			_, err := repo.ClassSearch(context.Background(), params)
+			_, err := repo.Search(context.Background(), params)
 			require.Nil(t, err)
 		})
 	}
@@ -415,14 +446,14 @@ func simpleInsertObjects(t *testing.T, repo *DB, class string, count int) {
 				Properties: map[string]interface{}{
 					"stringProp": fmt.Sprintf("element %d", i),
 				},
-				ID: strfmt.UUID(fmt.Sprintf("8d5a3aa2-3c8d-4589-9ae1-3f638f506%03d", i)),
+				ID:     strfmt.UUID(fmt.Sprintf("8d5a3aa2-3c8d-4589-9ae1-3f638f506%03d", i)),
+				Vector: []float32{1, 2, 3},
 			},
-			UUID:   strfmt.UUID(fmt.Sprintf("8d5a3aa2-3c8d-4589-9ae1-3f638f506%03d", i)),
-			Vector: []float32{1, 2, 3},
+			UUID: strfmt.UUID(fmt.Sprintf("8d5a3aa2-3c8d-4589-9ae1-3f638f506%03d", i)),
 		}
 	}
 
-	repo.BatchPutObjects(context.Background(), batch)
+	repo.BatchPutObjects(context.Background(), batch, nil)
 }
 
 func testBatchImportObjects(repo *DB) func(t *testing.T) {
@@ -437,10 +468,10 @@ func testBatchImportObjects(repo *DB) func(t *testing.T) {
 						Properties: map[string]interface{}{
 							"stringProp": "first element",
 						},
-						ID: "8d5a3aa2-3c8d-4589-9ae1-3f638f506970",
+						ID:     "8d5a3aa2-3c8d-4589-9ae1-3f638f506970",
+						Vector: []float32{1, 2, 3},
 					},
-					UUID:   "8d5a3aa2-3c8d-4589-9ae1-3f638f506970",
-					Vector: []float32{1, 2, 3},
+					UUID: "8d5a3aa2-3c8d-4589-9ae1-3f638f506970",
 				},
 				objects.BatchObject{
 					OriginalIndex: 1,
@@ -450,10 +481,10 @@ func testBatchImportObjects(repo *DB) func(t *testing.T) {
 						Properties: map[string]interface{}{
 							"stringProp": "second element",
 						},
-						ID: "86a380e9-cb60-4b2a-bc48-51f52acd72d6",
+						ID:     "86a380e9-cb60-4b2a-bc48-51f52acd72d6",
+						Vector: []float32{1, 2, 3},
 					},
-					UUID:   "86a380e9-cb60-4b2a-bc48-51f52acd72d6",
-					Vector: []float32{1, 2, 3},
+					UUID: "86a380e9-cb60-4b2a-bc48-51f52acd72d6",
 				},
 				objects.BatchObject{
 					OriginalIndex: 2,
@@ -463,27 +494,27 @@ func testBatchImportObjects(repo *DB) func(t *testing.T) {
 						Properties: map[string]interface{}{
 							"stringProp": "third element",
 						},
-						ID: "90ade18e-2b99-4903-aa34-1d5d648c932d",
+						ID:     "90ade18e-2b99-4903-aa34-1d5d648c932d",
+						Vector: []float32{1, 2, 3},
 					},
-					UUID:   "90ade18e-2b99-4903-aa34-1d5d648c932d",
-					Vector: []float32{1, 2, 3},
+					UUID: "90ade18e-2b99-4903-aa34-1d5d648c932d",
 				},
 			}
 
 			t.Run("can import", func(t *testing.T) {
-				batchRes, err := repo.BatchPutObjects(context.Background(), batch)
+				batchRes, err := repo.BatchPutObjects(context.Background(), batch, nil)
 				require.Nil(t, err)
 
 				assert.Nil(t, batchRes[0].Err)
 				assert.Nil(t, batchRes[2].Err)
 			})
 
-			params := traverser.GetParams{
+			params := dto.GetParams{
 				ClassName:  "ThingForBatching",
 				Pagination: &filters.Pagination{Limit: 10},
 				Filters:    nil,
 			}
-			res, err := repo.ClassSearch(context.Background(), params)
+			res, err := repo.Search(context.Background(), params)
 			require.Nil(t, err)
 
 			t.Run("contains first element", func(t *testing.T) {
@@ -499,13 +530,13 @@ func testBatchImportObjects(repo *DB) func(t *testing.T) {
 			})
 
 			t.Run("can be queried through the inverted index", func(t *testing.T) {
-				filter := buildFilter("stringProp", "third", eq, dtString)
-				params := traverser.GetParams{
+				filter := buildFilter("stringProp", "third", eq, schema.DataTypeText)
+				params := dto.GetParams{
 					ClassName:  "ThingForBatching",
 					Pagination: &filters.Pagination{Limit: 10},
 					Filters:    filter,
 				}
-				res, err := repo.ClassSearch(context.Background(), params)
+				res, err := repo.Search(context.Background(), params)
 				require.Nil(t, err)
 
 				require.Len(t, res, 1)
@@ -555,8 +586,8 @@ func testBatchImportObjects(repo *DB) func(t *testing.T) {
 			}
 
 			t.Run("can import", func(t *testing.T) {
-				batchRes, err := repo.BatchPutObjects(context.Background(), batch)
-				require.Nil(t, err, "there shouldn't be an overall error, only inividual ones")
+				batchRes, err := repo.BatchPutObjects(context.Background(), batch, nil)
+				require.Nil(t, err, "there shouldn't be an overall error, only individual ones")
 
 				t.Run("element errors are marked correctly", func(t *testing.T) {
 					require.Len(t, batchRes, 3)
@@ -565,12 +596,12 @@ func testBatchImportObjects(repo *DB) func(t *testing.T) {
 				})
 			})
 
-			params := traverser.GetParams{
+			params := dto.GetParams{
 				ClassName:  "ThingForBatching",
 				Pagination: &filters.Pagination{Limit: 10},
 				Filters:    nil,
 			}
-			res, err := repo.ClassSearch(context.Background(), params)
+			res, err := repo.Search(context.Background(), params)
 			require.Nil(t, err)
 
 			t.Run("does not contain second element (validation error)", func(t *testing.T) {
@@ -584,6 +615,61 @@ func testBatchImportObjects(repo *DB) func(t *testing.T) {
 			})
 		})
 
+		t.Run("upserting the same objects over and over again", func(t *testing.T) {
+			for i := 0; i < 20; i++ {
+				batch := objects.BatchObjects{
+					objects.BatchObject{
+						OriginalIndex: 0,
+						Err:           nil,
+						Object: &models.Object{
+							Class: "ThingForBatching",
+							Properties: map[string]interface{}{
+								"stringProp": "first element",
+							},
+							ID:     "8d5a3aa2-3c8d-4589-9ae1-3f638f506970",
+							Vector: []float32{1, 2, 3},
+						},
+						UUID: "8d5a3aa2-3c8d-4589-9ae1-3f638f506970",
+					},
+					objects.BatchObject{
+						OriginalIndex: 1,
+						Err:           nil,
+						Object: &models.Object{
+							Class: "ThingForBatching",
+							Properties: map[string]interface{}{
+								"stringProp": "third element",
+							},
+							ID:     "90ade18e-2b99-4903-aa34-1d5d648c932d",
+							Vector: []float32{1, 1, -3},
+						},
+						UUID: "90ade18e-2b99-4903-aa34-1d5d648c932d",
+					},
+				}
+
+				t.Run("can import", func(t *testing.T) {
+					batchRes, err := repo.BatchPutObjects(context.Background(), batch, nil)
+					require.Nil(t, err)
+
+					assert.Nil(t, batchRes[0].Err)
+					assert.Nil(t, batchRes[1].Err)
+				})
+
+				t.Run("a vector search returns the correct number of elements", func(t *testing.T) {
+					res, err := repo.VectorSearch(context.Background(), dto.GetParams{
+						ClassName: "ThingForBatching",
+						Pagination: &filters.Pagination{
+							Offset: 0,
+							Limit:  10,
+						},
+						SearchVector: []float32{1, 2, 3},
+					})
+					require.Nil(t, err)
+					assert.Len(t, res, 2)
+				})
+
+			}
+		})
+
 		t.Run("with a duplicate UUID", func(t *testing.T) {
 			// it should ignore the first one as the second one would overwrite the
 			// first one anyway
@@ -592,13 +678,13 @@ func testBatchImportObjects(repo *DB) func(t *testing.T) {
 			batch[0] = objects.BatchObject{
 				OriginalIndex: 0,
 				Err:           nil,
-				Vector:        []float32{7, 8, 9},
 				Object: &models.Object{
 					Class: "ThingForBatching",
 					Properties: map[string]interface{}{
 						"stringProp": "first element",
 					},
-					ID: "79aebd44-7486-4fed-9334-3a74cc09a1c3",
+					ID:     "79aebd44-7486-4fed-9334-3a74cc09a1c3",
+					Vector: []float32{7, 8, 9},
 				},
 				UUID: "79aebd44-7486-4fed-9334-3a74cc09a1c3",
 			}
@@ -612,13 +698,13 @@ func testBatchImportObjects(repo *DB) func(t *testing.T) {
 				batch[i] = objects.BatchObject{
 					OriginalIndex: i,
 					Err:           nil,
-					Vector:        []float32{0.05, 0.1, 0.2},
 					Object: &models.Object{
 						Class: "ThingForBatching",
 						Properties: map[string]interface{}{
 							"stringProp": "ignore me",
 						},
-						ID: id,
+						ID:     id,
+						Vector: []float32{0.05, 0.1, 0.2},
 					},
 					UUID: id,
 				}
@@ -627,33 +713,33 @@ func testBatchImportObjects(repo *DB) func(t *testing.T) {
 			batch[51] = objects.BatchObject{
 				OriginalIndex: 51,
 				Err:           fmt.Errorf("already had a prior error"),
-				Vector:        []float32{3, 2, 1},
 				Object: &models.Object{
 					Class: "ThingForBatching",
 					Properties: map[string]interface{}{
 						"stringProp": "first element",
 					},
-					ID: "1c2d8ce6-32da-4081-9794-a81e23e673e4",
+					ID:     "1c2d8ce6-32da-4081-9794-a81e23e673e4",
+					Vector: []float32{3, 2, 1},
 				},
 				UUID: "1c2d8ce6-32da-4081-9794-a81e23e673e4",
 			}
 			batch[52] = objects.BatchObject{
 				OriginalIndex: 52,
 				Err:           nil,
-				Vector:        []float32{1, 2, 3},
 				Object: &models.Object{
 					Class: "ThingForBatching",
 					Properties: map[string]interface{}{
 						"stringProp": "first element, imported a second time",
 					},
-					ID: "79aebd44-7486-4fed-9334-3a74cc09a1c3", // note the duplicate id with item 1
+					ID:     "79aebd44-7486-4fed-9334-3a74cc09a1c3", // note the duplicate id with item 1
+					Vector: []float32{1, 2, 3},
 				},
 				UUID: "79aebd44-7486-4fed-9334-3a74cc09a1c3", // note the duplicate id with item 1
 			}
 
 			t.Run("can import", func(t *testing.T) {
-				batchRes, err := repo.BatchPutObjects(context.Background(), batch)
-				require.Nil(t, err, "there shouldn't be an overall error, only inividual ones")
+				batchRes, err := repo.BatchPutObjects(context.Background(), batch, nil)
+				require.Nil(t, err, "there shouldn't be an overall error, only individual ones")
 
 				t.Run("element errors are marked correctly", func(t *testing.T) {
 					require.Len(t, batchRes, 53)
@@ -661,12 +747,12 @@ func testBatchImportObjects(repo *DB) func(t *testing.T) {
 				})
 			})
 
-			params := traverser.GetParams{
+			params := dto.GetParams{
 				ClassName:  "ThingForBatching",
 				Pagination: &filters.Pagination{Limit: 10},
 				Filters:    nil,
 			}
-			res, err := repo.ClassSearch(context.Background(), params)
+			res, err := repo.Search(context.Background(), params)
 			require.Nil(t, err)
 
 			t.Run("does not contain second element (validation error)", func(t *testing.T) {
@@ -692,14 +778,14 @@ func testBatchImportObjects(repo *DB) func(t *testing.T) {
 				require.Nil(t, err)
 				id := strfmt.UUID(uid.String())
 				batch[i] = objects.BatchObject{
-					Err:    nil,
-					Vector: []float32{0.05, 0.1, 0.2},
+					Err: nil,
 					Object: &models.Object{
 						Class: "ThingForBatching",
 						Properties: map[string]interface{}{
 							"stringProp": "ignore me",
 						},
-						ID: id,
+						ID:     id,
+						Vector: []float32{0.05, 0.1, 0.2},
 					},
 					UUID: id,
 				}
@@ -709,8 +795,8 @@ func testBatchImportObjects(repo *DB) func(t *testing.T) {
 				ctx, cancel := context.WithTimeout(context.Background(), 1*time.Millisecond)
 				defer cancel()
 
-				batchRes, err := repo.BatchPutObjects(ctx, batch)
-				require.Nil(t, err, "there shouldn't be an overall error, only inividual ones")
+				batchRes, err := repo.BatchPutObjects(ctx, batch, nil)
+				require.Nil(t, err, "there shouldn't be an overall error, only individual ones")
 
 				t.Run("some elements have error'd due to context", func(t *testing.T) {
 					require.Len(t, batchRes, 50)
@@ -734,6 +820,7 @@ func testBatchImportObjects(repo *DB) func(t *testing.T) {
 // that they work with batches at scale adds value beyond the regular batch
 // import tests
 func testBatchImportGeoObjects(repo *DB) func(t *testing.T) {
+	r := getRandomSeed()
 	return func(t *testing.T) {
 		size := 500
 		batchSize := 50
@@ -747,7 +834,7 @@ func testBatchImportGeoObjects(repo *DB) func(t *testing.T) {
 					Class: "ThingForBatching",
 					ID:    strfmt.UUID(id.String()),
 					Properties: map[string]interface{}{
-						"location": randGeoCoordinates(),
+						"location": randGeoCoordinates(r),
 					},
 					Vector: []float32{0.123, 0.234, rand.Float32()}, // does not matter for this test
 				}
@@ -761,11 +848,10 @@ func testBatchImportGeoObjects(repo *DB) func(t *testing.T) {
 					batch[j] = objects.BatchObject{
 						OriginalIndex: j,
 						Object:        objs[i+j],
-						Vector:        objs[i+j].Vector,
 					}
 				}
 
-				res, err := repo.BatchPutObjects(context.Background(), batch)
+				res, err := repo.BatchPutObjects(context.Background(), batch, nil)
 				require.Nil(t, err)
 				assertAllItemsErrorFree(t, res)
 			}
@@ -790,7 +876,7 @@ func testBatchImportGeoObjects(repo *DB) func(t *testing.T) {
 		}
 
 		t.Run("query for expected results", func(t *testing.T) {
-			queryGeo := randGeoCoordinates()
+			queryGeo := randGeoCoordinates(r)
 
 			for _, maxDist := range distances {
 				t.Run(fmt.Sprintf("with maxDist=%f", maxDist), func(t *testing.T) {
@@ -802,7 +888,7 @@ func testBatchImportGeoObjects(repo *DB) func(t *testing.T) {
 						*queryGeo.Longitude,
 					}, maxDist*km)
 
-					res, err := repo.ClassSearch(context.Background(), traverser.GetParams{
+					res, err := repo.Search(context.Background(), dto.GetParams{
 						ClassName:  "ThingForBatching",
 						Pagination: &filters.Pagination{Limit: 500},
 						Filters: buildFilter("location", filters.GeoRange{
@@ -830,7 +916,7 @@ func testBatchImportGeoObjects(repo *DB) func(t *testing.T) {
 		t.Run("renew vector positions to test batch geo updates", func(t *testing.T) {
 			for i, obj := range objs {
 				obj.Properties = map[string]interface{}{
-					"location": randGeoCoordinates(),
+					"location": randGeoCoordinates(r),
 				}
 				objs[i] = obj
 			}
@@ -843,18 +929,17 @@ func testBatchImportGeoObjects(repo *DB) func(t *testing.T) {
 					batch[j] = objects.BatchObject{
 						OriginalIndex: j,
 						Object:        objs[i+j],
-						Vector:        objs[i+j].Vector,
 					}
 				}
 
-				res, err := repo.BatchPutObjects(context.Background(), batch)
+				res, err := repo.BatchPutObjects(context.Background(), batch, nil)
 				require.Nil(t, err)
 				assertAllItemsErrorFree(t, res)
 			}
 		})
 
 		t.Run("query again to verify updates worked", func(t *testing.T) {
-			queryGeo := randGeoCoordinates()
+			queryGeo := randGeoCoordinates(r)
 
 			for _, maxDist := range distances {
 				t.Run(fmt.Sprintf("with maxDist=%f", maxDist), func(t *testing.T) {
@@ -866,7 +951,7 @@ func testBatchImportGeoObjects(repo *DB) func(t *testing.T) {
 						*queryGeo.Longitude,
 					}, maxDist*km)
 
-					res, err := repo.ClassSearch(context.Background(), traverser.GetParams{
+					res, err := repo.Search(context.Background(), dto.GetParams{
 						ClassName:  "ThingForBatching",
 						Pagination: &filters.Pagination{Limit: 500},
 						Filters: buildFilter("location", filters.GeoRange{
@@ -894,13 +979,6 @@ func testBatchImportGeoObjects(repo *DB) func(t *testing.T) {
 	}
 }
 
-func filterCacheSize(index *Index) (size uint64) {
-	for _, shard := range index.Shards {
-		size += shard.invertedRowCache.Size()
-	}
-	return
-}
-
 func testBatchDeleteObjects(repo *DB) func(t *testing.T) {
 	return func(t *testing.T) {
 		getParams := func(dryRun bool, output string) objects.BatchDeleteParams {
@@ -911,7 +989,7 @@ func testBatchDeleteObjects(repo *DB) func(t *testing.T) {
 						Operator: filters.OperatorLike,
 						Value: &filters.Value{
 							Value: "*",
-							Type:  schema.DataTypeString,
+							Type:  schema.DataTypeText,
 						},
 						On: &filters.Path{
 							Property: schema.PropertyName("id"),
@@ -923,7 +1001,7 @@ func testBatchDeleteObjects(repo *DB) func(t *testing.T) {
 			}
 		}
 		performClassSearch := func() ([]search.Result, error) {
-			return repo.ClassSearch(context.Background(), traverser.GetParams{
+			return repo.Search(context.Background(), dto.GetParams{
 				ClassName:  "ThingForBatching",
 				Pagination: &filters.Pagination{Limit: 10000},
 			})
@@ -933,12 +1011,9 @@ func testBatchDeleteObjects(repo *DB) func(t *testing.T) {
 			res, err := performClassSearch()
 			require.Nil(t, err)
 			beforeDelete := len(res)
-			cacheSizeBefore := filterCacheSize(repo.GetIndex(schema.ClassName("ThingForBatching")))
 			require.True(t, beforeDelete > 0)
 			// dryRun == true, only test how many objects can be deleted
-			batchDeleteRes, err := repo.BatchDeleteObjects(context.Background(),
-				getParams(true, "verbose"))
-			cacheSizeAfter := filterCacheSize(repo.GetIndex(schema.ClassName("ThingForBatching")))
+			batchDeleteRes, err := repo.BatchDeleteObjects(context.Background(), getParams(true, "verbose"), nil, "")
 			require.Nil(t, err)
 			require.Equal(t, int64(beforeDelete), batchDeleteRes.Matches)
 			require.Equal(t, beforeDelete, len(batchDeleteRes.Objects))
@@ -948,7 +1023,6 @@ func testBatchDeleteObjects(repo *DB) func(t *testing.T) {
 			res, err = performClassSearch()
 			require.Nil(t, err)
 			assert.Equal(t, beforeDelete, len(res))
-			assert.Equal(t, cacheSizeBefore, cacheSizeAfter)
 		})
 
 		t.Run("batch delete with dryRun set to true and output to minimal", func(t *testing.T) {
@@ -958,8 +1032,7 @@ func testBatchDeleteObjects(repo *DB) func(t *testing.T) {
 			beforeDelete := len(res)
 			require.True(t, beforeDelete > 0)
 			// dryRun == true, only test how many objects can be deleted
-			batchDeleteRes, err := repo.BatchDeleteObjects(context.Background(),
-				getParams(true, "minimal"))
+			batchDeleteRes, err := repo.BatchDeleteObjects(context.Background(), getParams(true, "minimal"), nil, "")
 			require.Nil(t, err)
 			require.Equal(t, int64(beforeDelete), batchDeleteRes.Matches)
 			require.Equal(t, beforeDelete, len(batchDeleteRes.Objects))
@@ -976,52 +1049,48 @@ func testBatchDeleteObjects(repo *DB) func(t *testing.T) {
 			res, err := performClassSearch()
 			require.Nil(t, err)
 			beforeDelete := len(res)
-			cacheSizeBefore := filterCacheSize(repo.GetIndex(schema.ClassName("ThingForBatching")))
 			require.True(t, beforeDelete > 0)
 			// dryRun == true, only test how many objects can be deleted
-			batchDeleteRes, err := repo.BatchDeleteObjects(context.Background(),
-				objects.BatchDeleteParams{
-					ClassName: "ThingForBatching",
-					Filters: &filters.LocalFilter{
-						Root: &filters.Clause{
-							Operator: filters.OperatorOr,
-							Operands: []filters.Clause{
-								{
-									Operator: filters.OperatorEqual,
-									On: &filters.Path{
-										Class:    "ThingForBatching",
-										Property: schema.PropertyName("id"),
-									},
-									Value: &filters.Value{
-										Value: "8d5a3aa2-3c8d-4589-9ae1-3f638f506970",
-										Type:  schema.DataTypeString,
-									},
+			batchDeleteRes, err := repo.BatchDeleteObjects(context.Background(), objects.BatchDeleteParams{
+				ClassName: "ThingForBatching",
+				Filters: &filters.LocalFilter{
+					Root: &filters.Clause{
+						Operator: filters.OperatorOr,
+						Operands: []filters.Clause{
+							{
+								Operator: filters.OperatorEqual,
+								On: &filters.Path{
+									Class:    "ThingForBatching",
+									Property: schema.PropertyName("id"),
 								},
-								{
-									Operator: filters.OperatorEqual,
-									On: &filters.Path{
-										Class:    "ThingForBatching",
-										Property: schema.PropertyName("id"),
-									},
-									Value: &filters.Value{
-										Value: "90ade18e-2b99-4903-aa34-1d5d648c932d",
-										Type:  schema.DataTypeString,
-									},
+								Value: &filters.Value{
+									Value: "8d5a3aa2-3c8d-4589-9ae1-3f638f506970",
+									Type:  schema.DataTypeText,
+								},
+							},
+							{
+								Operator: filters.OperatorEqual,
+								On: &filters.Path{
+									Class:    "ThingForBatching",
+									Property: schema.PropertyName("id"),
+								},
+								Value: &filters.Value{
+									Value: "90ade18e-2b99-4903-aa34-1d5d648c932d",
+									Type:  schema.DataTypeText,
 								},
 							},
 						},
 					},
-					DryRun: false,
-					Output: "verbose",
-				})
-			cacheSizeAfter := filterCacheSize(repo.GetIndex(schema.ClassName("ThingForBatching")))
+				},
+				DryRun: false,
+				Output: "verbose",
+			}, nil, "")
 			require.Nil(t, err)
 			require.Equal(t, int64(2), batchDeleteRes.Matches)
 			require.Equal(t, 2, len(batchDeleteRes.Objects))
 			for _, batchRes := range batchDeleteRes.Objects {
 				require.Nil(t, batchRes.Err)
 			}
-			assert.Equal(t, cacheSizeBefore, cacheSizeAfter)
 			res, err = performClassSearch()
 			require.Nil(t, err)
 			assert.Equal(t, beforeDelete-2, len(res))
@@ -1032,12 +1101,9 @@ func testBatchDeleteObjects(repo *DB) func(t *testing.T) {
 			res, err := performClassSearch()
 			require.Nil(t, err)
 			beforeDelete := len(res)
-			cacheSizeBefore := filterCacheSize(repo.GetIndex(schema.ClassName("ThingForBatching")))
 			require.True(t, beforeDelete > 0)
 			// dryRun == true, only test how many objects can be deleted
-			batchDeleteRes, err := repo.BatchDeleteObjects(context.Background(),
-				getParams(false, "verbose"))
-			cacheSizeAfter := filterCacheSize(repo.GetIndex(schema.ClassName("ThingForBatching")))
+			batchDeleteRes, err := repo.BatchDeleteObjects(context.Background(), getParams(false, "verbose"), nil, "")
 			require.Nil(t, err)
 			require.Equal(t, int64(beforeDelete), batchDeleteRes.Matches)
 			require.Equal(t, beforeDelete, len(batchDeleteRes.Objects))
@@ -1046,7 +1112,6 @@ func testBatchDeleteObjects(repo *DB) func(t *testing.T) {
 			}
 			res, err = performClassSearch()
 			require.Nil(t, err)
-			assert.Equal(t, cacheSizeBefore, cacheSizeAfter)
 			assert.Equal(t, 0, len(res))
 		})
 	}
@@ -1062,7 +1127,7 @@ func testBatchDeleteObjectsJourney(repo *DB, queryMaximumResults int64) func(t *
 						Operator: filters.OperatorLike,
 						Value: &filters.Value{
 							Value: "*",
-							Type:  schema.DataTypeString,
+							Type:  schema.DataTypeText,
 						},
 						On: &filters.Path{
 							Property: schema.PropertyName("id"),
@@ -1074,33 +1139,30 @@ func testBatchDeleteObjectsJourney(repo *DB, queryMaximumResults int64) func(t *
 			}
 		}
 		performClassSearch := func() ([]search.Result, error) {
-			return repo.ClassSearch(context.Background(), traverser.GetParams{
+			return repo.Search(context.Background(), dto.GetParams{
 				ClassName:  "ThingForBatching",
 				Pagination: &filters.Pagination{Limit: 20},
 			})
 		}
 		t.Run("batch delete journey", func(t *testing.T) {
 			// delete objects to limit
-			batchDeleteRes, err := repo.BatchDeleteObjects(context.Background(),
-				getParams(true, "verbose"))
+			batchDeleteRes, err := repo.BatchDeleteObjects(context.Background(), getParams(true, "verbose"), nil, "")
 			require.Nil(t, err)
 			objectsMatches := batchDeleteRes.Matches
 
 			leftToDelete := objectsMatches
 			deleteIterationCount := 0
 			deletedObjectsCount := 0
-			for true {
+			for {
 				// delete objects to limit
-				batchDeleteRes, err := repo.BatchDeleteObjects(context.Background(),
-					getParams(false, "verbose"))
+				batchDeleteRes, err := repo.BatchDeleteObjects(context.Background(), getParams(false, "verbose"), nil, "")
 				require.Nil(t, err)
 				matches, deleted := batchDeleteRes.Matches, len(batchDeleteRes.Objects)
 				require.Equal(t, leftToDelete, matches)
 				require.True(t, deleted > 0)
 				deletedObjectsCount += deleted
 
-				batchDeleteRes, err = repo.BatchDeleteObjects(context.Background(),
-					getParams(true, "verbose"))
+				batchDeleteRes, err = repo.BatchDeleteObjects(context.Background(), getParams(true, "verbose"), nil, "")
 				require.Nil(t, err)
 				leftToDelete = batchDeleteRes.Matches
 
@@ -1168,14 +1230,14 @@ func bruteForceMaxDist(inputs []*models.Object, query []float32, maxDist float32
 	return out[:i]
 }
 
-func randGeoCoordinates() *models.GeoCoordinates {
+func randGeoCoordinates(r *rand.Rand) *models.GeoCoordinates {
 	maxLat := float32(90.0)
 	minLat := float32(-90.0)
 	maxLon := float32(180)
 	minLon := float32(-180)
 
-	lat := minLat + (maxLat-minLat)*rand.Float32()
-	lon := minLon + (maxLon-minLon)*rand.Float32()
+	lat := minLat + (maxLat-minLat)*r.Float32()
+	lon := minLon + (maxLon-minLon)*r.Float32()
 	return &models.GeoCoordinates{
 		Latitude:  &lat,
 		Longitude: &lon,

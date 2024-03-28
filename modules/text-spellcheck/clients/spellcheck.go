@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package clients
@@ -18,10 +18,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/pkg/errors"
-	"github.com/semi-technologies/weaviate/modules/text-spellcheck/ent"
 	"github.com/sirupsen/logrus"
+	"github.com/weaviate/weaviate/modules/text-spellcheck/ent"
 )
 
 type spellCheckInput struct {
@@ -44,11 +45,13 @@ type spellCheck struct {
 	logger     logrus.FieldLogger
 }
 
-func New(origin string, logger logrus.FieldLogger) *spellCheck {
+func New(origin string, timeout time.Duration, logger logrus.FieldLogger) *spellCheck {
 	return &spellCheck{
-		origin:     origin,
-		httpClient: &http.Client{},
-		logger:     logger,
+		origin: origin,
+		httpClient: &http.Client{
+			Timeout: timeout,
+		},
+		logger: logger,
 	}
 }
 

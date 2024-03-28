@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package backup
@@ -17,14 +17,18 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/semi-technologies/weaviate/entities/backup"
-	"github.com/semi-technologies/weaviate/entities/models"
 	"github.com/sirupsen/logrus"
+	"github.com/weaviate/weaviate/entities/backup"
+	"github.com/weaviate/weaviate/entities/models"
 )
 
 var (
 	errLocalBackendDBRO = errors.New("local filesystem backend is not viable for backing up a node cluster, try s3 or gcs")
 	errIncludeExclude   = errors.New("malformed request: 'include' and 'exclude' cannot both contain values")
+)
+
+const (
+	errMsgHigherVersion = "unable to restore backup as it was produced by a higher version"
 )
 
 // Scheduler assigns backup operations to coordinators.
@@ -87,10 +91,11 @@ func (s *Scheduler) Backup(ctx context.Context, pr *models.Principal, req *Backu
 		return nil, backup.NewErrUnprocessable(fmt.Errorf("init uploader: %w", err))
 	}
 	breq := Request{
-		Method:  OpCreate,
-		ID:      req.ID,
-		Backend: req.Backend,
-		Classes: classes,
+		Method:      OpCreate,
+		ID:          req.ID,
+		Backend:     req.Backend,
+		Classes:     classes,
+		Compression: req.Compression,
 	}
 	if err := s.backupper.Backup(ctx, store, &breq); err != nil {
 		return nil, backup.NewErrUnprocessable(err)
@@ -136,7 +141,14 @@ func (s *Scheduler) Restore(ctx context.Context, pr *models.Principal,
 		Path:    store.HomeDir(),
 		Classes: meta.Classes(),
 	}
-	err = s.restorer.Restore(ctx, store, req.Backend, meta)
+
+	rReq := Request{
+		Method:      OpRestore,
+		ID:          req.ID,
+		Backend:     req.Backend,
+		Compression: req.Compression,
+	}
+	err = s.restorer.Restore(ctx, store, &rReq, meta)
 	if err != nil {
 		status = string(backup.Failed)
 		data.Error = err.Error()
@@ -205,15 +217,23 @@ func (s *Scheduler) validateBackupRequest(ctx context.Context, store coordStore,
 	if !store.b.IsExternal() && s.backupper.nodeResolver.NodeCount() > 1 {
 		return nil, errLocalBackendDBRO
 	}
+
 	if err := validateID(req.ID); err != nil {
 		return nil, err
 	}
 	if len(req.Include) > 0 && len(req.Exclude) > 0 {
 		return nil, errIncludeExclude
 	}
+	if dup := findDuplicate(req.Include); dup != "" {
+		return nil, fmt.Errorf("class list 'include' contains duplicate: %s", dup)
+	}
 	classes := req.Include
 	if len(classes) == 0 {
 		classes = s.backupper.selector.ListClasses(ctx)
+		// no classes exist in the DB
+		if len(classes) == 0 {
+			return nil, fmt.Errorf("no available classes to backup, there's nothing to do here")
+		}
 	}
 	if classes = filterClasses(classes, req.Exclude); len(classes) == 0 {
 		return nil, fmt.Errorf("empty class list: please choose from : %v", classes)
@@ -241,12 +261,15 @@ func (s *Scheduler) validateRestoreRequest(ctx context.Context, store coordStore
 	if len(req.Include) > 0 && len(req.Exclude) > 0 {
 		return nil, errIncludeExclude
 	}
+	if dup := findDuplicate(req.Include); dup != "" {
+		return nil, fmt.Errorf("class list 'include' contains duplicate: %s", dup)
+	}
 	destPath := store.HomeDir()
 	meta, err := store.Meta(ctx, GlobalBackupFile)
 	if err != nil {
 		notFoundErr := backup.ErrNotFound{}
 		if errors.As(err, &notFoundErr) {
-			return nil, fmt.Errorf("%w: %q", errMetaNotFound, destPath)
+			return nil, fmt.Errorf("backup id %q does not exist: %v: %w", req.ID, notFoundErr, errMetaNotFound)
 		}
 		return nil, fmt.Errorf("find backup %s: %w", destPath, err)
 	}
@@ -258,6 +281,9 @@ func (s *Scheduler) validateRestoreRequest(ctx context.Context, store coordStore
 	}
 	if err := meta.Validate(); err != nil {
 		return nil, fmt.Errorf("corrupted backup file: %w", err)
+	}
+	if v := meta.Version; v > Version {
+		return nil, fmt.Errorf("%s: %s > %s", errMsgHigherVersion, v, Version)
 	}
 	cs := meta.Classes()
 	if len(req.Include) > 0 {
@@ -272,6 +298,10 @@ func (s *Scheduler) validateRestoreRequest(ctx context.Context, store coordStore
 	if meta.RemoveEmpty().Count() == 0 {
 		return nil, fmt.Errorf("nothing left to restore: please choose from : %v", cs)
 	}
+	if len(req.NodeMapping) > 0 {
+		meta.NodeMapping = req.NodeMapping
+		meta.ApplyNodeMapping()
+	}
 	return meta, nil
 }
 
@@ -284,4 +314,16 @@ func logOperation(logger logrus.FieldLogger, name, id, backend string, begin tim
 	} else {
 		le.Info()
 	}
+}
+
+// findDuplicate returns first duplicate if it is found, and "" otherwise
+func findDuplicate(xs []string) string {
+	m := make(map[string]struct{}, len(xs))
+	for _, x := range xs {
+		if _, ok := m[x]; ok {
+			return x
+		}
+		m[x] = struct{}{}
+	}
+	return ""
 }

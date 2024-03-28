@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package traverser
@@ -16,12 +16,12 @@ import (
 	"testing"
 
 	"github.com/go-openapi/strfmt"
-	"github.com/semi-technologies/weaviate/entities/search"
-	"github.com/semi-technologies/weaviate/entities/searchparams"
-	"github.com/semi-technologies/weaviate/usecases/config"
 	"github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/entities/search"
+	"github.com/weaviate/weaviate/entities/searchparams"
+	"github.com/weaviate/weaviate/usecases/config"
 )
 
 func Test_ExploreConcepts(t *testing.T) {
@@ -32,10 +32,10 @@ func Test_ExploreConcepts(t *testing.T) {
 		vectorSearcher := &fakeVectorSearcher{}
 		log, _ := test.NewNullLogger()
 		metrics := &fakeMetrics{}
-		explorer := NewExplorer(vectorSearcher, log, getFakeModulesProvider(), metrics)
+		explorer := NewExplorer(vectorSearcher, log, getFakeModulesProvider(), metrics, defaultConfig)
 		schemaGetter := &fakeSchemaGetter{}
 		traverser := NewTraverser(&config.WeaviateConfig{}, locks, logger, authorizer,
-			vectorSearcher, explorer, schemaGetter, getFakeModulesProvider(), nil)
+			vectorSearcher, explorer, schemaGetter, getFakeModulesProvider(), nil, -1)
 		params := ExploreParams{}
 
 		_, err := traverser.Explore(context.Background(), nil, params)
@@ -49,10 +49,10 @@ func Test_ExploreConcepts(t *testing.T) {
 		vectorSearcher := &fakeVectorSearcher{}
 		log, _ := test.NewNullLogger()
 		metrics := &fakeMetrics{}
-		explorer := NewExplorer(vectorSearcher, log, getFakeModulesProvider(), metrics)
+		explorer := NewExplorer(vectorSearcher, log, getFakeModulesProvider(), metrics, defaultConfig)
 		schemaGetter := &fakeSchemaGetter{}
 		traverser := NewTraverser(&config.WeaviateConfig{}, locks, logger, authorizer,
-			vectorSearcher, explorer, schemaGetter, nil, nil)
+			vectorSearcher, explorer, schemaGetter, nil, nil, -1)
 		params := ExploreParams{
 			NearVector: &searchparams.NearVector{},
 			ModuleParams: map[string]interface{}{
@@ -70,10 +70,10 @@ func Test_ExploreConcepts(t *testing.T) {
 		vectorSearcher := &fakeVectorSearcher{}
 		log, _ := test.NewNullLogger()
 		metrics := &fakeMetrics{}
-		explorer := NewExplorer(vectorSearcher, log, getFakeModulesProvider(), metrics)
+		explorer := NewExplorer(vectorSearcher, log, getFakeModulesProvider(), metrics, defaultConfig)
 		schemaGetter := &fakeSchemaGetter{}
 		traverser := NewTraverser(&config.WeaviateConfig{}, locks, logger, authorizer,
-			vectorSearcher, explorer, schemaGetter, getFakeModulesProvider(), nil)
+			vectorSearcher, explorer, schemaGetter, getFakeModulesProvider(), nil, -1)
 		params := ExploreParams{
 			ModuleParams: map[string]interface{}{
 				"nearCustomText": extractNearCustomTextParam(map[string]interface{}{
@@ -133,10 +133,10 @@ func Test_ExploreConcepts(t *testing.T) {
 		vectorSearcher := &fakeVectorSearcher{}
 		log, _ := test.NewNullLogger()
 		metrics := &fakeMetrics{}
-		explorer := NewExplorer(vectorSearcher, log, getFakeModulesProvider(), metrics)
+		explorer := NewExplorer(vectorSearcher, log, getFakeModulesProvider(), metrics, defaultConfig)
 		schemaGetter := &fakeSchemaGetter{}
 		traverser := NewTraverser(&config.WeaviateConfig{}, locks, logger, authorizer,
-			vectorSearcher, explorer, schemaGetter, nil, nil)
+			vectorSearcher, explorer, schemaGetter, nil, nil, -1)
 		params := ExploreParams{
 			NearVector: &searchparams.NearVector{
 				Vector: []float32{7.8, 9},
@@ -193,10 +193,10 @@ func Test_ExploreConcepts(t *testing.T) {
 		vectorSearcher := &fakeVectorSearcher{}
 		log, _ := test.NewNullLogger()
 		metrics := &fakeMetrics{}
-		explorer := NewExplorer(vectorSearcher, log, getFakeModulesProvider(), metrics)
+		explorer := NewExplorer(vectorSearcher, log, getFakeModulesProvider(), metrics, defaultConfig)
 		schemaGetter := &fakeSchemaGetter{}
 		traverser := NewTraverser(&config.WeaviateConfig{}, locks, logger, authorizer,
-			vectorSearcher, explorer, schemaGetter, nil, nil)
+			vectorSearcher, explorer, schemaGetter, nil, nil, -1)
 		params := ExploreParams{
 			NearObject: &searchparams.NearObject{
 				ID: "bd3d1560-3f0e-4b39-9d62-38b4a3c4f23a",
@@ -259,10 +259,10 @@ func Test_ExploreConcepts(t *testing.T) {
 		vectorSearcher := &fakeVectorSearcher{}
 		log, _ := test.NewNullLogger()
 		metrics := &fakeMetrics{}
-		explorer := NewExplorer(vectorSearcher, log, getFakeModulesProvider(), metrics)
+		explorer := NewExplorer(vectorSearcher, log, getFakeModulesProvider(), metrics, defaultConfig)
 		schemaGetter := &fakeSchemaGetter{}
 		traverser := NewTraverser(&config.WeaviateConfig{}, locks, logger, authorizer,
-			vectorSearcher, explorer, schemaGetter, nil, nil)
+			vectorSearcher, explorer, schemaGetter, nil, nil, -1)
 		params := ExploreParams{
 			NearObject: &searchparams.NearObject{
 				Beacon: "weaviate://localhost/bd3d1560-3f0e-4b39-9d62-38b4a3c4f23a",
@@ -325,10 +325,10 @@ func Test_ExploreConcepts(t *testing.T) {
 		vectorSearcher := &fakeVectorSearcher{}
 		log, _ := test.NewNullLogger()
 		metrics := &fakeMetrics{}
-		explorer := NewExplorer(vectorSearcher, log, getFakeModulesProvider(), metrics)
+		explorer := NewExplorer(vectorSearcher, log, getFakeModulesProvider(), metrics, defaultConfig)
 		schemaGetter := &fakeSchemaGetter{}
 		traverser := NewTraverser(&config.WeaviateConfig{}, locks, logger, authorizer,
-			vectorSearcher, explorer, schemaGetter, getFakeModulesProvider(), nil)
+			vectorSearcher, explorer, schemaGetter, getFakeModulesProvider(), nil, -1)
 		params := ExploreParams{
 			Limit: 100,
 			NearVector: &searchparams.NearVector{
@@ -369,10 +369,10 @@ func Test_ExploreConcepts(t *testing.T) {
 		vectorSearcher := &fakeVectorSearcher{}
 		log, _ := test.NewNullLogger()
 		metrics := &fakeMetrics{}
-		explorer := NewExplorer(vectorSearcher, log, getFakeModulesProvider(), metrics)
+		explorer := NewExplorer(vectorSearcher, log, getFakeModulesProvider(), metrics, defaultConfig)
 		schemaGetter := &fakeSchemaGetter{}
 		traverser := NewTraverser(&config.WeaviateConfig{}, locks, logger, authorizer,
-			vectorSearcher, explorer, schemaGetter, getFakeModulesProvider(), nil)
+			vectorSearcher, explorer, schemaGetter, getFakeModulesProvider(), nil, -1)
 		params := ExploreParams{
 			Limit: 100,
 			NearVector: &searchparams.NearVector{
@@ -410,10 +410,10 @@ func Test_ExploreConcepts(t *testing.T) {
 		vectorSearcher := &fakeVectorSearcher{}
 		log, _ := test.NewNullLogger()
 		metrics := &fakeMetrics{}
-		explorer := NewExplorer(vectorSearcher, log, getFakeModulesProvider(), metrics)
+		explorer := NewExplorer(vectorSearcher, log, getFakeModulesProvider(), metrics, defaultConfig)
 		schemaGetter := &fakeSchemaGetter{}
 		traverser := NewTraverser(&config.WeaviateConfig{}, locks, logger, authorizer,
-			vectorSearcher, explorer, schemaGetter, getFakeModulesProvider(), nil)
+			vectorSearcher, explorer, schemaGetter, getFakeModulesProvider(), nil, -1)
 		params := ExploreParams{
 			ModuleParams: map[string]interface{}{
 				"nearCustomText": extractNearCustomTextParam(map[string]interface{}{
@@ -439,10 +439,10 @@ func Test_ExploreConcepts(t *testing.T) {
 		vectorSearcher := &fakeVectorSearcher{}
 		log, _ := test.NewNullLogger()
 		metrics := &fakeMetrics{}
-		explorer := NewExplorer(vectorSearcher, log, getFakeModulesProvider(), metrics)
+		explorer := NewExplorer(vectorSearcher, log, getFakeModulesProvider(), metrics, defaultConfig)
 		schemaGetter := &fakeSchemaGetter{}
 		traverser := NewTraverser(&config.WeaviateConfig{}, locks, logger, authorizer,
-			vectorSearcher, explorer, schemaGetter, getFakeModulesProvider(), nil)
+			vectorSearcher, explorer, schemaGetter, getFakeModulesProvider(), nil, -1)
 		params := ExploreParams{
 			ModuleParams: map[string]interface{}{
 				"nearCustomText": extractNearCustomTextParam(map[string]interface{}{
@@ -480,10 +480,10 @@ func Test_ExploreConcepts(t *testing.T) {
 		vectorSearcher := &fakeVectorSearcher{}
 		log, _ := test.NewNullLogger()
 		metrics := &fakeMetrics{}
-		explorer := NewExplorer(vectorSearcher, log, getFakeModulesProvider(), metrics)
+		explorer := NewExplorer(vectorSearcher, log, getFakeModulesProvider(), metrics, defaultConfig)
 		schemaGetter := &fakeSchemaGetter{}
 		traverser := NewTraverser(&config.WeaviateConfig{}, locks, logger, authorizer,
-			vectorSearcher, explorer, schemaGetter, getFakeModulesProvider(), nil)
+			vectorSearcher, explorer, schemaGetter, getFakeModulesProvider(), nil, -1)
 		params := ExploreParams{
 			Limit: 100,
 			ModuleParams: map[string]interface{}{
@@ -539,7 +539,7 @@ func Test_ExploreConcepts(t *testing.T) {
 			},
 		}, res)
 
-		// see dummy implemenation of MoveTo and MoveAway for why the vector should
+		// see dummy implementation of MoveTo and MoveAway for why the vector should
 		// be the way it is
 		assert.Equal(t, []float32{1.5, 2.5, 3.5}, vectorSearcher.calledWithVector)
 		assert.Equal(t, 100, vectorSearcher.calledWithLimit,
@@ -553,10 +553,10 @@ func Test_ExploreConcepts(t *testing.T) {
 		vectorSearcher := &fakeVectorSearcher{}
 		log, _ := test.NewNullLogger()
 		metrics := &fakeMetrics{}
-		explorer := NewExplorer(vectorSearcher, log, getFakeModulesProvider(), metrics)
+		explorer := NewExplorer(vectorSearcher, log, getFakeModulesProvider(), metrics, defaultConfig)
 		schemaGetter := &fakeSchemaGetter{}
 		traverser := NewTraverser(&config.WeaviateConfig{}, locks, logger, authorizer,
-			vectorSearcher, explorer, schemaGetter, getFakeModulesProvider(), nil)
+			vectorSearcher, explorer, schemaGetter, getFakeModulesProvider(), nil, -1)
 
 		params := ExploreParams{
 			Limit: 100,
@@ -662,7 +662,7 @@ func Test_ExploreConcepts(t *testing.T) {
 			},
 		}, res)
 
-		// see dummy implemenation of MoveTo and MoveAway for why the vector should
+		// see dummy implementation of MoveTo and MoveAway for why the vector should
 		// be the way it is
 		assert.Equal(t, []float32{1.5, 2.5, 3.5}, vectorSearcher.calledWithVector)
 		assert.Equal(t, 100, vectorSearcher.calledWithLimit,

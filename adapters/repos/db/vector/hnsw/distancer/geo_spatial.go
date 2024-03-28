@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package distancer
@@ -50,16 +50,24 @@ func (g GeoDistancer) Distance(b []float32) (float32, bool, error) {
 
 type GeoProvider struct{}
 
-func (p GeoProvider) New(vec []float32) Distancer {
+func (gp GeoProvider) New(vec []float32) Distancer {
 	return GeoDistancer{a: vec}
 }
 
-func (p GeoProvider) SingleDist(vec1, vec2 []float32) (float32, bool, error) {
+func (gp GeoProvider) SingleDist(vec1, vec2 []float32) (float32, bool, error) {
 	return geoDist(vec1, vec2)
 }
 
-func (p GeoProvider) Type() string {
+func (gp GeoProvider) Type() string {
 	return "geo"
+}
+
+func (gp GeoProvider) Step(x, y []float32) float32 {
+	panic("Not implemented")
+}
+
+func (gp GeoProvider) Wrap(x float32) float32 {
+	panic("Not implemented")
 }
 
 func NewGeoProvider() Provider {

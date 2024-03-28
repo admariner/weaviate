@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 //go:build integrationTest && !race
@@ -16,17 +16,17 @@ package hnsw
 
 import (
 	"context"
-	"math/rand"
 	"runtime"
 	"sync"
 	"testing"
-	"time"
 
-	"github.com/semi-technologies/weaviate/adapters/repos/db/vector/hnsw/distancer"
-	ent "github.com/semi-technologies/weaviate/entities/vectorindex/hnsw"
 	"github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/adapters/repos/db/vector/hnsw/distancer"
+	"github.com/weaviate/weaviate/adapters/repos/db/vector/testinghelpers"
+	"github.com/weaviate/weaviate/entities/cyclemanager"
+	ent "github.com/weaviate/weaviate/entities/vectorindex/hnsw"
 )
 
 // The !race build tag makes sure that this test is EXCLUDED from running with
@@ -36,25 +36,46 @@ import (
 // This test imports 10,000 objects concurrently which is extremely expensive
 // with the race detector on.
 // It prevents a regression on
-// https://github.com/semi-technologies/weaviate/issues/1868
+// https://github.com/weaviate/weaviate/issues/1868
 func Test_NoRace_ManySmallCommitlogs(t *testing.T) {
 	n := 10000
 	dim := 16
 	m := 8
 
-	rand.Seed(time.Now().UnixNano())
+	r := getRandomSeed()
 	rootPath := t.TempDir()
 
 	logger, _ := test.NewNullLogger()
-	original, err := NewCommitLogger(rootPath, "too_many_links_test", 1, logger,
-		WithCommitlogThreshold(1e5), WithCommitlogThresholdForCombining(5e5))
+	ctx := context.Background()
+
+	parentCommitLoggerCallbacks := cyclemanager.NewCallbackGroup("parentCommitLogger", logger, 1)
+	parentCommitLoggerCycle := cyclemanager.NewManager(
+		cyclemanager.HnswCommitLoggerCycleTicker(),
+		parentCommitLoggerCallbacks.CycleCallback, logger)
+	parentCommitLoggerCycle.Start()
+	defer parentCommitLoggerCycle.StopAndWait(ctx)
+	commitLoggerCallbacks := cyclemanager.NewCallbackGroup("childCommitLogger", logger, 1)
+	commitLoggerCallbacksCtrl := parentCommitLoggerCallbacks.Register("commitLogger", commitLoggerCallbacks.CycleCallback)
+
+	parentTombstoneCleanupCallbacks := cyclemanager.NewCallbackGroup("parentTombstoneCleanup", logger, 1)
+	parentTombstoneCleanupCycle := cyclemanager.NewManager(
+		cyclemanager.NewFixedTicker(1),
+		parentTombstoneCleanupCallbacks.CycleCallback, logger)
+	parentTombstoneCleanupCycle.Start()
+	defer parentTombstoneCleanupCycle.StopAndWait(ctx)
+	tombstoneCleanupCallbacks := cyclemanager.NewCallbackGroup("childTombstoneCleanup", logger, 1)
+	tombstoneCleanupCallbacksCtrl := parentTombstoneCleanupCallbacks.Register("tombstoneCleanup", tombstoneCleanupCallbacks.CycleCallback)
+
+	original, err := NewCommitLogger(rootPath, "too_many_links_test", logger, commitLoggerCallbacks,
+		WithCommitlogThreshold(1e5),
+		WithCommitlogThresholdForCombining(5e5))
 	require.Nil(t, err)
 
 	data := make([][]float32, n)
 	for i := range data {
 		data[i] = make([]float32, dim)
 		for j := range data[i] {
-			data[i][j] = rand.Float32()
+			data[i][j] = r.Float32()
 		}
 
 	}
@@ -82,7 +103,8 @@ func Test_NoRace_ManySmallCommitlogs(t *testing.T) {
 			// zero it will constantly think it's full and needs to be deleted - even
 			// after just being deleted, so make sure to use a positive number here.
 			VectorCacheMaxObjects: 2 * n,
-		})
+		}, tombstoneCleanupCallbacks, cyclemanager.NewCallbackGroupNoop(),
+			cyclemanager.NewCallbackGroupNoop(), testinghelpers.NewDummyStore(t))
 		require.Nil(t, err)
 		idx.PostStartup()
 		index = idx
@@ -139,6 +161,57 @@ func Test_NoRace_ManySmallCommitlogs(t *testing.T) {
 		}
 	})
 
+	t.Run("delete 10 percent of data", func(t *testing.T) {
+		type tuple struct {
+			vec []float32
+			id  uint64
+		}
+
+		jobs := make(chan tuple, n)
+
+		wg := sync.WaitGroup{}
+		worker := func(jobs chan tuple) {
+			for job := range jobs {
+				index.Delete(job.id)
+			}
+
+			wg.Done()
+		}
+
+		for i := 0; i < runtime.GOMAXPROCS(0); i++ {
+			wg.Add(1)
+			go worker(jobs)
+		}
+
+		for i, vec := range data[:n/10] {
+			jobs <- tuple{id: uint64(i), vec: vec}
+		}
+
+		close(jobs)
+
+		wg.Wait()
+	})
+
+	index.Flush()
+
+	t.Run("verify there are no nodes with too many links - post deletion", func(t *testing.T) {
+		for i, node := range index.nodes {
+			if node == nil {
+				continue
+			}
+
+			for level, conns := range node.connections {
+				m := index.maximumConnections
+				if level == 0 {
+					m = index.maximumConnectionsLayerZero
+				}
+
+				assert.LessOrEqualf(t, len(conns), m, "node %d at level %d with %d conns",
+					i, level, len(conns))
+			}
+		}
+	})
+
 	t.Run("destroy the old index", func(t *testing.T) {
 		// kill the commit loger and index
 		require.Nil(t, original.Shutdown(context.Background()))
@@ -165,7 +238,8 @@ func Test_NoRace_ManySmallCommitlogs(t *testing.T) {
 			// zero it will constantly think it's full and needs to be deleted - even
 			// after just being deleted, so make sure to use a positive number here.
 			VectorCacheMaxObjects: 2 * n,
-		})
+		}, tombstoneCleanupCallbacks, cyclemanager.NewCallbackGroupNoop(),
+			cyclemanager.NewCallbackGroupNoop(), testinghelpers.NewDummyStore(t))
 		require.Nil(t, err)
 		idx.PostStartup()
 		index = idx
@@ -191,5 +265,7 @@ func Test_NoRace_ManySmallCommitlogs(t *testing.T) {
 
 	t.Run("destroy the index", func(t *testing.T) {
 		require.Nil(t, index.Drop(context.Background()))
+		require.Nil(t, commitLoggerCallbacksCtrl.Unregister(ctx))
+		require.Nil(t, tombstoneCleanupCallbacksCtrl.Unregister(ctx))
 	})
 }

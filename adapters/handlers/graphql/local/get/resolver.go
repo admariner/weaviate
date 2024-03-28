@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package get
@@ -14,13 +14,13 @@ package get
 import (
 	"context"
 
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/usecases/traverser"
+	"github.com/weaviate/weaviate/entities/dto"
+	"github.com/weaviate/weaviate/entities/models"
 )
 
 // Resolver is a local abstraction of the required UC resolvers
 type Resolver interface {
-	GetClass(ctx context.Context, principal *models.Principal, info traverser.GetParams) (interface{}, error)
+	GetClass(ctx context.Context, principal *models.Principal, info dto.GetParams) ([]interface{}, error)
 }
 
 // RequestsLog is a local abstraction on the RequestsLog that needs to be

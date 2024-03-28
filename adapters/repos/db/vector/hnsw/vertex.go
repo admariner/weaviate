@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package hnsw
@@ -102,7 +102,7 @@ func (v *vertex) appendConnectionAtLevelNoLock(level int, connection uint64, max
 			target = maxConns
 		}
 
-		// handle rounding errors on maxConns not cleanly divisble by 4
+		// handle rounding errors on maxConns not cleanly divisible by 4
 		if target < len(v.connections[level])+1 {
 			target = len(v.connections[level]) + 1
 		}

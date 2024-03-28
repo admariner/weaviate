@@ -4,24 +4,26 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package searchparams
 
 type NearVector struct {
-	Vector       []float32 `json:"vector"`
-	Certainty    float64   `json:"certainty"`
-	Distance     float64   `json:"distance"`
-	WithDistance bool      `json:"-"`
+	Vector        []float32 `json:"vector"`
+	Certainty     float64   `json:"certainty"`
+	Distance      float64   `json:"distance"`
+	WithDistance  bool      `json:"-"`
+	TargetVectors []string  `json:"targetVectors"`
 }
 
 type KeywordRanking struct {
-	Type       string   `json:"type"`
-	Properties []string `json:"properties"`
-	Query      string   `json:"query"`
+	Type                   string   `json:"type"`
+	Properties             []string `json:"properties"`
+	Query                  string   `json:"query"`
+	AdditionalExplanations bool     `json:"additionalExplanations"`
 }
 
 type WeightedSearchResult struct {
@@ -31,20 +33,25 @@ type WeightedSearchResult struct {
 }
 
 type HybridSearch struct {
-	SubSearches interface{} `json:"subSearches"`
-	Type        string      `json:"type"`
-	Limit       int         `json:"limit"`
-	Alpha       float64     `json:"alpha"`
-	Query       string      `json:"query"`
-	Vector      []float32   `json:"vector"`
+	SubSearches      interface{} `json:"subSearches"`
+	Type             string      `json:"type"`
+	Alpha            float64     `json:"alpha"`
+	Query            string      `json:"query"`
+	Vector           []float32   `json:"vector"`
+	Properties       []string    `json:"properties"`
+	TargetVectors    []string    `json:"targetVectors"`
+	FusionAlgorithm  int         `json:"fusionalgorithm"`
+	NearTextParams   *NearTextParams
+	NearVectorParams *NearVector
 }
 
 type NearObject struct {
-	ID           string  `json:"id"`
-	Beacon       string  `json:"beacon"`
-	Certainty    float64 `json:"certainty"`
-	Distance     float64 `json:"distance"`
-	WithDistance bool    `json:"-"`
+	ID            string   `json:"id"`
+	Beacon        string   `json:"beacon"`
+	Certainty     float64  `json:"certainty"`
+	Distance      float64  `json:"distance"`
+	WithDistance  bool     `json:"-"`
+	TargetVectors []string `json:"targetVectors"`
 }
 
 type ObjectMove struct {
@@ -69,4 +76,10 @@ type NearTextParams struct {
 	WithDistance bool
 	Network      bool
 	Autocorrect  bool
+}
+
+type GroupBy struct {
+	Property        string
+	Groups          int
+	ObjectsPerGroup int
 }

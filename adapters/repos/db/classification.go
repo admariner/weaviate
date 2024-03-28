@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package db
@@ -18,15 +18,15 @@ import (
 
 	"github.com/go-openapi/strfmt"
 	"github.com/pkg/errors"
-	"github.com/semi-technologies/weaviate/entities/additional"
-	"github.com/semi-technologies/weaviate/entities/filters"
-	libfilters "github.com/semi-technologies/weaviate/entities/filters"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	"github.com/semi-technologies/weaviate/entities/search"
-	"github.com/semi-technologies/weaviate/usecases/classification"
-	"github.com/semi-technologies/weaviate/usecases/traverser"
-	"github.com/semi-technologies/weaviate/usecases/vectorizer"
+	"github.com/weaviate/weaviate/entities/additional"
+	"github.com/weaviate/weaviate/entities/dto"
+	"github.com/weaviate/weaviate/entities/filters"
+	libfilters "github.com/weaviate/weaviate/entities/filters"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/search"
+	"github.com/weaviate/weaviate/usecases/classification"
+	"github.com/weaviate/weaviate/usecases/vectorizer"
 )
 
 // TODO: why is this logic in the persistence package? This is business-logic,
@@ -36,7 +36,7 @@ func (db *DB) GetUnclassified(ctx context.Context, class string,
 ) ([]search.Result, error) {
 	mergedFilter := mergeUserFilterWithRefCountFilter(filter, class, properties,
 		libfilters.OperatorEqual, 0)
-	res, err := db.ClassSearch(ctx, traverser.GetParams{
+	res, err := db.Search(ctx, dto.GetParams{
 		ClassName: class,
 		Filters:   mergedFilter,
 		Pagination: &libfilters.Pagination{
@@ -60,7 +60,7 @@ func (db *DB) ZeroShotSearch(ctx context.Context, vector []float32,
 	class string, properties []string,
 	filter *libfilters.LocalFilter,
 ) ([]search.Result, error) {
-	res, err := db.VectorClassSearch(ctx, traverser.GetParams{
+	res, err := db.VectorSearch(ctx, dto.GetParams{
 		ClassName:    class,
 		SearchVector: vector,
 		Pagination: &filters.Pagination{
@@ -83,7 +83,7 @@ func (db *DB) AggregateNeighbors(ctx context.Context, vector []float32,
 ) ([]classification.NeighborRef, error) {
 	mergedFilter := mergeUserFilterWithRefCountFilter(filter, class, properties,
 		libfilters.OperatorGreaterThan, 0)
-	res, err := db.VectorClassSearch(ctx, traverser.GetParams{
+	res, err := db.VectorSearch(ctx, dto.GetParams{
 		ClassName:    class,
 		SearchVector: vector,
 		Pagination: &filters.Pagination{

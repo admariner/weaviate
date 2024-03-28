@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package db
@@ -18,61 +18,62 @@ import (
 
 	"github.com/go-openapi/strfmt"
 	"github.com/pkg/errors"
-	"github.com/semi-technologies/weaviate/adapters/repos/db/refcache"
-	"github.com/semi-technologies/weaviate/entities/additional"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/multi"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	"github.com/semi-technologies/weaviate/entities/schema/crossref"
-	"github.com/semi-technologies/weaviate/entities/search"
-	"github.com/semi-technologies/weaviate/entities/storobj"
-	"github.com/semi-technologies/weaviate/usecases/objects"
+	"github.com/weaviate/weaviate/adapters/repos/db/refcache"
+	"github.com/weaviate/weaviate/entities/additional"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/multi"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/schema/crossref"
+	"github.com/weaviate/weaviate/entities/search"
+	"github.com/weaviate/weaviate/entities/storobj"
+	"github.com/weaviate/weaviate/usecases/objects"
 )
 
-func (d *DB) PutObject(ctx context.Context, obj *models.Object,
-	vector []float32,
+func (db *DB) PutObject(ctx context.Context, obj *models.Object,
+	vector []float32, vectors models.Vectors, repl *additional.ReplicationProperties,
 ) error {
-	object := storobj.FromObject(obj, vector)
-	idx := d.GetIndex(object.Class())
+	object := storobj.FromObject(obj, vector, vectors)
+	idx := db.GetIndex(object.Class())
 	if idx == nil {
 		return fmt.Errorf("import into non-existing index for %s", object.Class())
 	}
 
-	if err := idx.putObject(ctx, object); err != nil {
-		return errors.Wrapf(err, "import into index %s", idx.ID())
+	if err := idx.putObject(ctx, object, repl); err != nil {
+		return fmt.Errorf("import into index %s: %w", idx.ID(), err)
 	}
 
 	return nil
 }
 
 // DeleteObject from of a specific class giving its ID
-func (d *DB) DeleteObject(ctx context.Context, class string, id strfmt.UUID) error {
-	idx := d.GetIndex(schema.ClassName(class))
+func (db *DB) DeleteObject(ctx context.Context, class string, id strfmt.UUID,
+	repl *additional.ReplicationProperties, tenant string,
+) error {
+	idx := db.GetIndex(schema.ClassName(class))
 	if idx == nil {
 		return fmt.Errorf("delete from non-existing index for %s", class)
 	}
 
-	err := idx.deleteObject(ctx, id)
+	err := idx.deleteObject(ctx, id, repl, tenant)
 	if err != nil {
-		return errors.Wrapf(err, "delete from index %s", idx.ID())
+		return fmt.Errorf("delete from index %q: %w", idx.ID(), err)
 	}
 
 	return nil
 }
 
-func (d *DB) MultiGet(ctx context.Context,
-	query []multi.Identifier,
-	additional additional.Properties,
+func (db *DB) MultiGet(ctx context.Context, query []multi.Identifier,
+	additional additional.Properties, tenant string,
 ) ([]search.Result, error) {
 	byIndex := map[string][]multi.Identifier{}
-	d.indexLock.RLock()
-	defer d.indexLock.RUnlock()
+	db.indexLock.RLock()
+	defer db.indexLock.RUnlock()
 
 	for i, q := range query {
 		// store original position to make assembly easier later
 		q.OriginalPosition = i
 
-		for _, index := range d.indices {
+		for _, index := range db.indices {
 			if index.Config.ClassName != schema.ClassName(q.ClassName) {
 				continue
 			}
@@ -85,7 +86,7 @@ func (d *DB) MultiGet(ctx context.Context,
 
 	out := make(search.Results, len(query))
 	for indexID, queries := range byIndex {
-		indexRes, err := d.indices[indexID].multiObjectByID(ctx, queries)
+		indexRes, err := db.indices[indexID].multiObjectByID(ctx, queries, tenant)
 		if err != nil {
 			return nil, errors.Wrapf(err, "index %q", indexID)
 		}
@@ -94,7 +95,7 @@ func (d *DB) MultiGet(ctx context.Context,
 			if obj == nil {
 				continue
 			}
-			res := obj.SearchResult(additional)
+			res := obj.SearchResult(additional, tenant)
 			out[queries[i].OriginalPosition] = *res
 		}
 	}
@@ -105,11 +106,11 @@ func (d *DB) MultiGet(ctx context.Context,
 // ObjectByID checks every index of the particular kind for the ID
 //
 // @warning: this function is deprecated by Object()
-func (d *DB) ObjectByID(ctx context.Context, id strfmt.UUID,
-	props search.SelectProperties,
-	additional additional.Properties,
+func (db *DB) ObjectByID(ctx context.Context, id strfmt.UUID,
+	props search.SelectProperties, additional additional.Properties,
+	tenant string,
 ) (*search.Result, error) {
-	results, err := d.ObjectsByID(ctx, id, props, additional)
+	results, err := db.ObjectsByID(ctx, id, props, additional, tenant)
 	if err != nil {
 		return nil, err
 	}
@@ -122,64 +123,74 @@ func (d *DB) ObjectByID(ctx context.Context, id strfmt.UUID,
 // ObjectsByID checks every index of the particular kind for the ID
 // this method is only used for Explore queries where we don't have
 // a class context
-func (d *DB) ObjectsByID(ctx context.Context, id strfmt.UUID,
-	props search.SelectProperties,
-	additional additional.Properties,
+func (db *DB) ObjectsByID(ctx context.Context, id strfmt.UUID,
+	props search.SelectProperties, additional additional.Properties,
+	tenant string,
 ) (search.Results, error) {
 	var result []*storobj.Object
 	// TODO: Search in parallel, rather than sequentially or this will be
 	// painfully slow on large schemas
-	d.indexLock.RLock()
+	db.indexLock.RLock()
 
-	for _, index := range d.indices {
-		res, err := index.objectByID(ctx, id, props, additional, nil)
+	for _, index := range db.indices {
+		res, err := index.objectByID(ctx, id, props, additional, nil, tenant)
 		if err != nil {
-			d.indexLock.RUnlock()
-			return nil, errors.Wrapf(err, "search index %s", index.ID())
+			db.indexLock.RUnlock()
+			switch err.(type) {
+			case objects.ErrMultiTenancy:
+				return nil, objects.NewErrMultiTenancy(fmt.Errorf("search index %s: %w", index.ID(), err))
+			default:
+				return nil, errors.Wrapf(err, "search index %s", index.ID())
+			}
 		}
 
 		if res != nil {
 			result = append(result, res)
 		}
 	}
-	d.indexLock.RUnlock()
+	db.indexLock.RUnlock()
 
 	if result == nil {
 		return nil, nil
 	}
 
-	return d.enrichRefsForList(ctx,
-		storobj.SearchResults(result, additional), props, additional)
+	return db.ResolveReferences(ctx,
+		storobj.SearchResults(result, additional, tenant), props, nil, additional, tenant)
 }
 
 // Object gets object with id from index of specified class.
-func (d *DB) Object(ctx context.Context, class string,
-	id strfmt.UUID, props search.SelectProperties,
-	adds additional.Properties, repl *additional.ReplicationProperties,
+func (db *DB) Object(ctx context.Context, class string, id strfmt.UUID,
+	props search.SelectProperties, addl additional.Properties,
+	repl *additional.ReplicationProperties, tenant string,
 ) (*search.Result, error) {
-	idx := d.GetIndex(schema.ClassName(class))
+	idx := db.GetIndex(schema.ClassName(class))
 	if idx == nil {
 		return nil, nil
 	}
 
-	obj, err := idx.objectByID(ctx, id, props, adds, repl)
+	obj, err := idx.objectByID(ctx, id, props, addl, repl, tenant)
 	if err != nil {
-		return nil, errors.Wrapf(err, "search index %s", idx.ID())
+		switch err.(type) {
+		case objects.ErrMultiTenancy:
+			return nil, objects.NewErrMultiTenancy(fmt.Errorf("search index %s: %w", idx.ID(), err))
+		default:
+			return nil, errors.Wrapf(err, "search index %s", idx.ID())
+		}
 	}
 	var r *search.Result
 	if obj != nil {
-		r = obj.SearchResult(adds)
+		r = obj.SearchResult(addl, tenant)
 	}
 	if r == nil {
 		return nil, nil
 	}
-	return d.enrichRefsForSingle(ctx, r, props, adds)
+	return db.enrichRefsForSingle(ctx, r, props, addl, tenant)
 }
 
-func (d *DB) enrichRefsForSingle(ctx context.Context, obj *search.Result,
-	props search.SelectProperties, additional additional.Properties,
+func (db *DB) enrichRefsForSingle(ctx context.Context, obj *search.Result,
+	props search.SelectProperties, additional additional.Properties, tenant string,
 ) (*search.Result, error) {
-	res, err := refcache.NewResolver(refcache.NewCacher(d, d.logger)).
+	res, err := refcache.NewResolver(refcache.NewCacher(db, db.logger, tenant)).
 		Do(ctx, []search.Result{*obj}, props, additional)
 	if err != nil {
 		return nil, errors.Wrap(err, "resolve cross-refs")
@@ -188,27 +199,36 @@ func (d *DB) enrichRefsForSingle(ctx context.Context, obj *search.Result,
 	return &res[0], nil
 }
 
-func (d *DB) Exists(ctx context.Context, class string, id strfmt.UUID) (bool, error) {
+func (db *DB) Exists(ctx context.Context, class string, id strfmt.UUID,
+	repl *additional.ReplicationProperties, tenant string,
+) (bool, error) {
 	if class == "" {
-		return d.anyExists(ctx, id)
+		return db.anyExists(ctx, id, repl)
 	}
-	index := d.GetIndex(schema.ClassName(class))
+	index := db.GetIndex(schema.ClassName(class))
 	if index == nil {
 		return false, nil
 	}
-	return index.exists(ctx, id)
+	return index.exists(ctx, id, repl, tenant)
 }
 
-func (d *DB) anyExists(ctx context.Context, id strfmt.UUID) (bool, error) {
+func (db *DB) anyExists(ctx context.Context, id strfmt.UUID,
+	repl *additional.ReplicationProperties,
+) (bool, error) {
 	// TODO: Search in parallel, rather than sequentially or this will be
 	// painfully slow on large schemas
-	d.indexLock.RLock()
-	defer d.indexLock.RUnlock()
+	db.indexLock.RLock()
+	defer db.indexLock.RUnlock()
 
-	for _, index := range d.indices {
-		ok, err := index.exists(ctx, id)
+	for _, index := range db.indices {
+		ok, err := index.exists(ctx, id, repl, "")
 		if err != nil {
-			return false, errors.Wrapf(err, "search index %s", index.ID())
+			switch err.(type) {
+			case objects.ErrMultiTenancy:
+				return false, objects.NewErrMultiTenancy(fmt.Errorf("search index %s: %w", index.ID(), err))
+			default:
+				return false, errors.Wrapf(err, "search index %s", index.ID())
+			}
 		}
 		if ok {
 			return true, nil
@@ -218,36 +238,31 @@ func (d *DB) anyExists(ctx context.Context, id strfmt.UUID) (bool, error) {
 	return false, nil
 }
 
-func (d *DB) AddReference(ctx context.Context,
-	className string, source strfmt.UUID, propName string,
-	ref *models.SingleRef,
+func (db *DB) AddReference(ctx context.Context, source *crossref.RefSource, target *crossref.Ref,
+	repl *additional.ReplicationProperties, tenant string,
 ) error {
-	target, err := crossref.ParseSingleRef(ref)
-	if err != nil {
-		return err
-	}
-
-	return d.Merge(ctx, objects.MergeDocument{
-		Class:      className,
-		ID:         source,
+	return db.Merge(ctx, objects.MergeDocument{
+		Class:      source.Class.String(),
+		ID:         source.TargetID,
 		UpdateTime: time.Now().UnixMilli(),
 		References: objects.BatchReferences{
 			objects.BatchReference{
-				From: crossref.NewSource(schema.ClassName(className),
-					schema.PropertyName(propName), source),
-				To: target,
+				From: source,
+				To:   target,
 			},
 		},
-	})
+	}, repl, tenant)
 }
 
-func (d *DB) Merge(ctx context.Context, merge objects.MergeDocument) error {
-	idx := d.GetIndex(schema.ClassName(merge.Class))
+func (db *DB) Merge(ctx context.Context, merge objects.MergeDocument,
+	repl *additional.ReplicationProperties, tenant string,
+) error {
+	idx := db.GetIndex(schema.ClassName(merge.Class))
 	if idx == nil {
 		return fmt.Errorf("merge from non-existing index for %s", merge.Class)
 	}
 
-	err := idx.mergeObject(ctx, merge)
+	err := idx.mergeObject(ctx, merge, repl, tenant)
 	if err != nil {
 		return errors.Wrapf(err, "merge into index %s", idx.ID())
 	}

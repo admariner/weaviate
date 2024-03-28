@@ -4,17 +4,19 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package lsmkv
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 
-	"github.com/pkg/errors"
+	"github.com/weaviate/weaviate/entities/lsmkv"
 )
 
 type CursorSet struct {
@@ -37,7 +39,7 @@ type cursorStateCollection struct {
 }
 
 // SetCursor holds a RLock for the flushing state. It needs to be closed using the
-// .Close() methods or otherwise the lock will never be relased
+// .Close() methods or otherwise the lock will never be released
 func (b *Bucket) SetCursor() *CursorSet {
 	b.flushLock.RLock()
 
@@ -101,13 +103,13 @@ func (c *CursorSet) seekAll(target []byte) {
 	state := make([]cursorStateCollection, len(c.innerCursors))
 	for i, cur := range c.innerCursors {
 		key, value, err := cur.seek(target)
-		if err == NotFound {
+		if errors.Is(err, lsmkv.NotFound) {
 			state[i].err = err
 			continue
 		}
 
 		if err != nil {
-			panic(errors.Wrap(err, "unexpected error in seek"))
+			panic(fmt.Errorf("unexpected error in seek: %w", err))
 		}
 
 		state[i].key = key
@@ -123,13 +125,13 @@ func (c *CursorSet) firstAll() {
 	state := make([]cursorStateCollection, len(c.innerCursors))
 	for i, cur := range c.innerCursors {
 		key, value, err := cur.first()
-		if err == NotFound {
+		if errors.Is(err, lsmkv.NotFound) {
 			state[i].err = err
 			continue
 		}
 
 		if err != nil {
-			panic(errors.Wrap(err, "unexpected error in seek"))
+			panic(fmt.Errorf("unexpected error in seek: %w", err))
 		}
 
 		state[i].key = key
@@ -144,13 +146,13 @@ func (c *CursorSet) firstAll() {
 func (c *CursorSet) serveCurrentStateAndAdvance() ([]byte, [][]byte) {
 	id, err := c.cursorWithLowestKey()
 	if err != nil {
-		if err == NotFound {
+		if errors.Is(err, lsmkv.NotFound) {
 			return nil, nil
 		}
 	}
 
 	// check if this is a duplicate key before checking for the remaining errors,
-	// as cases such as 'Deleted' can be better handled inside
+	// as cases such as 'entities.Deleted' can be better handled inside
 	// mergeDuplicatesInCurrentStateAndAdvance where we can be sure to act on
 	// segments in the correct order
 	if ids, ok := c.haveDuplicatesInState(id); ok {
@@ -161,12 +163,12 @@ func (c *CursorSet) serveCurrentStateAndAdvance() ([]byte, [][]byte) {
 }
 
 func (c *CursorSet) cursorWithLowestKey() (int, error) {
-	err := NotFound
+	err := lsmkv.NotFound
 	pos := -1
 	var lowest []byte
 
 	for i, res := range c.state {
-		if res.err == NotFound {
+		if errors.Is(res.err, lsmkv.NotFound) {
 			continue
 		}
 
@@ -216,8 +218,14 @@ func (c *CursorSet) mergeDuplicatesInCurrentStateAndAdvance(ids []int) ([]byte, 
 		c.advanceInner(id)
 	}
 
+	values := newSetDecoder().Do(raw)
+	if len(values) == 0 {
+		// all values deleted, skip key
+		return c.Next()
+	}
+
+	// TODO remove keyOnly option, not used anyway
 	if !c.keyOnly {
-		values := newSetDecoder().Do(raw)
 		return key, values
 	} else {
 		return key, nil
@@ -226,7 +234,7 @@ func (c *CursorSet) mergeDuplicatesInCurrentStateAndAdvance(ids []int) ([]byte, 
 
 func (c *CursorSet) advanceInner(id int) {
 	k, v, err := c.innerCursors[id].next()
-	if err == NotFound {
+	if errors.Is(err, lsmkv.NotFound) {
 		c.state[id].err = err
 		c.state[id].key = nil
 		if !c.keyOnly {
@@ -235,7 +243,7 @@ func (c *CursorSet) advanceInner(id int) {
 		return
 	}
 
-	if err == Deleted {
+	if errors.Is(err, lsmkv.Deleted) {
 		c.state[id].err = err
 		c.state[id].key = k
 		c.state[id].value = nil
@@ -243,7 +251,7 @@ func (c *CursorSet) advanceInner(id int) {
 	}
 
 	if err != nil {
-		panic(errors.Wrap(err, "unexpected error in advance"))
+		panic(fmt.Errorf("unexpected error in advance: %w", err))
 	}
 
 	c.state[id].key = k

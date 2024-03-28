@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package sorter
@@ -16,10 +16,10 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/semi-technologies/weaviate/entities/filters"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	"github.com/semi-technologies/weaviate/entities/storobj"
+	"github.com/weaviate/weaviate/entities/filters"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/storobj"
 )
 
 type comparableValueExtractor struct {
@@ -40,9 +40,9 @@ func (e *comparableValueExtractor) extractFromBytes(objData []byte, propName str
 		switch e.dataTypesHelper.getType(propName) {
 		case schema.DataTypeBlob:
 			return &value[0]
-		case schema.DataTypeString, schema.DataTypeText:
+		case schema.DataTypeText:
 			return &value[0]
-		case schema.DataTypeStringArray, schema.DataTypeTextArray:
+		case schema.DataTypeTextArray:
 			return &value
 		case schema.DataTypeDate:
 			d := e.mustExtractDates(value[:1])[0]
@@ -102,10 +102,10 @@ func (e *comparableValueExtractor) extractFromObject(object *storobj.Object, pro
 	case schema.DataTypeBlob:
 		s := value.(string)
 		return &s
-	case schema.DataTypeString, schema.DataTypeText:
+	case schema.DataTypeText:
 		s := value.(string)
 		return &s
-	case schema.DataTypeStringArray, schema.DataTypeTextArray:
+	case schema.DataTypeTextArray:
 		sa := value.([]string)
 		return &sa
 	case schema.DataTypeDate:

@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package classification
@@ -19,7 +19,7 @@ package classification
 // 	"testing"
 
 // 	"github.com/go-openapi/strfmt"
-// 	"github.com/semi-technologies/weaviate/entities/models"
+// 	"github.com/weaviate/weaviate/entities/models"
 // 	"github.com/stretchr/testify/assert"
 // 	"github.com/stretchr/testify/require"
 // )
@@ -80,7 +80,7 @@ package classification
 // 			assert.Equal(t, errors.New("just a test fake"), out[len(out)-1].Interface(),
 // 				"execution must abort with authorizer error")
 // 			assert.Equal(t, authorizeCall{principal, test.expectedVerb, test.expectedResource},
-// 				authorizer.calls[0], "correct paramteres must have been used on authorizer")
+// 				authorizer.calls[0], "correct parameters must have been used on authorizer")
 // 		}
 // 	})
 // }

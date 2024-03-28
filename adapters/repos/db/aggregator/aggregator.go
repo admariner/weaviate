@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package aggregator
@@ -16,14 +16,15 @@ import (
 	"fmt"
 
 	"github.com/pkg/errors"
-	"github.com/semi-technologies/weaviate/adapters/repos/db/helpers"
-	"github.com/semi-technologies/weaviate/adapters/repos/db/inverted"
-	"github.com/semi-technologies/weaviate/adapters/repos/db/inverted/stopwords"
-	"github.com/semi-technologies/weaviate/adapters/repos/db/lsmkv"
-	"github.com/semi-technologies/weaviate/entities/aggregation"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	schemaUC "github.com/semi-technologies/weaviate/usecases/schema"
 	"github.com/sirupsen/logrus"
+	"github.com/weaviate/weaviate/adapters/repos/db/helpers"
+	"github.com/weaviate/weaviate/adapters/repos/db/inverted"
+	"github.com/weaviate/weaviate/adapters/repos/db/inverted/stopwords"
+	"github.com/weaviate/weaviate/adapters/repos/db/lsmkv"
+	"github.com/weaviate/weaviate/adapters/repos/db/roaringset"
+	"github.com/weaviate/weaviate/entities/aggregation"
+	"github.com/weaviate/weaviate/entities/schema"
+	schemaUC "github.com/weaviate/weaviate/usecases/schema"
 )
 
 type vectorIndex interface {
@@ -33,39 +34,49 @@ type vectorIndex interface {
 }
 
 type Aggregator struct {
-	logger           logrus.FieldLogger
-	store            *lsmkv.Store
-	params           aggregation.Params
-	getSchema        schemaUC.SchemaGetter
-	invertedRowCache *inverted.RowCacher
-	classSearcher    inverted.ClassSearcher // to support ref-filters
-	deletedDocIDs    inverted.DeletedDocIDChecker
-	vectorIndex      vectorIndex
-	stopwords        stopwords.StopwordDetector
-	shardVersion     uint16
-	propLengths      *inverted.PropertyLengthTracker
+	logger                 logrus.FieldLogger
+	store                  *lsmkv.Store
+	params                 aggregation.Params
+	getSchema              schemaUC.SchemaGetter
+	classSearcher          inverted.ClassSearcher // to support ref-filters
+	vectorIndex            vectorIndex
+	stopwords              stopwords.StopwordDetector
+	shardVersion           uint16
+	propLenTracker         *inverted.JsonPropertyLengthTracker
+	isFallbackToSearchable inverted.IsFallbackToSearchable
+	tenant                 string
+	nestedCrossRefLimit    int64
+	bitmapFactory          *roaringset.BitmapFactory
 }
 
 func New(store *lsmkv.Store, params aggregation.Params,
-	getSchema schemaUC.SchemaGetter, cache *inverted.RowCacher,
-	classSearcher inverted.ClassSearcher,
-	deletedDocIDs inverted.DeletedDocIDChecker, stopwords stopwords.StopwordDetector,
-	shardVersion uint16, vectorIndex vectorIndex, logger logrus.FieldLogger,
-	propLengths *inverted.PropertyLengthTracker,
+	getSchema schemaUC.SchemaGetter, classSearcher inverted.ClassSearcher,
+	stopwords stopwords.StopwordDetector, shardVersion uint16,
+	vectorIndex vectorIndex, logger logrus.FieldLogger,
+	propLenTracker *inverted.JsonPropertyLengthTracker,
+	isFallbackToSearchable inverted.IsFallbackToSearchable,
+	tenant string, nestedCrossRefLimit int64,
+	bitmapFactory *roaringset.BitmapFactory,
 ) *Aggregator {
 	return &Aggregator{
-		logger:           logger,
-		store:            store,
-		params:           params,
-		getSchema:        getSchema,
-		invertedRowCache: cache,
-		classSearcher:    classSearcher,
-		deletedDocIDs:    deletedDocIDs,
-		stopwords:        stopwords,
-		shardVersion:     shardVersion,
-		vectorIndex:      vectorIndex,
-		propLengths:      propLengths,
+		logger:                 logger,
+		store:                  store,
+		params:                 params,
+		getSchema:              getSchema,
+		classSearcher:          classSearcher,
+		stopwords:              stopwords,
+		shardVersion:           shardVersion,
+		vectorIndex:            vectorIndex,
+		propLenTracker:         propLenTracker,
+		isFallbackToSearchable: isFallbackToSearchable,
+		tenant:                 tenant,
+		nestedCrossRefLimit:    nestedCrossRefLimit,
+		bitmapFactory:          bitmapFactory,
 	}
+}
+
+func (a *Aggregator) GetPropertyLengthTracker() *inverted.JsonPropertyLengthTracker {
+	return a.propLenTracker
 }
 
 func (a *Aggregator) Do(ctx context.Context) (*aggregation.Result, error) {
@@ -100,8 +111,7 @@ func (a *Aggregator) aggTypeOfProperty(
 		return aggregation.PropertyTypeNumerical, dt, nil
 	case schema.DataTypeBoolean, schema.DataTypeBooleanArray:
 		return aggregation.PropertyTypeBoolean, dt, nil
-	case schema.DataTypeText, schema.DataTypeString, schema.DataTypeTextArray,
-		schema.DataTypeStringArray:
+	case schema.DataTypeText, schema.DataTypeTextArray:
 		return aggregation.PropertyTypeText, dt, nil
 	case schema.DataTypeDate, schema.DataTypeDateArray:
 		return aggregation.PropertyTypeDate, dt, nil

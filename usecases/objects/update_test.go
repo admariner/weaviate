@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package objects
@@ -18,16 +18,16 @@ import (
 	"time"
 
 	"github.com/go-openapi/strfmt"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	"github.com/semi-technologies/weaviate/entities/search"
-	"github.com/semi-technologies/weaviate/usecases/config"
 	"github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/search"
+	"github.com/weaviate/weaviate/usecases/config"
 
-	enthnsw "github.com/semi-technologies/weaviate/entities/vectorindex/hnsw"
+	enthnsw "github.com/weaviate/weaviate/entities/vectorindex/hnsw"
 )
 
 func Test_UpdateAction(t *testing.T) {
@@ -47,8 +47,9 @@ func Test_UpdateAction(t *testing.T) {
 					VectorIndexConfig: enthnsw.NewDefaultUserConfig(),
 					Properties: []*models.Property{
 						{
-							DataType: []string{"string"},
-							Name:     "foo",
+							DataType:     schema.DataTypeText.PropString(),
+							Tokenization: models.PropertyTokenizationWhitespace,
+							Name:         "foo",
 						},
 					},
 				},
@@ -99,7 +100,7 @@ func Test_UpdateAction(t *testing.T) {
 			ID:         id,
 			Properties: map[string]interface{}{"foo": "baz"},
 		}
-		res, err := manager.UpdateObject(context.Background(), &models.Principal{}, "", id, payload)
+		res, err := manager.UpdateObject(context.Background(), &models.Principal{}, "", id, payload, nil)
 		require.Nil(t, err)
 		expected := &models.Object{
 			Class:            "ActionClass",
@@ -136,8 +137,9 @@ func Test_UpdateObject(t *testing.T) {
 					VectorIndexConfig: enthnsw.NewDefaultUserConfig(),
 					Properties: []*models.Property{
 						{
-							DataType: []string{"string"},
-							Name:     "foo",
+							DataType:     schema.DataTypeText.PropString(),
+							Tokenization: models.PropertyTokenizationWhitespace,
+							Name:         "foo",
 						},
 					},
 				},
@@ -152,8 +154,8 @@ func Test_UpdateObject(t *testing.T) {
 		Properties: map[string]interface{}{"foo": "baz"},
 	}
 	// the object might not exist
-	m.repo.On("Object", cls, id, mock.Anything, mock.Anything).Return(nil, anyErr).Once()
-	_, err := m.UpdateObject(context.Background(), &models.Principal{}, cls, id, payload)
+	m.repo.On("Object", cls, id, mock.Anything, mock.Anything, "").Return(nil, anyErr).Once()
+	_, err := m.UpdateObject(context.Background(), &models.Principal{}, cls, id, payload, nil)
 	if err == nil {
 		t.Fatalf("must return an error if object() fails")
 	}
@@ -165,7 +167,7 @@ func Test_UpdateObject(t *testing.T) {
 		Created:   beforeUpdate,
 		Updated:   beforeUpdate,
 	}
-	m.repo.On("Object", cls, id, mock.Anything, mock.Anything).Return(result, nil).Once()
+	m.repo.On("Object", cls, id, mock.Anything, mock.Anything, "").Return(result, nil).Once()
 	m.modulesProvider.On("UpdateVector", mock.Anything, mock.AnythingOfType(FindObjectFn)).
 		Return(vec, nil)
 	m.repo.On("PutObject", mock.Anything, mock.Anything).Return(nil).Once()
@@ -177,10 +179,10 @@ func Test_UpdateObject(t *testing.T) {
 		CreationTimeUnix: beforeUpdate,
 		Vector:           vec,
 	}
-	res, err := m.UpdateObject(context.Background(), &models.Principal{}, cls, id, payload)
+	res, err := m.UpdateObject(context.Background(), &models.Principal{}, cls, id, payload, nil)
 	require.Nil(t, err)
 	if res.LastUpdateTimeUnix <= beforeUpdate {
-		t.Error("time after update must be greather than time before update ")
+		t.Error("time after update must be greater than time before update ")
 	}
 	res.LastUpdateTimeUnix = 0 // to allow for equality
 	assert.Equal(t, expected, res)

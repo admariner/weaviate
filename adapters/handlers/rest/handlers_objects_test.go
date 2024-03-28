@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package rest
@@ -18,13 +18,13 @@ import (
 	"testing"
 
 	"github.com/go-openapi/strfmt"
-	"github.com/semi-technologies/weaviate/adapters/handlers/rest/operations/objects"
-	"github.com/semi-technologies/weaviate/entities/additional"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/usecases/auth/authorization/errors"
-	"github.com/semi-technologies/weaviate/usecases/config"
-	uco "github.com/semi-technologies/weaviate/usecases/objects"
 	"github.com/sirupsen/logrus"
+	"github.com/weaviate/weaviate/adapters/handlers/rest/operations/objects"
+	"github.com/weaviate/weaviate/entities/additional"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/usecases/auth/authorization/errors"
+	"github.com/weaviate/weaviate/usecases/config"
+	uco "github.com/weaviate/weaviate/usecases/objects"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -84,7 +84,7 @@ func TestEnrichObjectsWithLinks(t *testing.T) {
 				fakeManager := &fakeManager{
 					addObjectReturn: test.object,
 				}
-				h := &objectHandlers{manager: fakeManager}
+				h := &objectHandlers{manager: fakeManager, metricRequestsTotal: &fakeMetricRequestsTotal{}}
 				res := h.addObject(objects.ObjectsCreateParams{
 					HTTPRequest: httptest.NewRequest("POST", "/v1/objects", nil),
 					Body:        test.object,
@@ -96,7 +96,7 @@ func TestEnrichObjectsWithLinks(t *testing.T) {
 		}
 	})
 
-	// This test "with an origin conifgured" is not repeated for every handler,
+	// This test "with an origin configured" is not repeated for every handler,
 	// as testing this feature once was deemed sufficient
 	t.Run("add object - with an origin configured", func(t *testing.T) {
 		type test struct {
@@ -152,7 +152,7 @@ func TestEnrichObjectsWithLinks(t *testing.T) {
 					addObjectReturn: test.object,
 				}
 				config := config.Config{Origin: "https://awesomehost.com"}
-				h := &objectHandlers{manager: fakeManager, config: config}
+				h := &objectHandlers{manager: fakeManager, config: config, metricRequestsTotal: &fakeMetricRequestsTotal{}}
 				res := h.addObject(objects.ObjectsCreateParams{
 					HTTPRequest: httptest.NewRequest("POST", "/v1/objects", nil),
 					Body:        test.object,
@@ -217,7 +217,7 @@ func TestEnrichObjectsWithLinks(t *testing.T) {
 				fakeManager := &fakeManager{
 					getObjectReturn: test.object,
 				}
-				h := &objectHandlers{manager: fakeManager, logger: &logrus.Logger{}}
+				h := &objectHandlers{manager: fakeManager, logger: &logrus.Logger{}, metricRequestsTotal: &fakeMetricRequestsTotal{}}
 				res := h.getObjectDeprecated(objects.ObjectsGetParams{HTTPRequest: httptest.NewRequest("GET", "/v1/objects", nil)}, nil)
 				parsed, ok := res.(*objects.ObjectsClassGetOK)
 				require.True(t, ok)
@@ -303,7 +303,7 @@ func TestEnrichObjectsWithLinks(t *testing.T) {
 				fakeManager := &fakeManager{
 					queryResult: test.object,
 				}
-				h := &objectHandlers{manager: fakeManager}
+				h := &objectHandlers{manager: fakeManager, metricRequestsTotal: &fakeMetricRequestsTotal{}}
 				res := h.getObjects(objects.ObjectsListParams{HTTPRequest: httptest.NewRequest("GET", "/v1/objects", nil)}, nil)
 				parsed, ok := res.(*objects.ObjectsListOK)
 				require.True(t, ok)
@@ -365,7 +365,7 @@ func TestEnrichObjectsWithLinks(t *testing.T) {
 				fakeManager := &fakeManager{
 					updateObjectReturn: test.object,
 				}
-				h := &objectHandlers{manager: fakeManager, logger: &logrus.Logger{}}
+				h := &objectHandlers{manager: fakeManager, logger: &logrus.Logger{}, metricRequestsTotal: &fakeMetricRequestsTotal{}}
 				res := h.updateObjectDeprecated(objects.ObjectsUpdateParams{
 					HTTPRequest: httptest.NewRequest("POST", "/v1/objects", nil),
 					Body:        test.object,
@@ -430,7 +430,7 @@ func TestEnrichObjectsWithLinks(t *testing.T) {
 				fakeManager := &fakeManager{
 					addObjectReturn: test.object,
 				}
-				h := &objectHandlers{manager: fakeManager}
+				h := &objectHandlers{manager: fakeManager, metricRequestsTotal: &fakeMetricRequestsTotal{}}
 				res := h.addObject(objects.ObjectsCreateParams{
 					HTTPRequest: httptest.NewRequest("POST", "/v1/objects", nil),
 					Body:        test.object,
@@ -519,7 +519,7 @@ func TestEnrichObjectsWithLinks(t *testing.T) {
 				fakeManager := &fakeManager{
 					queryResult: test.object,
 				}
-				h := &objectHandlers{manager: fakeManager}
+				h := &objectHandlers{manager: fakeManager, metricRequestsTotal: &fakeMetricRequestsTotal{}}
 				res := h.getObjects(objects.ObjectsListParams{HTTPRequest: httptest.NewRequest("GET", "/v1/objects", nil)}, nil)
 				parsed, ok := res.(*objects.ObjectsListOK)
 				require.True(t, ok)
@@ -578,7 +578,7 @@ func TestEnrichObjectsWithLinks(t *testing.T) {
 				}},
 			},
 			{
-				name: "forbbiden",
+				name: "forbidden",
 				err:  errors.NewForbidden(&models.Principal{}, "get", "Myclass/123"),
 			},
 			{
@@ -601,7 +601,7 @@ func TestEnrichObjectsWithLinks(t *testing.T) {
 					updateObjectReturn: test.object,
 					updateObjectErr:    test.err,
 				}
-				h := &objectHandlers{manager: fakeManager}
+				h := &objectHandlers{manager: fakeManager, metricRequestsTotal: &fakeMetricRequestsTotal{}}
 				res := h.updateObject(objects.ObjectsClassPutParams{
 					HTTPRequest: httptest.NewRequest("POST", "/v1/objects/123", nil),
 					Body:        test.object,
@@ -621,9 +621,14 @@ func TestEnrichObjectsWithLinks(t *testing.T) {
 
 	t.Run("PatchObject", func(t *testing.T) {
 		var (
-			fakeManager = &fakeManager{}
-			h           = &objectHandlers{manager: fakeManager, logger: &logrus.Logger{}}
-			req         = objects.ObjectsClassPatchParams{
+			fakeManager             = &fakeManager{}
+			fakeMetricRequestsTotal = &fakeMetricRequestsTotal{}
+			h                       = &objectHandlers{
+				manager:             fakeManager,
+				logger:              &logrus.Logger{},
+				metricRequestsTotal: fakeMetricRequestsTotal,
+			}
+			req = objects.ObjectsClassPatchParams{
 				HTTPRequest: httptest.NewRequest("PATCH", "/v1/objects/MyClass/123", nil),
 				ClassName:   "MyClass",
 				ID:          "123",
@@ -719,7 +724,7 @@ func TestEnrichObjectsWithLinks(t *testing.T) {
 				}},
 			},
 			{
-				name: "error forbbiden",
+				name: "error forbidden",
 				err:  errors.NewForbidden(&models.Principal{}, "get", "Myclass/123"),
 			},
 			{
@@ -738,7 +743,7 @@ func TestEnrichObjectsWithLinks(t *testing.T) {
 					getObjectReturn: test.object,
 					getObjectErr:    test.err,
 				}
-				h := &objectHandlers{manager: fakeManager}
+				h := &objectHandlers{manager: fakeManager, metricRequestsTotal: &fakeMetricRequestsTotal{}}
 				req := objects.ObjectsClassGetParams{
 					HTTPRequest: httptest.NewRequest("GET", "/v1/objects/MyClass/123", nil),
 					ClassName:   cls,
@@ -768,7 +773,7 @@ func TestEnrichObjectsWithLinks(t *testing.T) {
 				name: "without props - noaction changes",
 			},
 			{
-				name: "error forbbiden",
+				name: "error forbidden",
 				err:  errors.NewForbidden(&models.Principal{}, "get", "Myclass/123"),
 			},
 			{
@@ -786,7 +791,7 @@ func TestEnrichObjectsWithLinks(t *testing.T) {
 				fakeManager := &fakeManager{
 					deleteObjectReturn: test.err,
 				}
-				h := &objectHandlers{manager: fakeManager}
+				h := &objectHandlers{manager: fakeManager, metricRequestsTotal: &fakeMetricRequestsTotal{}}
 				req := objects.ObjectsClassDeleteParams{
 					HTTPRequest: httptest.NewRequest("GET", "/v1/objects/MyClass/123", nil),
 					ClassName:   cls,
@@ -807,7 +812,7 @@ func TestEnrichObjectsWithLinks(t *testing.T) {
 		m := &fakeManager{
 			headObjectReturn: true,
 		}
-		h := &objectHandlers{manager: m, logger: &logrus.Logger{}}
+		h := &objectHandlers{manager: m, logger: &logrus.Logger{}, metricRequestsTotal: &fakeMetricRequestsTotal{}}
 		req := objects.ObjectsClassHeadParams{
 			HTTPRequest: httptest.NewRequest("HEAD", "/v1/objects/MyClass/123", nil),
 			ClassName:   "MyClass",
@@ -844,7 +849,7 @@ func TestEnrichObjectsWithLinks(t *testing.T) {
 
 	t.Run("PostReference", func(t *testing.T) {
 		m := &fakeManager{}
-		h := &objectHandlers{manager: m, logger: &logrus.Logger{}}
+		h := &objectHandlers{manager: m, logger: &logrus.Logger{}, metricRequestsTotal: &fakeMetricRequestsTotal{}}
 		req := objects.ObjectsClassReferencesCreateParams{
 			HTTPRequest:  httptest.NewRequest("HEAD", "/v1/objects/MyClass/123/references/prop", nil),
 			ClassName:    "MyClass",
@@ -894,7 +899,7 @@ func TestEnrichObjectsWithLinks(t *testing.T) {
 
 	t.Run("PutReferences", func(t *testing.T) {
 		m := &fakeManager{}
-		h := &objectHandlers{manager: m, logger: &logrus.Logger{}}
+		h := &objectHandlers{manager: m, logger: &logrus.Logger{}, metricRequestsTotal: &fakeMetricRequestsTotal{}}
 		req := objects.ObjectsClassReferencesPutParams{
 			HTTPRequest:  httptest.NewRequest("HEAD", "/v1/objects/MyClass/123/references/prop", nil),
 			ClassName:    "MyClass",
@@ -937,7 +942,7 @@ func TestEnrichObjectsWithLinks(t *testing.T) {
 
 	t.Run("DeleteReference", func(t *testing.T) {
 		m := &fakeManager{}
-		h := &objectHandlers{manager: m, logger: &logrus.Logger{}}
+		h := &objectHandlers{manager: m, logger: &logrus.Logger{}, metricRequestsTotal: &fakeMetricRequestsTotal{}}
 		req := objects.ObjectsClassReferencesDeleteParams{
 			HTTPRequest:  httptest.NewRequest("HEAD", "/v1/objects/MyClass/123/references/prop", nil),
 			ClassName:    "MyClass",
@@ -994,7 +999,12 @@ func TestEnrichObjectsWithLinks(t *testing.T) {
 					Properties: map[string]interface{}{"name": "John"},
 				}},
 			}
-			h   = &objectHandlers{manager: m, logger: &logrus.Logger{}}
+			fakeMetricRequestsTotal = &fakeMetricRequestsTotal{}
+			h                       = &objectHandlers{
+				manager:             m,
+				logger:              &logrus.Logger{},
+				metricRequestsTotal: fakeMetricRequestsTotal,
+			}
 			req = objects.ObjectsListParams{
 				HTTPRequest: httptest.NewRequest("HEAD", "/v1/objects/", nil),
 				Class:       &cls,
@@ -1047,23 +1057,33 @@ type fakeManager struct {
 	deleteRefErr       *uco.Error
 }
 
-func (f *fakeManager) HeadObject(context.Context, *models.Principal, string, strfmt.UUID) (bool, *uco.Error) {
+func (f *fakeManager) HeadObject(context.Context, *models.Principal,
+	string, strfmt.UUID, *additional.ReplicationProperties, string,
+) (bool, *uco.Error) {
 	return f.headObjectReturn, f.headObjectErr
 }
 
-func (f *fakeManager) AddObject(_ context.Context, _ *models.Principal, object *models.Object) (*models.Object, error) {
+func (f *fakeManager) AddObject(_ context.Context, _ *models.Principal,
+	object *models.Object, _ *additional.ReplicationProperties,
+) (*models.Object, error) {
 	return object, nil
 }
 
-func (f *fakeManager) ValidateObject(_ context.Context, _ *models.Principal, _ *models.Object) error {
+func (f *fakeManager) ValidateObject(_ context.Context, _ *models.Principal,
+	_ *models.Object, _ *additional.ReplicationProperties,
+) error {
 	panic("not implemented") // TODO: Implement
 }
 
-func (f *fakeManager) GetObject(_ context.Context, _ *models.Principal, class string, _ strfmt.UUID, _ additional.Properties, _ *additional.ReplicationProperties) (*models.Object, error) {
+func (f *fakeManager) GetObject(_ context.Context, _ *models.Principal, class string,
+	_ strfmt.UUID, _ additional.Properties, _ *additional.ReplicationProperties, _ string,
+) (*models.Object, error) {
 	return f.getObjectReturn, f.getObjectErr
 }
 
-func (f *fakeManager) GetObjectsClass(ctx context.Context, principal *models.Principal, id strfmt.UUID) (*models.Class, error) {
+func (f *fakeManager) GetObjectsClass(ctx context.Context,
+	principal *models.Principal, id strfmt.UUID,
+) (*models.Class, error) {
 	class := &models.Class{
 		Class:      f.getObjectReturn.Class,
 		Vectorizer: "text2vec-contextionary",
@@ -1071,34 +1091,65 @@ func (f *fakeManager) GetObjectsClass(ctx context.Context, principal *models.Pri
 	return class, nil
 }
 
-func (f *fakeManager) GetObjects(_ context.Context, _ *models.Principal, _ *int64, _ *int64, _ *string, _ *string, _ additional.Properties) ([]*models.Object, error) {
+func (f *fakeManager) GetObjectClassFromName(ctx context.Context, principal *models.Principal,
+	className string,
+) (*models.Class, error) {
+	class := &models.Class{
+		Class:      f.getObjectReturn.Class,
+		Vectorizer: "text2vec-contextionary",
+	}
+	return class, nil
+}
+
+func (f *fakeManager) GetObjects(ctx context.Context, principal *models.Principal, offset *int64, limit *int64, sort *string, order *string, after *string, addl additional.Properties, tenant string) ([]*models.Object, error) {
 	return f.queryResult, nil
 }
 
-func (f *fakeManager) Query(_ context.Context, _ *models.Principal, _ *uco.QueryParams) ([]*models.Object, *uco.Error) {
+func (f *fakeManager) Query(_ context.Context,
+	_ *models.Principal, _ *uco.QueryParams,
+) ([]*models.Object, *uco.Error) {
 	return f.queryResult, f.queryErr
 }
 
-func (f *fakeManager) UpdateObject(_ context.Context, _ *models.Principal, class string, _ strfmt.UUID, updates *models.Object) (*models.Object, error) {
+func (f *fakeManager) UpdateObject(_ context.Context, _ *models.Principal, _ string,
+	_ strfmt.UUID, updates *models.Object, _ *additional.ReplicationProperties,
+) (*models.Object, error) {
 	return updates, f.updateObjectErr
 }
 
-func (f *fakeManager) MergeObject(_ context.Context, _ *models.Principal, _ *models.Object) *uco.Error {
+func (f *fakeManager) MergeObject(_ context.Context, _ *models.Principal,
+	_ *models.Object, _ *additional.ReplicationProperties,
+) *uco.Error {
 	return f.patchObjectReturn
 }
 
-func (f *fakeManager) DeleteObject(_ context.Context, _ *models.Principal, class string, _ strfmt.UUID) error {
+func (f *fakeManager) DeleteObject(_ context.Context, _ *models.Principal,
+	class string, _ strfmt.UUID, _ *additional.ReplicationProperties, _ string,
+) error {
 	return f.deleteObjectReturn
 }
 
-func (f *fakeManager) AddObjectReference(context.Context, *models.Principal, *uco.AddReferenceInput) *uco.Error {
+func (f *fakeManager) AddObjectReference(context.Context, *models.Principal,
+	*uco.AddReferenceInput, *additional.ReplicationProperties, string,
+) *uco.Error {
 	return f.addRefErr
 }
 
-func (f *fakeManager) UpdateObjectReferences(context.Context, *models.Principal, *uco.PutReferenceInput) *uco.Error {
+func (f *fakeManager) UpdateObjectReferences(context.Context, *models.Principal,
+	*uco.PutReferenceInput, *additional.ReplicationProperties, string,
+) *uco.Error {
 	return f.putRefErr
 }
 
-func (f *fakeManager) DeleteObjectReference(context.Context, *models.Principal, *uco.DeleteReferenceInput) *uco.Error {
+func (f *fakeManager) DeleteObjectReference(context.Context, *models.Principal,
+	*uco.DeleteReferenceInput, *additional.ReplicationProperties, string,
+) *uco.Error {
 	return f.deleteRefErr
 }
+
+type fakeMetricRequestsTotal struct{}
+
+func (f *fakeMetricRequestsTotal) logError(className string, err error)       {}
+func (f *fakeMetricRequestsTotal) logOk(className string)                     {}
+func (f *fakeMetricRequestsTotal) logUserError(className string)              {}
+func (f *fakeMetricRequestsTotal) logServerError(className string, err error) {}

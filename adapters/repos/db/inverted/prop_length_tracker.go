@@ -4,15 +4,16 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package inverted
 
 import (
 	"encoding/binary"
+	"fmt"
 	"io"
 	"math"
 	"os"
@@ -41,6 +42,10 @@ import (
 //   - One index row is always 4+len(propName), consisting of a uint16 prop name
 //     length pointer, the name itself and an offset pointer pointing to the start
 //     (first byte) of the buckets
+//
+// The counter to the last index byte is only an uint16, so it can at maximum address 65535. This will overflow when the
+// 16th page is added (eg at page=15). To avoid a crash an error is returned in this case, but we will need to change
+// the byteformat to fix this.
 type PropertyLengthTracker struct {
 	file  *os.File
 	path  string
@@ -91,9 +96,50 @@ func NewPropertyLengthTracker(path string) (*PropertyLengthTracker, error) {
 	return t, nil
 }
 
-func (t *PropertyLengthTracker) TrackProperty(propName string,
-	value float32,
-) {
+func (t *PropertyLengthTracker) BucketCount(propName string, bucket uint16) (uint16, error) {
+	t.Lock()
+	defer t.Unlock()
+
+	page, offset, ok := t.propExists(propName)
+	if !ok {
+		return 0, fmt.Errorf("property %v does not exist in OldPropertyLengthTracker", propName)
+	}
+
+	offset = offset + page*4096
+
+	o := offset + (bucket * 4)
+	v := binary.LittleEndian.Uint32(t.pages[o : o+4])
+	count := math.Float32frombits(v)
+
+	return uint16(count), nil
+}
+
+func (t *PropertyLengthTracker) PropertyNames() []string {
+	var names []string
+	pages := len(t.pages) / int(4096)
+	for page := 0; page < pages; page++ {
+		pageStart := page * int(4096)
+
+		relativeEOI := binary.LittleEndian.Uint16(t.pages[pageStart : pageStart+2]) // t.uint16At(pageStart)
+		EOI := pageStart + int(relativeEOI)
+
+		offset := int(pageStart) + 2
+		for offset < EOI {
+			propNameLength := int(binary.LittleEndian.Uint16(t.pages[offset : offset+2])) // int(t.uint16At(offset))
+			offset += 2
+
+			propName := t.pages[offset : offset+propNameLength]
+			offset += propNameLength
+
+			offset += 2
+
+			names = append(names, string(propName))
+		}
+	}
+	return names
+}
+
+func (t *PropertyLengthTracker) TrackProperty(propName string, value float32) error {
 	t.Lock()
 	defer t.Unlock()
 
@@ -103,7 +149,11 @@ func (t *PropertyLengthTracker) TrackProperty(propName string,
 		page = p
 		relBucketOffset = o
 	} else {
-		page, relBucketOffset = t.addProperty(propName)
+		var err error
+		page, relBucketOffset, err = t.addProperty(propName)
+		if err != nil {
+			return err
+		}
 	}
 
 	bucketOffset := page*4096 + relBucketOffset + t.bucketFromValue(value)*4
@@ -113,6 +163,30 @@ func (t *PropertyLengthTracker) TrackProperty(propName string,
 	currentValue += 1
 	v = math.Float32bits(currentValue)
 	binary.LittleEndian.PutUint32(t.pages[bucketOffset:bucketOffset+4], v)
+	return nil
+}
+
+func (t *PropertyLengthTracker) UnTrackProperty(propName string, value float32) error {
+	t.Lock()
+	defer t.Unlock()
+
+	var page uint16
+	var relBucketOffset uint16
+	if p, o, ok := t.propExists(propName); ok {
+		page = p
+		relBucketOffset = o
+	} else {
+		return fmt.Errorf("property %v does not exist in OldPropertyLengthTracker", propName)
+	}
+
+	bucketOffset := page*4096 + relBucketOffset + t.bucketFromValue(value)*4
+
+	v := binary.LittleEndian.Uint32(t.pages[bucketOffset : bucketOffset+4])
+	currentValue := math.Float32frombits(v)
+	currentValue -= 1
+	v = math.Float32bits(currentValue)
+	binary.LittleEndian.PutUint32(t.pages[bucketOffset:bucketOffset+4], v)
+	return nil
 }
 
 // propExists returns page number, relative offset on page, and a bool whether
@@ -147,7 +221,7 @@ func (t *PropertyLengthTracker) propExists(needle string) (uint16, uint16, bool)
 	return 0, 0, false
 }
 
-func (t *PropertyLengthTracker) addProperty(propName string) (uint16, uint16) {
+func (t *PropertyLengthTracker) addProperty(propName string) (uint16, uint16, error) {
 	page := uint16(0)
 
 	for {
@@ -167,6 +241,11 @@ func (t *PropertyLengthTracker) addProperty(propName string) (uint16, uint16) {
 
 		if !t.canPageFit(propNameBytes, offset, lastBucketOffset) {
 			page++
+			// overflow of uint16 variable that tracks the size of the tracker
+			if page > 15 {
+				return 0, 0, fmt.Errorf("could not add property %v, to PropertyLengthTracker, because the total"+
+					"length of all properties is too long", propName)
+			}
 			continue
 		}
 
@@ -183,7 +262,7 @@ func (t *PropertyLengthTracker) addProperty(propName string) (uint16, uint16) {
 		// update end of index offset for page, since the prop name index has
 		// now grown
 		binary.LittleEndian.PutUint16(t.pages[pageStart:pageStart+2], offset-pageStart)
-		return page, newBucketOffset
+		return page, newBucketOffset, nil
 	}
 }
 
@@ -244,13 +323,47 @@ func (t *PropertyLengthTracker) PropertyMean(propName string) (float32, error) {
 		bucket++
 	}
 
+	if totalCount == 0 {
+		return 0, nil
+	}
+
 	return sum / totalCount, nil
+}
+
+func (t *PropertyLengthTracker) PropertyTally(propName string) (int, int, float32, error) {
+	t.Lock()
+	defer t.Unlock()
+
+	page, offset, ok := t.propExists(propName)
+	if !ok {
+		return 0, 0, 0, nil
+	}
+
+	sum := float32(0)
+	totalCount := float32(0)
+	bucket := uint16(0)
+
+	offset = offset + page*4096
+	for o := offset; o < offset+256; o += 4 {
+		v := binary.LittleEndian.Uint32(t.pages[o : o+4])
+		count := math.Float32frombits(v)
+		sum += float32(t.valueFromBucket(bucket)) * count
+		totalCount += count
+
+		bucket++
+	}
+
+	if totalCount == 0 {
+		return 0, 0, 0, nil
+	}
+
+	return int(sum), int(totalCount), sum / totalCount, nil
 }
 
 func (t *PropertyLengthTracker) createPageIfNotExists(page uint16) {
 	if uint16(len(t.pages))/4096-1 < page {
 		// we need to grow the page buffer
-		newPages := make([]byte, page*4096+4096)
+		newPages := make([]byte, uint64(page)*4096+4096)
 		copy(newPages[:len(t.pages)], t.pages)
 
 		// the new page must have the correct offset initialized

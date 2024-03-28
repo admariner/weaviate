@@ -4,16 +4,16 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 // This file contains the Client(t *testing.T) function, that can be used to construct a client that talks to
 // the Weaviate server that is configured using command line arguments (see init.go).
 //
 // We pass in the test (*testing.T), to be able to log HTTP traffic to that specific test case.
-// This allows us to get detailed logs of the performaned HTTP requests if a acceptance test fails.
+// This allows us to get detailed logs of the performed HTTP requests if a acceptance test fails.
 
 // The CreateAuth returns a function that attaches the key and token headers to each HTTP call.
 
@@ -35,8 +35,8 @@ import (
 
 	httptransport "github.com/go-openapi/runtime/client"
 	"github.com/go-openapi/strfmt"
-	"github.com/semi-technologies/weaviate/client/batch"
-	operations_apiclient "github.com/semi-technologies/weaviate/client/operations"
+	"github.com/weaviate/weaviate/client/batch"
+	operations_apiclient "github.com/weaviate/weaviate/client/operations"
 )
 
 // Create a client that logs with t.Logf, if a *testing.T is provided.

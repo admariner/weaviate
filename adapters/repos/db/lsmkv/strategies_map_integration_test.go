@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 //go:build integrationTest
@@ -17,21 +17,47 @@ package lsmkv
 import (
 	"context"
 	"fmt"
-	"math/rand"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/entities/cyclemanager"
 )
 
-func TestMapCollectionStrategy_InsertAndAppend(t *testing.T) {
-	rand.Seed(time.Now().UnixNano())
+func TestMapCollectionStrategy(t *testing.T) {
+	ctx := testCtx()
+	tests := bucketIntegrationTests{
+		{
+			name: "mapInsertAndAppend",
+			f:    mapInsertAndAppend,
+			opts: []BucketOption{
+				WithStrategy(StrategyMapCollection),
+			},
+		},
+		{
+			name: "mapInsertAndDelete",
+			f:    mapInsertAndDelete,
+			opts: []BucketOption{
+				WithStrategy(StrategyMapCollection),
+			},
+		},
+		{
+			name: "mapCursors",
+			f:    mapCursors,
+			opts: []BucketOption{
+				WithStrategy(StrategyMapCollection),
+			},
+		},
+	}
+	tests.run(ctx, t)
+}
+
+func mapInsertAndAppend(ctx context.Context, t *testing.T, opts []BucketOption) {
 	dirName := t.TempDir()
 
 	t.Run("memtable-only", func(t *testing.T) {
-		b, err := NewBucket(testCtx(), dirName, "", nullLogger(), nil,
-			WithStrategy(StrategyMapCollection))
+		b, err := NewBucketCreator().NewBucket(ctx, dirName, "", nullLogger(), nil,
+			cyclemanager.NewCallbackGroupNoop(), cyclemanager.NewCallbackGroupNoop(), opts...)
 		require.Nil(t, err)
 
 		// so big it effectively never triggers as part of this test
@@ -120,8 +146,8 @@ func TestMapCollectionStrategy_InsertAndAppend(t *testing.T) {
 	})
 
 	t.Run("with a single flush between updates", func(t *testing.T) {
-		b, err := NewBucket(testCtx(), dirName, "", nullLogger(), nil,
-			WithStrategy(StrategyMapCollection))
+		b, err := NewBucketCreator().NewBucket(ctx, dirName, "", nullLogger(), nil,
+			cyclemanager.NewCallbackGroupNoop(), cyclemanager.NewCallbackGroupNoop(), opts...)
 		require.Nil(t, err)
 
 		// so big it effectively never triggers as part of this test
@@ -213,9 +239,9 @@ func TestMapCollectionStrategy_InsertAndAppend(t *testing.T) {
 		})
 	})
 
-	t.Run("with flushes after initial and upate", func(t *testing.T) {
-		b, err := NewBucket(testCtx(), dirName, "", nullLogger(), nil,
-			WithStrategy(StrategyMapCollection))
+	t.Run("with flushes after initial and update", func(t *testing.T) {
+		b, err := NewBucketCreator().NewBucket(ctx, dirName, "", nullLogger(), nil,
+			cyclemanager.NewCallbackGroupNoop(), cyclemanager.NewCallbackGroupNoop(), opts...)
 		require.Nil(t, err)
 
 		// so big it effectively never triggers as part of this test
@@ -311,8 +337,8 @@ func TestMapCollectionStrategy_InsertAndAppend(t *testing.T) {
 	})
 
 	t.Run("update in memtable, then do an orderly shutdown, and re-init", func(t *testing.T) {
-		b, err := NewBucket(testCtx(), dirName, "", nullLogger(), nil,
-			WithStrategy(StrategyMapCollection))
+		b, err := NewBucketCreator().NewBucket(ctx, dirName, "", nullLogger(), nil,
+			cyclemanager.NewCallbackGroupNoop(), cyclemanager.NewCallbackGroupNoop(), opts...)
 		require.Nil(t, err)
 
 		// so big it effectively never triggers as part of this test
@@ -373,8 +399,8 @@ func TestMapCollectionStrategy_InsertAndAppend(t *testing.T) {
 		})
 
 		t.Run("init another bucket on the same files", func(t *testing.T) {
-			b2, err := NewBucket(testCtx(), dirName, "", nullLogger(), nil,
-				WithStrategy(StrategyMapCollection))
+			b2, err := NewBucketCreator().NewBucket(ctx, dirName, "", nullLogger(), nil,
+				cyclemanager.NewCallbackGroupNoop(), cyclemanager.NewCallbackGroupNoop(), opts...)
 			require.Nil(t, err)
 
 			row1Updated := []MapPair{
@@ -411,13 +437,12 @@ func TestMapCollectionStrategy_InsertAndAppend(t *testing.T) {
 	})
 }
 
-func TestMapCollectionStrategy_InsertAndDelete(t *testing.T) {
-	rand.Seed(time.Now().UnixNano())
+func mapInsertAndDelete(ctx context.Context, t *testing.T, opts []BucketOption) {
 	dirName := t.TempDir()
 
 	t.Run("memtable-only", func(t *testing.T) {
-		b, err := NewBucket(testCtx(), dirName, "", nullLogger(), nil,
-			WithStrategy(StrategyMapCollection))
+		b, err := NewBucketCreator().NewBucket(ctx, dirName, "", nullLogger(), nil,
+			cyclemanager.NewCallbackGroupNoop(), cyclemanager.NewCallbackGroupNoop(), opts...)
 		require.Nil(t, err)
 
 		// so big it effectively never triggers as part of this test
@@ -474,6 +499,7 @@ func TestMapCollectionStrategy_InsertAndDelete(t *testing.T) {
 				Key:   []byte("row2-key2"),
 				Value: []byte("row2-key2-reinserted"),
 			})
+			require.Nil(t, err)
 		})
 
 		t.Run("validate the results", func(t *testing.T) {
@@ -509,8 +535,8 @@ func TestMapCollectionStrategy_InsertAndDelete(t *testing.T) {
 	})
 
 	t.Run("with flushes between updates", func(t *testing.T) {
-		b, err := NewBucket(testCtx(), dirName, "", nullLogger(), nil,
-			WithStrategy(StrategyMapCollection))
+		b, err := NewBucketCreator().NewBucket(ctx, dirName, "", nullLogger(), nil,
+			cyclemanager.NewCallbackGroupNoop(), cyclemanager.NewCallbackGroupNoop(), opts...)
 		require.Nil(t, err)
 
 		// so big it effectively never triggers as part of this test
@@ -571,6 +597,7 @@ func TestMapCollectionStrategy_InsertAndDelete(t *testing.T) {
 				Key:   []byte("row2-key2"),
 				Value: []byte("row2-key2-reinserted"),
 			})
+			require.Nil(t, err)
 		})
 
 		t.Run("flush to disk", func(t *testing.T) {
@@ -610,8 +637,8 @@ func TestMapCollectionStrategy_InsertAndDelete(t *testing.T) {
 	})
 
 	t.Run("with memtable only, then an orderly shutdown and restart", func(t *testing.T) {
-		b, err := NewBucket(testCtx(), dirName, "", nullLogger(), nil,
-			WithStrategy(StrategyMapCollection))
+		b, err := NewBucketCreator().NewBucket(ctx, dirName, "", nullLogger(), nil,
+			cyclemanager.NewCallbackGroupNoop(), cyclemanager.NewCallbackGroupNoop(), opts...)
 		require.Nil(t, err)
 
 		// so big it effectively never triggers as part of this test
@@ -668,6 +695,7 @@ func TestMapCollectionStrategy_InsertAndDelete(t *testing.T) {
 				Key:   []byte("row2-key2"),
 				Value: []byte("row2-key2-reinserted"),
 			})
+			require.Nil(t, err)
 		})
 
 		t.Run("orderly shutdown", func(t *testing.T) {
@@ -675,8 +703,8 @@ func TestMapCollectionStrategy_InsertAndDelete(t *testing.T) {
 		})
 
 		t.Run("init another bucket on the same files", func(t *testing.T) {
-			b2, err := NewBucket(testCtx(), dirName, "", nullLogger(), nil,
-				WithStrategy(StrategyMapCollection))
+			b2, err := NewBucketCreator().NewBucket(ctx, dirName, "", nullLogger(), nil,
+				cyclemanager.NewCallbackGroupNoop(), cyclemanager.NewCallbackGroupNoop(), opts...)
 			require.Nil(t, err)
 
 			row1Updated := []MapPair{
@@ -711,13 +739,13 @@ func TestMapCollectionStrategy_InsertAndDelete(t *testing.T) {
 	})
 }
 
-func TestMapCollectionStrategy_Cursors(t *testing.T) {
+func mapCursors(ctx context.Context, t *testing.T, opts []BucketOption) {
 	t.Run("memtable-only", func(t *testing.T) {
-		rand.Seed(time.Now().UnixNano())
+		r := getRandomSeed()
 		dirName := t.TempDir()
 
-		b, err := NewBucket(testCtx(), dirName, "", nullLogger(), nil,
-			WithStrategy(StrategyMapCollection))
+		b, err := NewBucketCreator().NewBucket(ctx, dirName, "", nullLogger(), nil,
+			cyclemanager.NewCallbackGroupNoop(), cyclemanager.NewCallbackGroupNoop(), opts...)
 		require.Nil(t, err)
 
 		// so big it effectively never triggers as part of this test
@@ -741,8 +769,7 @@ func TestMapCollectionStrategy_Cursors(t *testing.T) {
 			}
 
 			// shuffle to make sure the BST isn't accidentally in order
-			rand.Seed(time.Now().UnixNano())
-			rand.Shuffle(len(keys), func(i, j int) {
+			r.Shuffle(len(keys), func(i, j int) {
 				keys[i], keys[j] = keys[j], keys[i]
 				values[i], values[j] = values[j], values[i]
 			})
@@ -850,7 +877,7 @@ func TestMapCollectionStrategy_Cursors(t *testing.T) {
 			row := []byte("row-002")
 			pair := MapPair{
 				Key:   []byte("row-002-key-1"),           // existing key
-				Value: []byte("row-002-value-1-updated"), // upadated value
+				Value: []byte("row-002-value-1-updated"), // updated value
 			}
 
 			require.Nil(t, b.MapSet(row, pair))
@@ -900,11 +927,11 @@ func TestMapCollectionStrategy_Cursors(t *testing.T) {
 	})
 
 	t.Run("with flushes", func(t *testing.T) {
-		rand.Seed(time.Now().UnixNano())
+		r := getRandomSeed()
 		dirName := t.TempDir()
 
-		b, err := NewBucket(testCtx(), dirName, "", nullLogger(), nil,
-			WithStrategy(StrategyMapCollection))
+		b, err := NewBucketCreator().NewBucket(ctx, dirName, "", nullLogger(), nil,
+			cyclemanager.NewCallbackGroupNoop(), cyclemanager.NewCallbackGroupNoop(), opts...)
 		require.Nil(t, err)
 
 		// so big it effectively never triggers as part of this test
@@ -934,8 +961,7 @@ func TestMapCollectionStrategy_Cursors(t *testing.T) {
 			}
 
 			// shuffle to make sure the BST isn't accidentally in order
-			rand.Seed(time.Now().UnixNano())
-			rand.Shuffle(len(keys), func(i, j int) {
+			r.Shuffle(len(keys), func(i, j int) {
 				keys[i], keys[j] = keys[j], keys[i]
 				values[i], values[j] = values[j], values[i]
 			})
@@ -977,8 +1003,7 @@ func TestMapCollectionStrategy_Cursors(t *testing.T) {
 			}
 
 			// shuffle to make sure the BST isn't accidentally in order
-			rand.Seed(time.Now().UnixNano())
-			rand.Shuffle(len(keys), func(i, j int) {
+			r.Shuffle(len(keys), func(i, j int) {
 				keys[i], keys[j] = keys[j], keys[i]
 				values[i], values[j] = values[j], values[i]
 			})
@@ -1020,8 +1045,7 @@ func TestMapCollectionStrategy_Cursors(t *testing.T) {
 			}
 
 			// shuffle to make sure the BST isn't accidentally in order
-			rand.Seed(time.Now().UnixNano())
-			rand.Shuffle(len(keys), func(i, j int) {
+			r.Shuffle(len(keys), func(i, j int) {
 				keys[i], keys[j] = keys[j], keys[i]
 				values[i], values[j] = values[j], values[i]
 			})
@@ -1131,7 +1155,7 @@ func TestMapCollectionStrategy_Cursors(t *testing.T) {
 			row := []byte("row-002")
 			pair := MapPair{
 				Key:   []byte("row-002-key-1"),           // existing key
-				Value: []byte("row-002-value-1-updated"), // upadated value
+				Value: []byte("row-002-value-1-updated"), // updated value
 			}
 
 			require.Nil(t, b.MapSet(row, pair))

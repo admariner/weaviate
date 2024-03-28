@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package traverser
@@ -15,14 +15,15 @@ import (
 	"context"
 
 	"github.com/go-openapi/strfmt"
-	"github.com/semi-technologies/weaviate/entities/additional"
-	"github.com/semi-technologies/weaviate/entities/aggregation"
-	"github.com/semi-technologies/weaviate/entities/filters"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/search"
-	"github.com/semi-technologies/weaviate/usecases/config"
-	"github.com/semi-technologies/weaviate/usecases/schema"
 	"github.com/sirupsen/logrus"
+	"github.com/weaviate/weaviate/entities/additional"
+	"github.com/weaviate/weaviate/entities/aggregation"
+	"github.com/weaviate/weaviate/entities/dto"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/search"
+	"github.com/weaviate/weaviate/usecases/config"
+	"github.com/weaviate/weaviate/usecases/ratelimiter"
+	"github.com/weaviate/weaviate/usecases/schema"
 )
 
 type locks interface {
@@ -36,30 +37,30 @@ type authorizer interface {
 
 // Traverser can be used to dynamically traverse the knowledge graph
 type Traverser struct {
-	config           *config.WeaviateConfig
-	locks            locks
-	logger           logrus.FieldLogger
-	authorizer       authorizer
-	vectorSearcher   VectorSearcher
-	explorer         explorer
-	schemaGetter     schema.SchemaGetter
-	nearParamsVector *nearParamsVector
-	metrics          *Metrics
+	config                  *config.WeaviateConfig
+	locks                   locks
+	logger                  logrus.FieldLogger
+	authorizer              authorizer
+	vectorSearcher          VectorSearcher
+	explorer                explorer
+	schemaGetter            schema.SchemaGetter
+	nearParamsVector        *nearParamsVector
+	targetVectorParamHelper *TargetVectorParamHelper
+	metrics                 *Metrics
+	ratelimiter             *ratelimiter.Limiter
 }
 
 type VectorSearcher interface {
-	VectorSearch(ctx context.Context, vector []float32,
-		offset, limit int, filters *filters.LocalFilter) ([]search.Result, error)
 	Aggregate(ctx context.Context, params aggregation.Params) (*aggregation.Result, error)
 	Object(ctx context.Context, className string, id strfmt.UUID,
 		props search.SelectProperties, additional additional.Properties,
-		properties *additional.ReplicationProperties) (*search.Result, error)
-	ObjectsByID(ctx context.Context, id strfmt.UUID,
-		props search.SelectProperties, additional additional.Properties) (search.Results, error)
+		properties *additional.ReplicationProperties, tenant string) (*search.Result, error)
+	ObjectsByID(ctx context.Context, id strfmt.UUID, props search.SelectProperties,
+		additional additional.Properties, tenant string) (search.Results, error)
 }
 
 type explorer interface {
-	GetClass(ctx context.Context, params GetParams) ([]interface{}, error)
+	GetClass(ctx context.Context, params dto.GetParams) ([]interface{}, error)
 	CrossClassVectorSearch(ctx context.Context, params ExploreParams) ([]search.Result, error)
 }
 
@@ -69,25 +70,27 @@ func NewTraverser(config *config.WeaviateConfig, locks locks,
 	vectorSearcher VectorSearcher,
 	explorer explorer, schemaGetter schema.SchemaGetter,
 	modulesProvider ModulesProvider,
-	metrics *Metrics,
+	metrics *Metrics, maxGetRequests int,
 ) *Traverser {
 	return &Traverser{
-		config:           config,
-		locks:            locks,
-		logger:           logger,
-		authorizer:       authorizer,
-		vectorSearcher:   vectorSearcher,
-		explorer:         explorer,
-		schemaGetter:     schemaGetter,
-		nearParamsVector: newNearParamsVector(modulesProvider, vectorSearcher),
-		metrics:          metrics,
+		config:                  config,
+		locks:                   locks,
+		logger:                  logger,
+		authorizer:              authorizer,
+		vectorSearcher:          vectorSearcher,
+		explorer:                explorer,
+		schemaGetter:            schemaGetter,
+		nearParamsVector:        newNearParamsVector(modulesProvider, vectorSearcher),
+		targetVectorParamHelper: NewTargetParamHelper(),
+		metrics:                 metrics,
+		ratelimiter:             ratelimiter.New(maxGetRequests),
 	}
 }
 
 // TraverserRepo describes the dependencies of the Traverser UC to the
 // connected database
 type TraverserRepo interface {
-	GetClass(context.Context, *GetParams) (interface{}, error)
+	GetClass(context.Context, *dto.GetParams) (interface{}, error)
 	Aggregate(context.Context, *aggregation.Params) (interface{}, error)
 }
 

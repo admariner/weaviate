@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package aggregate
@@ -15,8 +15,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/semi-technologies/weaviate/entities/models"
 	"github.com/tailor-inc/graphql"
+	"github.com/weaviate/weaviate/entities/models"
 )
 
 func hybridArgument(classObject *graphql.Object,
@@ -38,7 +38,7 @@ func hybridOperands(classObject *graphql.Object,
 	class *models.Class, modulesProvider ModulesProvider,
 ) graphql.InputObjectConfigFieldMap {
 	ss := graphql.NewInputObject(graphql.InputObjectConfig{
-		Name:   class.Class + "SubSearch",
+		Name:   class.Class + "HybridSubSearch",
 		Fields: hybridSubSearch(classObject, class, modulesProvider),
 	})
 	fieldMap := graphql.InputObjectConfigFieldMap{
@@ -53,6 +53,14 @@ func hybridOperands(classObject *graphql.Object,
 		"vector": &graphql.InputObjectFieldConfig{
 			Description: "Vector search",
 			Type:        graphql.NewList(graphql.Float),
+		},
+		"targetVectors": &graphql.InputObjectFieldConfig{
+			Description: "Target vectors",
+			Type:        graphql.NewList(graphql.String),
+		},
+		"properties": &graphql.InputObjectFieldConfig{
+			Description: "Target vectors",
+			Type:        graphql.NewList(graphql.String),
 		},
 	}
 
@@ -80,7 +88,7 @@ func hybridSubSearch(classObject *graphql.Object,
 			Description: "Sparse Search",
 			Type: graphql.NewInputObject(
 				graphql.InputObjectConfig{
-					Name:        fmt.Sprintf("%sBM25InpObj", prefixName),
+					Name:        fmt.Sprintf("%sHybridAggregateBM25InpObj", prefixName),
 					Fields:      bm25Fields(prefixName),
 					Description: "BM25f search",
 				},

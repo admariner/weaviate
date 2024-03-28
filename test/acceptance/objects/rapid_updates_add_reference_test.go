@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package test
@@ -18,15 +18,16 @@ import (
 	"time"
 
 	"github.com/go-openapi/strfmt"
-	"github.com/semi-technologies/weaviate/client/objects"
-	"github.com/semi-technologies/weaviate/client/schema"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/test/helper"
 	"github.com/stretchr/testify/assert"
+	"github.com/weaviate/weaviate/client/objects"
+	clschema "github.com/weaviate/weaviate/client/schema"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/test/helper"
 )
 
-// This aimes to prevent a regression on
-// https://github.com/semi-technologies/weaviate/issues/1016
+// This aims to prevent a regression on
+// https://github.com/weaviate/weaviate/issues/1016
 // The issue was that rapid POST .../references/... request in succession would
 // overwrite each other due to the eventual consistency nature of the used
 // backend (esvector). This bug is considered fix if n items can be rapidly
@@ -53,13 +54,14 @@ func Test_RapidlyAddingReferences(t *testing.T) {
 
 	t.Run("adding the required schema", func(t *testing.T) {
 		t.Run("target class", func(t *testing.T) {
-			params := schema.NewSchemaObjectsCreateParams().WithObjectClass(
+			params := clschema.NewSchemaObjectsCreateParams().WithObjectClass(
 				&models.Class{
 					Class: targetClass,
 					Properties: []*models.Property{
 						{
-							DataType: []string{"string"},
-							Name:     "name",
+							DataType:     schema.DataTypeText.PropString(),
+							Tokenization: models.PropertyTokenizationWhitespace,
+							Name:         "name",
 						},
 					},
 				},
@@ -69,7 +71,7 @@ func Test_RapidlyAddingReferences(t *testing.T) {
 		})
 
 		t.Run("source class", func(t *testing.T) {
-			params := schema.NewSchemaObjectsCreateParams().WithObjectClass(
+			params := clschema.NewSchemaObjectsCreateParams().WithObjectClass(
 				&models.Class{
 					Class: sourceClass,
 					Properties: []*models.Property{
@@ -78,8 +80,9 @@ func Test_RapidlyAddingReferences(t *testing.T) {
 							Name:     "toTarget",
 						},
 						{
-							DataType: []string{"string"},
-							Name:     "name",
+							DataType:     schema.DataTypeText.PropString(),
+							Tokenization: models.PropertyTokenizationWhitespace,
+							Name:         "name",
 						},
 					},
 				},
@@ -91,14 +94,14 @@ func Test_RapidlyAddingReferences(t *testing.T) {
 
 	t.Run("adding all objects (without referencing)", func(t *testing.T) {
 		t.Run("source object", func(t *testing.T) {
-			assertCreateObjectWithID(t, sourceClass, sourceID, map[string]interface{}{
+			assertCreateObjectWithID(t, sourceClass, "", sourceID, map[string]interface{}{
 				"name": "Source Object",
 			})
 		})
 
 		t.Run("target objects", func(t *testing.T) {
 			for i, id := range targetIDs {
-				assertCreateObjectWithID(t, targetClass, id, map[string]interface{}{
+				assertCreateObjectWithID(t, targetClass, "", id, map[string]interface{}{
 					"name": fmt.Sprintf("target object %d", i),
 				})
 			}
@@ -144,7 +147,7 @@ func Test_RapidlyAddingReferences(t *testing.T) {
 
 	// cleanup
 	helper.Client(t).Schema.SchemaObjectsDelete(
-		schema.NewSchemaObjectsDeleteParams().WithClassName(sourceClass), nil)
+		clschema.NewSchemaObjectsDeleteParams().WithClassName(sourceClass), nil)
 	helper.Client(t).Schema.SchemaObjectsDelete(
-		schema.NewSchemaObjectsDeleteParams().WithClassName(targetClass), nil)
+		clschema.NewSchemaObjectsDeleteParams().WithClassName(targetClass), nil)
 }

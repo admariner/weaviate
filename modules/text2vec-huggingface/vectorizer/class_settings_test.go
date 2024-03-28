@@ -4,18 +4,19 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package vectorizer
 
 import (
+	"errors"
 	"testing"
 
-	"github.com/semi-technologies/weaviate/entities/moduletools"
 	"github.com/stretchr/testify/assert"
+	"github.com/weaviate/weaviate/entities/moduletools"
 )
 
 func Test_classSettings_getPassageModel(t *testing.T) {
@@ -90,10 +91,11 @@ func Test_classSettings_getPassageModel(t *testing.T) {
 			wantEndpointURL:  "http://endpoint.cloud",
 		},
 		{
-			name: "Hugging Face Inference API - endpointUrl",
+			name: "Hugging Face Inference API - wrong properties",
 			cfg: fakeClassConfig{
 				classConfig: map[string]interface{}{
 					"endpointUrl": "http://endpoint.cloud",
+					"properties":  "wrong-properties",
 				},
 			},
 			wantPassageModel: "",
@@ -102,6 +104,7 @@ func Test_classSettings_getPassageModel(t *testing.T) {
 			wantUseGPU:       false,
 			wantUseCache:     true,
 			wantEndpointURL:  "http://endpoint.cloud",
+			wantError:        errors.New("properties field needs to be of array type, got: string"),
 		},
 	}
 	for _, tt := range tests {
@@ -116,20 +119,4 @@ func Test_classSettings_getPassageModel(t *testing.T) {
 			assert.Equal(t, tt.wantError, ic.validateClassSettings())
 		})
 	}
-}
-
-type fakeClassConfig struct {
-	classConfig map[string]interface{}
-}
-
-func (f fakeClassConfig) Class() map[string]interface{} {
-	return f.classConfig
-}
-
-func (f fakeClassConfig) ClassByModuleName(moduleName string) map[string]interface{} {
-	return f.classConfig
-}
-
-func (f fakeClassConfig) Property(propName string) map[string]interface{} {
-	return nil
 }

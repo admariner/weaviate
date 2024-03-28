@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package traverser
@@ -65,7 +65,7 @@ func Test__SchemaSearch_Validation(t *testing.T) {
 			expectedError: errors.New("invalid Certainty: must be between 0 and 1, but got '4.000000'"),
 		},
 		{
-			name: "inavlid search type",
+			name: "invalid search type",
 			searchParams: SearchParams{
 				SearchType: SearchType("invalid"),
 				Name:       "bestName",

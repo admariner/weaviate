@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package objects
@@ -15,12 +15,13 @@ import (
 	"context"
 	"testing"
 
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	"github.com/semi-technologies/weaviate/entities/vectorindex/hnsw"
-	"github.com/semi-technologies/weaviate/usecases/config"
 	"github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/assert"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/vectorindex/hnsw"
+	"github.com/weaviate/weaviate/entities/verbosity"
+	"github.com/weaviate/weaviate/usecases/config"
 )
 
 func Test_BatchDelete_RequestValidation(t *testing.T) {
@@ -36,8 +37,9 @@ func Test_BatchDelete_RequestValidation(t *testing.T) {
 					Class: "Foo",
 					Properties: []*models.Property{
 						{
-							Name:     "name",
-							DataType: []string{"string"},
+							Name:         "name",
+							DataType:     schema.DataTypeText.PropString(),
+							Tokenization: models.PropertyTokenizationWhitespace,
 						},
 					},
 					VectorIndexConfig: hnsw.UserConfig{},
@@ -82,13 +84,13 @@ func Test_BatchDelete_RequestValidation(t *testing.T) {
 			{
 				input: &models.BatchDelete{
 					DryRun: ptBool(false),
-					Output: ptString(OutputVerbose),
+					Output: ptString(verbosity.OutputVerbose),
 					Match: &models.BatchDeleteMatch{
 						Class: "SomeClass",
 						Where: &models.WhereFilter{
-							Path:        []string{"some", "path"},
-							Operator:    "Equal",
-							ValueString: ptString("value"),
+							Path:      []string{"some", "path"},
+							Operator:  "Equal",
+							ValueText: ptString("value"),
 						},
 					},
 				},
@@ -97,13 +99,13 @@ func Test_BatchDelete_RequestValidation(t *testing.T) {
 			{
 				input: &models.BatchDelete{
 					DryRun: ptBool(false),
-					Output: ptString(OutputVerbose),
+					Output: ptString(verbosity.OutputVerbose),
 					Match: &models.BatchDeleteMatch{
 						Class: "Foo",
 						Where: &models.WhereFilter{
-							Path:        []string{"some"},
-							Operator:    "Equal",
-							ValueString: ptString("value"),
+							Path:      []string{"some"},
+							Operator:  "Equal",
+							ValueText: ptString("value"),
 						},
 					},
 				},
@@ -113,14 +115,14 @@ func Test_BatchDelete_RequestValidation(t *testing.T) {
 			{
 				input: &models.BatchDelete{
 					DryRun: ptBool(false),
-					Output: ptString(OutputVerbose),
+					Output: ptString(verbosity.OutputVerbose),
 				},
 				expectedError: "validate: empty match clause",
 			},
 			{
 				input: &models.BatchDelete{
 					DryRun: ptBool(false),
-					Output: ptString(OutputVerbose),
+					Output: ptString(verbosity.OutputVerbose),
 					Match: &models.BatchDeleteMatch{
 						Class: "",
 					},
@@ -130,7 +132,7 @@ func Test_BatchDelete_RequestValidation(t *testing.T) {
 			{
 				input: &models.BatchDelete{
 					DryRun: ptBool(false),
-					Output: ptString(OutputVerbose),
+					Output: ptString(verbosity.OutputVerbose),
 					Match: &models.BatchDeleteMatch{
 						Class: "Foo",
 					},
@@ -140,13 +142,13 @@ func Test_BatchDelete_RequestValidation(t *testing.T) {
 			{
 				input: &models.BatchDelete{
 					DryRun: ptBool(false),
-					Output: ptString(OutputVerbose),
+					Output: ptString(verbosity.OutputVerbose),
 					Match: &models.BatchDeleteMatch{
 						Class: "Foo",
 						Where: &models.WhereFilter{
-							Path:        []string{},
-							Operator:    "Equal",
-							ValueString: ptString("name"),
+							Path:      []string{},
+							Operator:  "Equal",
+							ValueText: ptString("name"),
 						},
 					},
 				},
@@ -159,9 +161,9 @@ func Test_BatchDelete_RequestValidation(t *testing.T) {
 					Match: &models.BatchDeleteMatch{
 						Class: "Foo",
 						Where: &models.WhereFilter{
-							Path:        []string{"name"},
-							Operator:    "Equal",
-							ValueString: ptString("value"),
+							Path:      []string{"name"},
+							Operator:  "Equal",
+							ValueText: ptString("value"),
 						},
 					},
 				},
@@ -170,8 +172,7 @@ func Test_BatchDelete_RequestValidation(t *testing.T) {
 		}
 
 		for _, test := range tests {
-			_, err := manager.DeleteObjects(ctx, nil, test.input.Match,
-				test.input.DryRun, test.input.Output)
+			_, err := manager.DeleteObjects(ctx, nil, test.input.Match, test.input.DryRun, test.input.Output, nil, "")
 			assert.Equal(t, test.expectedError, err.Error())
 		}
 	})

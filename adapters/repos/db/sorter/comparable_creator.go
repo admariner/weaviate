@@ -4,14 +4,14 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package sorter
 
-import "github.com/semi-technologies/weaviate/entities/storobj"
+import "github.com/weaviate/weaviate/entities/storobj"
 
 type comparable struct {
 	docID uint64
@@ -52,7 +52,7 @@ func (c *comparableCreator) createFromObjectWithPayload(object *storobj.Object, 
 	for level, propName := range c.propNames {
 		values[level] = c.extractor.extractFromObject(object, propName)
 	}
-	return &comparable{object.DocID(), values, payload}
+	return &comparable{object.DocID, values, payload}
 }
 
 func (c *comparableCreator) extractDocIDs(comparables []*comparable) []uint64 {

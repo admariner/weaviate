@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package hnsw
@@ -15,12 +15,12 @@ import (
 	"context"
 
 	"github.com/pkg/errors"
-	"github.com/semi-technologies/weaviate/adapters/repos/db/helpers"
-	"github.com/semi-technologies/weaviate/adapters/repos/db/vector/hnsw/priorityqueue"
-	"github.com/semi-technologies/weaviate/entities/storobj"
+	"github.com/weaviate/weaviate/adapters/repos/db/helpers"
+	"github.com/weaviate/weaviate/adapters/repos/db/priorityqueue"
+	"github.com/weaviate/weaviate/entities/storobj"
 )
 
-func (h *hnsw) selectNeighborsHeuristic(input *priorityqueue.Queue,
+func (h *hnsw) selectNeighborsHeuristic(input *priorityqueue.Queue[any],
 	max int, denyList helpers.AllowList,
 ) error {
 	if input.Len() < max {
@@ -29,55 +29,94 @@ func (h *hnsw) selectNeighborsHeuristic(input *priorityqueue.Queue,
 
 	// TODO, if this solution stays we might need something with fewer allocs
 	ids := make([]uint64, input.Len())
-	var vecs [][]float32
 
 	closestFirst := h.pools.pqHeuristic.GetMin(input.Len())
 	i := uint64(0)
 	for input.Len() > 0 {
 		elem := input.Pop()
-		closestFirst.Insert(elem.ID, i, elem.Dist)
+		closestFirst.InsertWithValue(elem.ID, elem.Dist, i)
 		ids[i] = elem.ID
 		i++
 	}
 
-	vecs, errs := h.multiVectorForID(context.TODO(), ids)
+	var returnList []priorityqueue.Item[uint64]
 
-	returnList := h.pools.pqItemSlice.Get().([]priorityqueue.ItemWithIndex)
-
-	for closestFirst.Len() > 0 && len(returnList) < max {
-		curr := closestFirst.Pop()
-		if denyList != nil && denyList.Contains(curr.ID) {
-			continue
+	if h.compressed.Load() {
+		bag := h.compressor.NewBag()
+		for _, id := range ids {
+			err := bag.Load(context.Background(), id)
+			if err != nil {
+				return err
+			}
 		}
-		distToQuery := curr.Dist
 
-		currVec := vecs[curr.Index]
-		if err := errs[curr.Index]; err != nil {
-			var e storobj.ErrNotFound
-			if errors.As(err, &e) {
-				h.handleDeletedNode(e.DocID)
+		returnList = h.pools.pqItemSlice.Get().([]priorityqueue.Item[uint64])
+		for closestFirst.Len() > 0 && len(returnList) < max {
+			curr := closestFirst.Pop()
+			if denyList != nil && denyList.Contains(curr.ID) {
 				continue
-			} else {
-				// not a typed error, we can recover from, return with err
-				return errors.Wrapf(err,
-					"unrecoverable error for docID %d", curr.ID)
 			}
-		}
-		good := true
-		for _, item := range returnList {
-			peerDist, _, _ := h.distancerProvider.SingleDist(currVec,
-				vecs[item.Index])
+			distToQuery := curr.Dist
 
-			if peerDist < distToQuery {
-				good = false
-				break
+			good := true
+			for _, item := range returnList {
+				peerDist, err := bag.Distance(curr.ID, item.ID)
+				if err != nil {
+					return err
+				}
+
+				if peerDist < distToQuery {
+					good = false
+					break
+				}
 			}
-		}
 
-		if good {
-			returnList = append(returnList, curr)
-		}
+			if good {
+				returnList = append(returnList, curr)
+			}
 
+		}
+	} else {
+
+		vecs, errs := h.multiVectorForID(context.TODO(), ids)
+
+		returnList = h.pools.pqItemSlice.Get().([]priorityqueue.Item[uint64])
+
+		for closestFirst.Len() > 0 && len(returnList) < max {
+			curr := closestFirst.Pop()
+			if denyList != nil && denyList.Contains(curr.ID) {
+				continue
+			}
+			distToQuery := curr.Dist
+
+			currVec := vecs[curr.Value]
+			if err := errs[curr.Value]; err != nil {
+				var e storobj.ErrNotFound
+				if errors.As(err, &e) {
+					h.handleDeletedNode(e.DocID)
+					continue
+				} else {
+					// not a typed error, we can recover from, return with err
+					return errors.Wrapf(err,
+						"unrecoverable error for docID %d", curr.ID)
+				}
+			}
+			good := true
+			for _, item := range returnList {
+				peerDist, _, _ := h.distancerProvider.SingleDist(currVec,
+					vecs[item.Value])
+
+				if peerDist < distToQuery {
+					good = false
+					break
+				}
+			}
+
+			if good {
+				returnList = append(returnList, curr)
+			}
+
+		}
 	}
 
 	h.pools.pqHeuristic.Put(closestFirst)
@@ -89,7 +128,7 @@ func (h *hnsw) selectNeighborsHeuristic(input *priorityqueue.Queue,
 	// rewind and return to pool
 	returnList = returnList[:0]
 
-	// nolint:staticcheck
+	//nolint:staticcheck
 	h.pools.pqItemSlice.Put(returnList)
 
 	return nil

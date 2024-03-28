@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package backup
@@ -20,18 +20,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/semi-technologies/weaviate/entities/backup"
-	"github.com/semi-technologies/weaviate/entities/models"
 	"github.com/sirupsen/logrus"
 	"github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/weaviate/weaviate/entities/backup"
+	"github.com/weaviate/weaviate/entities/models"
 )
 
 func TestSchedulerValidateCreateBackup(t *testing.T) {
 	t.Parallel()
 	var (
-		cls         = "MyClass"
+		cls         = "C1"
 		backendName = "s3"
 		s           = newFakeScheduler(nil).scheduler()
 		ctx         = context.Background()
@@ -63,6 +63,18 @@ func TestSchedulerValidateCreateBackup(t *testing.T) {
 		})
 		assert.NotNil(t, err)
 	})
+
+	t.Run("RequestIncludeHasDuplicate", func(t *testing.T) {
+		_, err := s.Backup(ctx, nil, &BackupRequest{
+			Backend: backendName,
+			ID:      "1234",
+			Include: []string{"C2", "C2", "C1"},
+			Exclude: []string{},
+		})
+		assert.NotNil(t, err)
+		assert.ErrorContains(t, err, "C2")
+	})
+
 	t.Run("ResultingClassListIsEmpty", func(t *testing.T) {
 		// return one class and exclude it in the request
 		fs := newFakeScheduler(nil)
@@ -161,7 +173,7 @@ func TestSchedulerBackupStatus(t *testing.T) {
 		assert.NotNil(t, err)
 	})
 
-	t.Run("MetdataNotFound", func(t *testing.T) {
+	t.Run("MetadataNotFound", func(t *testing.T) {
 		fs := newFakeScheduler(nil)
 		fs.backend.On("GetObject", ctx, id, GlobalBackupFile).Return(nil, ErrAny)
 		fs.backend.On("GetObject", ctx, id, BackupFile).Return(nil, backup.ErrNotFound{})
@@ -245,7 +257,7 @@ func TestSchedulerRestorationStatus(t *testing.T) {
 		assert.NotNil(t, err)
 	})
 
-	t.Run("MetdataNotFound", func(t *testing.T) {
+	t.Run("MetadataNotFound", func(t *testing.T) {
 		fs := newFakeScheduler(nil)
 		fs.backend.On("GetObject", ctx, id, GlobalRestoreFile).Return(nil, ErrAny)
 		_, err := fs.scheduler().RestorationStatus(ctx, nil, backendName, id)
@@ -301,7 +313,7 @@ func TestSchedulerCreateBackup(t *testing.T) {
 		fs := newFakeScheduler(newFakeNodeResolver([]string{node}))
 		// first
 		fs.selector.On("Backupable", ctx, req1.Include).Return(nil)
-		fs.selector.On("Shards", ctx, cls).Return([]string{node})
+		fs.selector.On("Shards", ctx, cls).Return([]string{node}, nil)
 
 		fs.backend.On("GetObject", ctx, backupID, GlobalBackupFile).Return(nil, backup.ErrNotFound{})
 		fs.backend.On("GetObject", ctx, backupID, BackupFile).Return(nil, backup.ErrNotFound{})
@@ -310,7 +322,7 @@ func TestSchedulerCreateBackup(t *testing.T) {
 		fs.client.On("CanCommit", any, node, any).Return(cresp, nil)
 		fs.client.On("Commit", any, node, sReq).Return(nil)
 		fs.client.On("Status", any, node, sReq).Return(sresp, nil)
-		fs.backend.On("PutObject", any, backupID, GlobalBackupFile, any).Return(nil).Once()
+		fs.backend.On("PutObject", any, backupID, GlobalBackupFile, any).Return(nil).Twice()
 		m := fs.scheduler()
 		resp1, err := m.Backup(ctx, nil, &req1)
 		assert.Nil(t, err)
@@ -371,7 +383,7 @@ func TestSchedulerCreateBackup(t *testing.T) {
 	t.Run("Success", func(t *testing.T) {
 		fs := newFakeScheduler(newFakeNodeResolver([]string{node}))
 		fs.selector.On("Backupable", ctx, req.Include).Return(nil)
-		fs.selector.On("Shards", ctx, cls).Return([]string{node})
+		fs.selector.On("Shards", ctx, cls).Return([]string{node}, nil)
 
 		fs.backend.On("GetObject", ctx, backupID, GlobalBackupFile).Return(nil, backup.ErrNotFound{})
 		fs.backend.On("GetObject", ctx, backupID, BackupFile).Return(nil, backup.ErrNotFound{})
@@ -381,7 +393,7 @@ func TestSchedulerCreateBackup(t *testing.T) {
 		fs.client.On("CanCommit", any, node, any).Return(cresp, nil)
 		fs.client.On("Commit", any, node, sReq).Return(nil)
 		fs.client.On("Status", any, node, sReq).Return(sresp, nil)
-		fs.backend.On("PutObject", any, backupID, GlobalBackupFile, any).Return(nil).Once()
+		fs.backend.On("PutObject", any, backupID, GlobalBackupFile, any).Return(nil).Twice()
 		s := fs.scheduler()
 		resp, err := s.Backup(ctx, nil, &req)
 		assert.Nil(t, err)
@@ -545,6 +557,17 @@ func TestSchedulerRestoreRequestValidation(t *testing.T) {
 		assert.NotNil(t, err)
 	})
 
+	t.Run("RequestIncludeHasDuplicates", func(t *testing.T) {
+		_, err := s.Restore(ctx, nil, &BackupRequest{
+			Backend: backendName,
+			ID:      id,
+			Include: []string{"C1", "C2", "C1"},
+			Exclude: []string{},
+		})
+		assert.NotNil(t, err)
+		assert.ErrorContains(t, err, "C1")
+	})
+
 	t.Run("BackendFailure", func(t *testing.T) { //  backend provider fails
 		fs := newFakeScheduler(nil)
 		fs.backendErr = ErrAny
@@ -589,6 +612,29 @@ func TestSchedulerRestoreRequestValidation(t *testing.T) {
 		_, err := fs.scheduler().Restore(ctx, nil, req)
 		assert.NotNil(t, err)
 		assert.Contains(t, err.Error(), backup.Failed)
+		assert.IsType(t, backup.ErrUnprocessable{}, err)
+	})
+
+	t.Run("BackupWithHigherVersion", func(t *testing.T) {
+		fs := newFakeScheduler(nil)
+		version := "3.0"
+		meta := backup.DistributedBackupDescriptor{
+			ID:            id,
+			StartedAt:     timePt,
+			Version:       version,
+			ServerVersion: "2",
+			Status:        backup.Success,
+			Nodes: map[string]*backup.NodeDescriptor{
+				nodeName: {Classes: []string{cls}},
+			},
+		}
+
+		bytes := marshalCoordinatorMeta(meta)
+		fs.backend.On("GetObject", ctx, id, GlobalBackupFile).Return(bytes, nil)
+		fs.backend.On("HomeDir", mock.Anything).Return(path)
+		_, err := fs.scheduler().Restore(ctx, nil, req)
+		assert.NotNil(t, err)
+		assert.Contains(t, err.Error(), errMsgHigherVersion)
 		assert.IsType(t, backup.ErrUnprocessable{}, err)
 	})
 
@@ -675,4 +721,23 @@ func (f *fakeScheduler) scheduler() *Scheduler {
 func marshalCoordinatorMeta(m backup.DistributedBackupDescriptor) []byte {
 	bytes, _ := json.MarshalIndent(m, "", "")
 	return bytes
+}
+
+func TestFirstDuplicate(t *testing.T) {
+	tests := []struct {
+		in   []string
+		want string
+	}{
+		{},
+		{[]string{"1"}, ""},
+		{[]string{"1", "1"}, "1"},
+		{[]string{"1", "2", "2", "1"}, "2"},
+		{[]string{"1", "2", "3", "1"}, "1"},
+	}
+	for _, test := range tests {
+		got := findDuplicate(test.in)
+		if got != test.want {
+			t.Errorf("firstDuplicate(%v) want=%s got=%s", test.in, test.want, got)
+		}
+	}
 }

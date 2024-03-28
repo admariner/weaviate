@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package cyclemanager
@@ -14,64 +14,83 @@ package cyclemanager
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"sync"
-	"time"
+
+	"github.com/sirupsen/logrus"
+	enterrors "github.com/weaviate/weaviate/entities/errors"
 )
+
+var _NUMCPU = runtime.NumCPU()
 
 type (
-	StopFunc  func() bool
-	CycleFunc func(StopFunc)
+	// indicates whether cyclemanager's stop was requested to allow safely
+	// abort execution of CycleCallback and stop cyclemanager earlier
+	ShouldAbortCallback func() bool
+	// return value indicates whether actual work was done in the cycle
+	CycleCallback func(shouldAbort ShouldAbortCallback) bool
 )
 
-type CycleManager struct {
-	sync.RWMutex
-
-	cycleFunc     CycleFunc
-	cycleInterval time.Duration
-	running       bool
-	stop          chan struct{}
-	stopContexts  []context.Context
-	stopResult    chan bool
+type CycleManager interface {
+	Start()
+	Stop(ctx context.Context) chan bool
+	StopAndWait(ctx context.Context) error
+	Running() bool
 }
 
-func New(cycleInterval time.Duration, cycleFunc CycleFunc) *CycleManager {
-	return &CycleManager{
-		cycleFunc:     cycleFunc,
-		cycleInterval: cycleInterval,
+type cycleManager struct {
+	sync.RWMutex
+
+	cycleCallback CycleCallback
+	cycleTicker   CycleTicker
+	running       bool
+	stopSignal    chan struct{}
+
+	stopContexts []context.Context
+	stopResults  []chan bool
+
+	logger logrus.FieldLogger
+}
+
+func NewManager(cycleTicker CycleTicker, cycleCallback CycleCallback, logger logrus.FieldLogger) CycleManager {
+	return &cycleManager{
+		cycleCallback: cycleCallback,
+		cycleTicker:   cycleTicker,
 		running:       false,
-		stop:          make(chan struct{}, 1),
+		stopSignal:    make(chan struct{}, 1),
+		logger:        logger,
 	}
 }
 
 // Starts instance, does not block
 // Does nothing if instance is already started
-func (c *CycleManager) Start() {
+func (c *cycleManager) Start() {
 	c.Lock()
 	defer c.Unlock()
 
-	if c.cycleInterval <= 0 || c.running {
+	if c.running {
 		return
 	}
 
-	go func() {
-		ticker := time.NewTicker(c.cycleInterval)
-		defer ticker.Stop()
+	enterrors.GoWrapper(func() {
+		c.cycleTicker.Start()
+		defer c.cycleTicker.Stop()
 
 		for {
-			if c.selectedStop(ticker) {
+			if c.isStopRequested() {
 				c.Lock()
-				if c.anyCtxValid() {
-					c.handleStop(true)
+				if c.shouldStop() {
+					c.handleStopRequest(true)
 					c.Unlock()
 					break
 				}
-				c.handleStop(false)
+				c.handleStopRequest(false)
 				c.Unlock()
 				continue
 			}
-			c.cycleFunc(c.stopFunc)
+			c.cycleTicker.CycleExecuted(c.cycleCallback(c.shouldAbortCycleCallback))
 		}
-	}()
+	}, c.logger)
 
 	c.running = true
 }
@@ -83,45 +102,31 @@ func (c *CycleManager) Start() {
 // If called multiple times, all contexts have to be cancelled to cancel stop
 // (any valid will result in stopping instance)
 // stopResult is the same (consistent) for multiple calls
-func (c *CycleManager) Stop(ctx context.Context) (stopResult chan bool) {
+func (c *cycleManager) Stop(ctx context.Context) (stopResult chan bool) {
 	c.Lock()
 	defer c.Unlock()
 
 	stopResult = make(chan bool, 1)
 	if !c.running {
-		sendAndClose(stopResult, true)
+		stopResult <- true
+		close(stopResult)
 		return stopResult
 	}
 
 	if len(c.stopContexts) == 0 {
-		// Stop called 1st time on running instance
-		c.stopContexts = []context.Context{ctx}
-		c.stopResult = stopResult
-		c.stop <- struct{}{}
-
-	} else {
-		// Stop called another time on running instance
-		// before 1st stop was handled
-		// results of previous and current call are therefore combined to
-		// return the same and consistent output
-		combinedStopResult := make(chan bool, 1)
-		prevStopResult := c.stopResult
-		c.stopContexts = append(c.stopContexts, ctx)
-		c.stopResult = combinedStopResult
-
-		go func(combinedStopResult <-chan bool, prevStopResult chan<- bool, stopResult chan<- bool) {
-			stopped := <-combinedStopResult
-			sendAndClose(prevStopResult, stopped)
-			sendAndClose(stopResult, stopped)
-		}(combinedStopResult, prevStopResult, stopResult)
+		defer func() {
+			c.stopSignal <- struct{}{}
+		}()
 	}
+	c.stopContexts = append(c.stopContexts, ctx)
+	c.stopResults = append(c.stopResults, stopResult)
 
 	return stopResult
 }
 
 // Stops running instance, waits for stop to occur or context to expire (which comes first)
 // Returns error if instance was not stopped
-func (c *CycleManager) StopAndWait(ctx context.Context) error {
+func (c *cycleManager) StopAndWait(ctx context.Context) error {
 	// if both channels are ready, chan is selected randomly, therefore regardless of
 	// channel selected first, second one is also checked
 	stop := c.Stop(ctx)
@@ -138,53 +143,47 @@ func (c *CycleManager) StopAndWait(ctx context.Context) error {
 			return ctx.Err()
 		}
 	case stopped := <-stop:
-		select {
-		case <-done:
-			if !stopped {
+		if !stopped {
+			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-		default:
-			if !stopped {
-				return fmt.Errorf("failed to stop cycle")
-			}
+			return fmt.Errorf("failed to stop cycle")
 		}
 	}
 	return nil
 }
 
-func (c *CycleManager) Running() bool {
+func (c *cycleManager) Running() bool {
 	c.RLock()
 	defer c.RUnlock()
 
 	return c.running
 }
 
-func (c *CycleManager) anyCtxValid() bool {
-	if len(c.stopContexts) > 0 {
-		for _, ctx := range c.stopContexts {
-			if ctx.Err() == nil {
-				return true
-			}
+func (c *cycleManager) shouldStop() bool {
+	for _, ctx := range c.stopContexts {
+		if ctx.Err() == nil {
+			return true
 		}
 	}
 	return false
 }
 
-func (c *CycleManager) stopFunc() bool {
+func (c *cycleManager) shouldAbortCycleCallback() bool {
 	c.RLock()
 	defer c.RUnlock()
 
-	return c.anyCtxValid()
+	return c.shouldStop()
 }
 
-func (c *CycleManager) selectedStop(ticker *time.Ticker) bool {
+func (c *cycleManager) isStopRequested() bool {
 	select {
-	case <-c.stop:
-	case <-ticker.C:
+	case <-c.stopSignal:
+	case <-c.cycleTicker.C():
 		// as stop chan has higher priority,
 		// it is checked again in case of ticker was selected over stop if both were ready
 		select {
-		case <-c.stop:
+		case <-c.stopSignal:
 		default:
 			return false
 		}
@@ -192,14 +191,54 @@ func (c *CycleManager) selectedStop(ticker *time.Ticker) bool {
 	return true
 }
 
-func (c *CycleManager) handleStop(stopped bool) {
-	sendAndClose(c.stopResult, stopped)
+func (c *cycleManager) handleStopRequest(stopped bool) {
+	for _, stopResult := range c.stopResults {
+		stopResult <- stopped
+		close(stopResult)
+	}
 	c.running = !stopped
-	c.stopResult = nil
 	c.stopContexts = nil
+	c.stopResults = nil
 }
 
-func sendAndClose(ch chan<- bool, value bool) {
-	ch <- value
+func NewManagerNoop() CycleManager {
+	return &cycleManagerNoop{running: false}
+}
+
+type cycleManagerNoop struct {
+	running bool
+}
+
+func (c *cycleManagerNoop) Start() {
+	c.running = true
+}
+
+func (c *cycleManagerNoop) Stop(ctx context.Context) chan bool {
+	if !c.running {
+		return c.closedChan(true)
+	}
+	if ctx.Err() != nil {
+		return c.closedChan(false)
+	}
+
+	c.running = false
+	return c.closedChan(true)
+}
+
+func (c *cycleManagerNoop) StopAndWait(ctx context.Context) error {
+	if <-c.Stop(ctx) {
+		return nil
+	}
+	return ctx.Err()
+}
+
+func (c *cycleManagerNoop) Running() bool {
+	return c.running
+}
+
+func (c *cycleManagerNoop) closedChan(val bool) chan bool {
+	ch := make(chan bool, 1)
+	ch <- val
 	close(ch)
+	return ch
 }

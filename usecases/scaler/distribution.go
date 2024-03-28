@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package scaler
@@ -14,7 +14,7 @@ package scaler
 import (
 	"fmt"
 
-	"github.com/semi-technologies/weaviate/usecases/sharding"
+	"github.com/weaviate/weaviate/usecases/sharding"
 )
 
 type (
@@ -30,7 +30,7 @@ func distributions(before, after *sharding.State) (ShardDist, nodeShardDist) {
 	nodeDist := make(map[string]ShardDist)
 	for name := range before.Physical {
 		newNodes := difference(after.Physical[name].BelongsToNodes, before.Physical[name].BelongsToNodes)
-		if before.IsShardLocal(name) {
+		if before.IsLocalShard(name) {
 			localDist[name] = newNodes
 		} else {
 			belongsTo := before.Physical[name].BelongsToNode()

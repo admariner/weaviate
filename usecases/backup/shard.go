@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package backup
@@ -18,7 +18,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/semi-technologies/weaviate/entities/backup"
+	"github.com/sirupsen/logrus"
+	enterrors "github.com/weaviate/weaviate/entities/errors"
+
+	"github.com/weaviate/weaviate/entities/backup"
 )
 
 const (
@@ -100,10 +103,7 @@ func (c *shardSyncChan) waitForCoordinator(d time.Duration, id string) error {
 		select {
 		case <-timer.C:
 			return fmt.Errorf("timed out waiting for coordinator to commit")
-		case v, ok := <-c.coordChan:
-			if !ok {
-				continue
-			}
+		case v := <-c.coordChan:
 			switch v := v.(type) {
 			case AbortRequest:
 				if v.ID == id {
@@ -118,6 +118,29 @@ func (c *shardSyncChan) waitForCoordinator(d time.Duration, id string) error {
 	}
 }
 
+// withCancellation return a new context which will be cancelled if the coordinator
+// want to abort the commit phase
+func (c *shardSyncChan) withCancellation(ctx context.Context, id string, done chan struct{}, logger logrus.FieldLogger) context.Context {
+	ctx, cancel := context.WithCancel(ctx)
+	enterrors.GoWrapper(func() {
+		defer cancel()
+		for {
+			select {
+			case v := <-c.coordChan:
+				switch v := v.(type) {
+				case AbortRequest:
+					if v.ID == id {
+						return
+					}
+				}
+			case <-done: // caller is done
+				return
+			}
+		}
+	}, logger)
+	return ctx
+}
+
 // OnCommit will be triggered when the coordinator confirms the execution of a previous operation
 func (c *shardSyncChan) OnCommit(ctx context.Context, req *StatusRequest) error {
 	st := c.lastOp.get()
@@ -125,13 +148,13 @@ func (c *shardSyncChan) OnCommit(ctx context.Context, req *StatusRequest) error 
 		c.coordChan <- *req
 		return nil
 	}
-	return fmt.Errorf("shard has abandon backup opeartion")
+	return fmt.Errorf("shard has abandon backup operation")
 }
 
 // Abort tells a node to abort the previous backup operation
 func (c *shardSyncChan) OnAbort(_ context.Context, req *AbortRequest) error {
 	st := c.lastOp.get()
-	if st.ID == req.ID && c.waitingForCoordinatorToCommit.Load() {
+	if st.ID == req.ID {
 		c.coordChan <- *req
 		return nil
 	}

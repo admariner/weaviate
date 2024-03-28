@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package objects
@@ -14,13 +14,14 @@ package objects
 import (
 	"context"
 
-	"github.com/semi-technologies/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/additional"
+	"github.com/weaviate/weaviate/entities/models"
 )
 
 // ValidateObject without adding it to the database. Can be used in UIs for
 // async validation before submitting
 func (m *Manager) ValidateObject(ctx context.Context, principal *models.Principal,
-	class *models.Object,
+	obj *models.Object, repl *additional.ReplicationProperties,
 ) error {
 	err := m.authorizer.Authorize(principal, "validate", "objects")
 	if err != nil {
@@ -33,7 +34,7 @@ func (m *Manager) ValidateObject(ctx context.Context, principal *models.Principa
 	}
 	defer unlock()
 
-	err = m.validateObject(ctx, principal, class)
+	err = m.validateObjectAndNormalizeNames(ctx, principal, repl, obj, nil)
 	if err != nil {
 		return NewErrInvalidUserInput("invalid object: %v", err)
 	}

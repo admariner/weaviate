@@ -4,38 +4,102 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package rest
 
 import (
 	"github.com/go-openapi/runtime/middleware"
-	"github.com/semi-technologies/weaviate/adapters/handlers/rest/operations"
-	"github.com/semi-technologies/weaviate/adapters/handlers/rest/operations/backups"
-	"github.com/semi-technologies/weaviate/entities/backup"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/usecases/auth/authorization/errors"
-	ubak "github.com/semi-technologies/weaviate/usecases/backup"
+	"github.com/sirupsen/logrus"
+	"github.com/weaviate/weaviate/adapters/handlers/rest/operations"
+	"github.com/weaviate/weaviate/adapters/handlers/rest/operations/backups"
+	"github.com/weaviate/weaviate/entities/backup"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/usecases/auth/authorization/errors"
+	ubak "github.com/weaviate/weaviate/usecases/backup"
+	"github.com/weaviate/weaviate/usecases/monitoring"
 )
 
 type backupHandlers struct {
-	manager *ubak.Scheduler
+	manager             *ubak.Scheduler
+	metricRequestsTotal restApiRequestsTotal
+}
+
+// compressionFromCfg transforms model backup config to a backup compression config
+func compressionFromBCfg(cfg *models.BackupConfig) ubak.Compression {
+	if cfg != nil {
+		if cfg.CPUPercentage == 0 {
+			cfg.CPUPercentage = ubak.DefaultCPUPercentage
+		}
+
+		if cfg.ChunkSize == 0 {
+			cfg.ChunkSize = ubak.DefaultChunkSize
+		}
+
+		if cfg.CompressionLevel == "" {
+			cfg.CompressionLevel = models.BackupConfigCompressionLevelDefaultCompression
+		}
+
+		return ubak.Compression{
+			CPUPercentage: int(cfg.CPUPercentage),
+			ChunkSize:     int(cfg.ChunkSize),
+			Level:         parseCompressionLevel(cfg.CompressionLevel),
+		}
+	}
+
+	return ubak.Compression{
+		Level:         ubak.DefaultCompression,
+		CPUPercentage: ubak.DefaultCPUPercentage,
+		ChunkSize:     ubak.DefaultChunkSize,
+	}
+}
+
+func compressionFromRCfg(cfg *models.RestoreConfig) ubak.Compression {
+	if cfg != nil {
+		if cfg.CPUPercentage == 0 {
+			cfg.CPUPercentage = ubak.DefaultCPUPercentage
+		}
+
+		return ubak.Compression{
+			CPUPercentage: int(cfg.CPUPercentage),
+			Level:         ubak.DefaultCompression,
+			ChunkSize:     ubak.DefaultChunkSize,
+		}
+	}
+
+	return ubak.Compression{
+		Level:         ubak.DefaultCompression,
+		CPUPercentage: ubak.DefaultCPUPercentage,
+		ChunkSize:     ubak.DefaultChunkSize,
+	}
+}
+
+func parseCompressionLevel(l string) ubak.CompressionLevel {
+	switch {
+	case l == models.BackupConfigCompressionLevelBestSpeed:
+		return ubak.BestSpeed
+	case l == models.BackupConfigCompressionLevelBestCompression:
+		return ubak.BestCompression
+	default:
+		return ubak.DefaultCompression
+	}
 }
 
 func (s *backupHandlers) createBackup(params backups.BackupsCreateParams,
 	principal *models.Principal,
 ) middleware.Responder {
-	req := ubak.BackupRequest{
-		ID:      params.Body.ID,
-		Backend: params.Backend,
-		Include: params.Body.Include,
-		Exclude: params.Body.Exclude,
-	}
-	meta, err := s.manager.Backup(params.HTTPRequest.Context(), principal, &req)
+	meta, err := s.manager.Backup(params.HTTPRequest.Context(), principal, &ubak.BackupRequest{
+		ID:          params.Body.ID,
+		Backend:     params.Backend,
+		Include:     params.Body.Include,
+		Exclude:     params.Body.Exclude,
+		Compression: compressionFromBCfg(params.Body.Config),
+	})
 	if err != nil {
+		s.metricRequestsTotal.logError("", err)
 		switch err.(type) {
 		case errors.Forbidden:
 			return backups.NewBackupsCreateForbidden().
@@ -49,6 +113,7 @@ func (s *backupHandlers) createBackup(params backups.BackupsCreateParams,
 		}
 	}
 
+	s.metricRequestsTotal.logOk("")
 	return backups.NewBackupsCreateOK().WithPayload(meta)
 }
 
@@ -57,6 +122,7 @@ func (s *backupHandlers) createBackupStatus(params backups.BackupsCreateStatusPa
 ) middleware.Responder {
 	status, err := s.manager.BackupStatus(params.HTTPRequest.Context(), principal, params.Backend, params.ID)
 	if err != nil {
+		s.metricRequestsTotal.logError("", err)
 		switch err.(type) {
 		case errors.Forbidden:
 			return backups.NewBackupsCreateStatusForbidden().
@@ -81,20 +147,23 @@ func (s *backupHandlers) createBackupStatus(params backups.BackupsCreateStatusPa
 		Backend: params.Backend,
 		Error:   status.Err,
 	}
+	s.metricRequestsTotal.logOk("")
 	return backups.NewBackupsCreateStatusOK().WithPayload(&payload)
 }
 
 func (s *backupHandlers) restoreBackup(params backups.BackupsRestoreParams,
 	principal *models.Principal,
 ) middleware.Responder {
-	req := ubak.BackupRequest{
-		ID:      params.ID,
-		Backend: params.Backend,
-		Include: params.Body.Include,
-		Exclude: params.Body.Exclude,
-	}
-	meta, err := s.manager.Restore(params.HTTPRequest.Context(), principal, &req)
+	meta, err := s.manager.Restore(params.HTTPRequest.Context(), principal, &ubak.BackupRequest{
+		ID:          params.ID,
+		Backend:     params.Backend,
+		Include:     params.Body.Include,
+		Exclude:     params.Body.Exclude,
+		NodeMapping: params.Body.NodeMapping,
+		Compression: compressionFromRCfg(params.Body.Config),
+	})
 	if err != nil {
+		s.metricRequestsTotal.logError("", err)
 		switch err.(type) {
 		case errors.Forbidden:
 			return backups.NewBackupsRestoreForbidden().
@@ -111,6 +180,7 @@ func (s *backupHandlers) restoreBackup(params backups.BackupsRestoreParams,
 		}
 	}
 
+	s.metricRequestsTotal.logOk("")
 	return backups.NewBackupsRestoreOK().WithPayload(meta)
 }
 
@@ -120,6 +190,7 @@ func (s *backupHandlers) restoreBackupStatus(params backups.BackupsRestoreStatus
 	status, err := s.manager.RestorationStatus(
 		params.HTTPRequest.Context(), principal, params.Backend, params.ID)
 	if err != nil {
+		s.metricRequestsTotal.logError("", err)
 		switch err.(type) {
 		case errors.Forbidden:
 			return backups.NewBackupsRestoreForbidden().
@@ -143,13 +214,14 @@ func (s *backupHandlers) restoreBackupStatus(params backups.BackupsRestoreStatus
 		Backend: params.Backend,
 		Error:   status.Err,
 	}
+	s.metricRequestsTotal.logOk("")
 	return backups.NewBackupsRestoreStatusOK().WithPayload(&payload)
 }
 
 func setupBackupHandlers(api *operations.WeaviateAPI,
-	scheduler *ubak.Scheduler,
+	scheduler *ubak.Scheduler, metrics *monitoring.PrometheusMetrics, logger logrus.FieldLogger,
 ) {
-	h := &backupHandlers{scheduler}
+	h := &backupHandlers{scheduler, newBackupRequestsTotal(metrics, logger)}
 	api.BackupsBackupsCreateHandler = backups.
 		BackupsCreateHandlerFunc(h.createBackup)
 	api.BackupsBackupsCreateStatusHandler = backups.
@@ -158,4 +230,25 @@ func setupBackupHandlers(api *operations.WeaviateAPI,
 		BackupsRestoreHandlerFunc(h.restoreBackup)
 	api.BackupsBackupsRestoreStatusHandler = backups.
 		BackupsRestoreStatusHandlerFunc(h.restoreBackupStatus)
+}
+
+type backupRequestsTotal struct {
+	*restApiRequestsTotalImpl
+}
+
+func newBackupRequestsTotal(metrics *monitoring.PrometheusMetrics, logger logrus.FieldLogger) restApiRequestsTotal {
+	return &backupRequestsTotal{
+		restApiRequestsTotalImpl: &restApiRequestsTotalImpl{newRequestsTotalMetric(metrics, "rest"), "rest", "backup", logger},
+	}
+}
+
+func (e *backupRequestsTotal) logError(className string, err error) {
+	switch err.(type) {
+	case errors.Forbidden:
+		e.logUserError(className)
+	case backup.ErrUnprocessable, backup.ErrNotFound:
+		e.logUserError(className)
+	default:
+		e.logServerError(className, err)
+	}
 }

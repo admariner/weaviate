@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package modules
@@ -14,8 +14,8 @@ package modules
 import (
 	"testing"
 
-	"github.com/semi-technologies/weaviate/entities/models"
 	"github.com/stretchr/testify/assert"
+	"github.com/weaviate/weaviate/entities/models"
 )
 
 func TestClassBasedModuleConfig(t *testing.T) {
@@ -23,7 +23,7 @@ func TestClassBasedModuleConfig(t *testing.T) {
 		class := &models.Class{
 			Class: "Test",
 		}
-		cfg := NewClassBasedModuleConfig(class, "my-module")
+		cfg := NewClassBasedModuleConfig(class, "my-module", "tenant", "")
 		assert.Equal(t, map[string]interface{}{}, cfg.Property("some-prop"))
 	})
 
@@ -36,7 +36,7 @@ func TestClassBasedModuleConfig(t *testing.T) {
 				},
 			},
 		}
-		cfg := NewClassBasedModuleConfig(class, "my-module")
+		cfg := NewClassBasedModuleConfig(class, "my-module", "tenant", "")
 		assert.Equal(t, map[string]interface{}{}, cfg.Class())
 		assert.Equal(t, map[string]interface{}{}, cfg.Property("some-prop"))
 	})
@@ -60,7 +60,7 @@ func TestClassBasedModuleConfig(t *testing.T) {
 				},
 			},
 		}
-		cfg := NewClassBasedModuleConfig(class, "my-module")
+		cfg := NewClassBasedModuleConfig(class, "my-module", "tenant", "")
 		assert.Equal(t, map[string]interface{}{}, cfg.Class())
 		assert.Equal(t, map[string]interface{}{},
 			cfg.Property("some-prop"))
@@ -85,7 +85,7 @@ func TestClassBasedModuleConfig(t *testing.T) {
 				},
 			},
 		}
-		cfg := NewClassBasedModuleConfig(class, "my-module")
+		cfg := NewClassBasedModuleConfig(class, "my-module", "tenant", "")
 		assert.Equal(t, map[string]interface{}{"classLevel": "foo"}, cfg.Class())
 		assert.Equal(t, map[string]interface{}{"propLevel": "bar"},
 			cfg.Property("some-prop"))

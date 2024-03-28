@@ -4,14 +4,16 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package schema
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestIsArrayDataType(t *testing.T) {
 	type args struct {
@@ -25,14 +27,14 @@ func TestIsArrayDataType(t *testing.T) {
 		{
 			name: "is string array",
 			args: args{
-				dt: []string{"string[]"},
+				dt: DataTypeTextArray.PropString(),
 			},
 			want: true,
 		},
 		{
 			name: "is not string array",
 			args: args{
-				dt: []string{"string"},
+				dt: DataTypeText.PropString(),
 			},
 			want: false,
 		},
@@ -77,6 +79,20 @@ func TestIsArrayDataType(t *testing.T) {
 				dt: []string{"int"},
 			},
 			want: false,
+		},
+		{
+			name: "is not uuid array",
+			args: args{
+				dt: []string{"uuid"},
+			},
+			want: false,
+		},
+		{
+			name: "is uuid array",
+			args: args{
+				dt: []string{"uuid[]"},
+			},
+			want: true,
 		},
 	}
 	for _, tt := range tests {

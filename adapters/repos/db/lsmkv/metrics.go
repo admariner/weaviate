@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package lsmkv
@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/semi-technologies/weaviate/usecases/monitoring"
+	"github.com/weaviate/weaviate/usecases/monitoring"
 )
 
 type (
@@ -25,25 +25,33 @@ type (
 )
 
 type Metrics struct {
-	CompactionReplace *prometheus.GaugeVec
-	CompactionSet     *prometheus.GaugeVec
-	CompactionMap     *prometheus.GaugeVec
-	ActiveSegments    *prometheus.GaugeVec
-	bloomFilters      prometheus.ObserverVec
-	SegmentObjects    *prometheus.GaugeVec
-	SegmentSize       *prometheus.GaugeVec
-	SegmentCount      *prometheus.GaugeVec
-	startupDurations  prometheus.ObserverVec
-	startupDiskIO     prometheus.ObserverVec
-	objectCount       prometheus.Gauge
-	memtableDurations prometheus.ObserverVec
-	memtableSize      *prometheus.GaugeVec
-	DimensionSum      *prometheus.GaugeVec
+	CompactionReplace    *prometheus.GaugeVec
+	CompactionSet        *prometheus.GaugeVec
+	CompactionMap        *prometheus.GaugeVec
+	CompactionRoaringSet *prometheus.GaugeVec
+	ActiveSegments       *prometheus.GaugeVec
+	bloomFilters         prometheus.ObserverVec
+	SegmentObjects       *prometheus.GaugeVec
+	SegmentSize          *prometheus.GaugeVec
+	SegmentCount         *prometheus.GaugeVec
+	startupDurations     prometheus.ObserverVec
+	startupDiskIO        prometheus.ObserverVec
+	objectCount          prometheus.Gauge
+	memtableDurations    prometheus.ObserverVec
+	memtableSize         *prometheus.GaugeVec
+	DimensionSum         *prometheus.GaugeVec
+
+	groupClasses bool
 }
 
 func NewMetrics(promMetrics *monitoring.PrometheusMetrics, className,
 	shardName string,
 ) *Metrics {
+	if promMetrics.Group {
+		className = "n/a"
+		shardName = "n/a"
+	}
+
 	replace := promMetrics.AsyncOperations.MustCurryWith(prometheus.Labels{
 		"operation":  "compact_lsm_segments_stratreplace",
 		"class_name": className,
@@ -56,6 +64,12 @@ func NewMetrics(promMetrics *monitoring.PrometheusMetrics, className,
 		"shard_name": shardName,
 	})
 
+	roaringSet := promMetrics.AsyncOperations.MustCurryWith(prometheus.Labels{
+		"operation":  "compact_lsm_segments_stratroaringset",
+		"class_name": className,
+		"shard_name": shardName,
+	})
+
 	stratMap := promMetrics.AsyncOperations.MustCurryWith(prometheus.Labels{
 		"operation":  "compact_lsm_segments_stratmap",
 		"class_name": className,
@@ -63,9 +77,11 @@ func NewMetrics(promMetrics *monitoring.PrometheusMetrics, className,
 	})
 
 	return &Metrics{
-		CompactionReplace: replace,
-		CompactionSet:     set,
-		CompactionMap:     stratMap,
+		groupClasses:         promMetrics.Group,
+		CompactionReplace:    replace,
+		CompactionSet:        set,
+		CompactionMap:        stratMap,
+		CompactionRoaringSet: roaringSet,
 		ActiveSegments: promMetrics.LSMSegmentCount.MustCurryWith(prometheus.Labels{
 			"class_name": className,
 			"shard_name": shardName,
@@ -130,6 +146,10 @@ func (m *Metrics) MemtableOpObserver(path, strategy, op string) NsObserver {
 		return noOpNsObserver
 	}
 
+	if m.groupClasses {
+		path = "n/a"
+	}
+
 	curried := m.memtableDurations.With(prometheus.Labels{
 		"operation": op,
 		"path":      path,
@@ -143,7 +163,9 @@ func (m *Metrics) MemtableOpObserver(path, strategy, op string) NsObserver {
 }
 
 func (m *Metrics) MemtableSizeSetter(path, strategy string) Setter {
-	if m == nil {
+	if m == nil || m.groupClasses {
+		// this metric would set absolute values, that's not possible in
+		// grouped mode, each call would essentially overwrite the last
 		return noOpSetter
 	}
 

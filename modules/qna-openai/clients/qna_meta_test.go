@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package clients
@@ -24,7 +24,7 @@ func TestGetMeta(t *testing.T) {
 	t.Run("when the server is providing meta", func(t *testing.T) {
 		server := httptest.NewServer(&testMetaHandler{t: t})
 		defer server.Close()
-		c := New(server.URL, nullLogger())
+		c := New("", "", "", 0, nullLogger())
 		meta, err := c.MetaInfo()
 
 		assert.Nil(t, err)
@@ -58,7 +58,7 @@ func (f *testMetaHandler) metaInfo() string {
   "hostname": "http://127.0.0.1:8080",
   "modules": {
     "qna-openai": {
-      "documentationHref": "https://beta.openai.com/docs/api-reference/completions",
+      "documentationHref": "https://platform.openai.com/docs/api-reference/completions",
       "name": "OpenAI Question & Answering Module"
     }
   },

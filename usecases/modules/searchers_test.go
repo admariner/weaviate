@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package modules
@@ -16,13 +16,13 @@ import (
 	"testing"
 
 	"github.com/go-openapi/strfmt"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/modulecapabilities"
-	"github.com/semi-technologies/weaviate/entities/moduletools"
-	"github.com/semi-technologies/weaviate/entities/schema"
 	"github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/modulecapabilities"
+	"github.com/weaviate/weaviate/entities/moduletools"
+	"github.com/weaviate/weaviate/entities/schema"
 )
 
 func TestModulesWithSearchers(t *testing.T) {
@@ -62,17 +62,18 @@ func TestModulesWithSearchers(t *testing.T) {
 				// take the findVectorFn and append one dimension. This doesn't make too
 				// much sense, but helps verify that the modules method was used in the
 				// decisions
-				initial, _ := findVectorFn(ctx, "class", "123")
+				initial, _, _ := findVectorFn(ctx, "class", "123", "", "")
 				return append(initial, 4), nil
 			}),
 		)
 		p.Init(context.Background(), nil, logger)
 
-		res, err := p.VectorFromSearchParam(context.Background(), "MyClass",
-			"nearGrape", nil, fakeFindVector)
+		res, targetVector, err := p.VectorFromSearchParam(context.Background(), "MyClass",
+			"nearGrape", nil, fakeFindVector, "")
 
 		require.Nil(t, err)
 		assert.Equal(t, []float32{1, 2, 3, 4}, res)
+		assert.Equal(t, "", targetVector)
 	})
 
 	t.Run("get a vector across classes", func(t *testing.T) {
@@ -88,29 +89,33 @@ func TestModulesWithSearchers(t *testing.T) {
 				cfg moduletools.ClassConfig,
 			) ([]float32, error) {
 				// this is a cross-class search, such as is used for Explore{}, in this
-				// case we do not have class-based config, so the optional argument is
-				// nil! Modules must be able to deal with this situation!
-				assert.Nil(t, cfg)
+				// case we do not have class-based config, but we need at least pass
+				// a tenant information, that's why we pass an empty config with empty tenant
+				// so that it would be possible to perform cross class searches, without
+				// tenant context. Modules must be able to deal with this situation!
+				assert.NotNil(t, cfg)
+				assert.Equal(t, "", cfg.Tenant())
 
 				// take the findVectorFn and append one dimension. This doesn't make too
 				// much sense, but helps verify that the modules method was used in the
 				// decisions
-				initial, _ := findVectorFn(ctx, "class", "123")
+				initial, _, _ := findVectorFn(ctx, "class", "123", "", "")
 				return append(initial, 4), nil
 			}),
 		)
 		p.Init(context.Background(), nil, logger)
 
-		res, err := p.CrossClassVectorFromSearchParam(context.Background(),
+		res, targetVector, err := p.CrossClassVectorFromSearchParam(context.Background(),
 			"nearGrape", nil, fakeFindVector)
 
 		require.Nil(t, err)
 		assert.Equal(t, []float32{1, 2, 3, 4}, res)
+		assert.Equal(t, "", targetVector)
 	})
 }
 
-func fakeFindVector(ctx context.Context, className string, id strfmt.UUID) ([]float32, error) {
-	return []float32{1, 2, 3}, nil
+func fakeFindVector(ctx context.Context, className string, id strfmt.UUID, tenant, targetVector string) ([]float32, string, error) {
+	return []float32{1, 2, 3}, targetVector, nil
 }
 
 func newSearcherModule(name string) *dummySearcherModule {

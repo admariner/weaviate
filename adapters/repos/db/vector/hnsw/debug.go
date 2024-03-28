@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package hnsw
@@ -16,8 +16,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/semi-technologies/weaviate/adapters/repos/db/vector/hnsw/distancer"
-	ent "github.com/semi-technologies/weaviate/entities/vectorindex/hnsw"
+	"github.com/weaviate/weaviate/adapters/repos/db/vector/common"
+	"github.com/weaviate/weaviate/adapters/repos/db/vector/hnsw/distancer"
+	"github.com/weaviate/weaviate/entities/cyclemanager"
+	ent "github.com/weaviate/weaviate/entities/vectorindex/hnsw"
 )
 
 // Dump to stdout for debugging purposes
@@ -105,7 +107,7 @@ type JSONDumpNodeMap struct {
 	Connections map[int][]uint64 `json:"connections"`
 }
 
-func NewFromJSONDump(dumpBytes []byte, vecForID VectorForID) (*hnsw, error) {
+func NewFromJSONDump(dumpBytes []byte, vecForID common.VectorForID[float32]) (*hnsw, error) {
 	var dump JSONDump
 	err := json.Unmarshal(dumpBytes, &dump)
 	if err != nil {
@@ -121,7 +123,7 @@ func NewFromJSONDump(dumpBytes []byte, vecForID VectorForID) (*hnsw, error) {
 	}, ent.UserConfig{
 		MaxConnections: 30,
 		EFConstruction: 128,
-	})
+	}, cyclemanager.NewCallbackGroupNoop(), cyclemanager.NewCallbackGroupNoop(), cyclemanager.NewCallbackGroupNoop(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -141,7 +143,7 @@ func NewFromJSONDump(dumpBytes []byte, vecForID VectorForID) (*hnsw, error) {
 	return index, nil
 }
 
-func NewFromJSONDumpMap(dumpBytes []byte, vecForID VectorForID) (*hnsw, error) {
+func NewFromJSONDumpMap(dumpBytes []byte, vecForID common.VectorForID[float32]) (*hnsw, error) {
 	var dump JSONDumpMap
 	err := json.Unmarshal(dumpBytes, &dump)
 	if err != nil {
@@ -157,7 +159,7 @@ func NewFromJSONDumpMap(dumpBytes []byte, vecForID VectorForID) (*hnsw, error) {
 	}, ent.UserConfig{
 		MaxConnections: 30,
 		EFConstruction: 128,
-	})
+	}, cyclemanager.NewCallbackGroupNoop(), cyclemanager.NewCallbackGroupNoop(), cyclemanager.NewCallbackGroupNoop(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -181,7 +183,7 @@ func NewFromJSONDumpMap(dumpBytes []byte, vecForID VectorForID) (*hnsw, error) {
 }
 
 // was added as part of
-// https://github.com/semi-technologies/weaviate/issues/1868 for debugging. It
+// https://github.com/weaviate/weaviate/issues/1868 for debugging. It
 // is not currently in use anywhere as it is somewhat costly, it would lock the
 // entire graph and iterate over every node which would lead to disruptions in
 // production. However, keeping this method around may be valuable for future

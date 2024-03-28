@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package clients
@@ -17,9 +17,10 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path"
 
-	enterrors "github.com/semi-technologies/weaviate/entities/errors"
-	"github.com/semi-technologies/weaviate/entities/models"
+	enterrors "github.com/weaviate/weaviate/entities/errors"
+	"github.com/weaviate/weaviate/entities/models"
 )
 
 type RemoteNode struct {
@@ -30,11 +31,14 @@ func NewRemoteNode(httpClient *http.Client) *RemoteNode {
 	return &RemoteNode{client: httpClient}
 }
 
-func (c *RemoteNode) GetNodeStatus(ctx context.Context, hostName string,
-) (*models.NodeStatus, error) {
-	path := "/nodes/status"
+func (c *RemoteNode) GetNodeStatus(ctx context.Context, hostName, className, output string) (*models.NodeStatus, error) {
+	p := "/nodes/status"
+	if className != "" {
+		p = path.Join(p, className)
+	}
 	method := http.MethodGet
-	url := url.URL{Scheme: "http", Host: hostName, Path: path}
+	params := url.Values{"output": []string{output}}
+	url := url.URL{Scheme: "http", Host: hostName, Path: p, RawQuery: params.Encode()}
 
 	req, err := http.NewRequestWithContext(ctx, method, url.String(), nil)
 	if err != nil {

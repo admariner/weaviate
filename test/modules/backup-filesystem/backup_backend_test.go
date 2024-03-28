@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package test
@@ -20,13 +20,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/semi-technologies/weaviate/entities/backup"
-	"github.com/semi-technologies/weaviate/entities/moduletools"
-	modstgfs "github.com/semi-technologies/weaviate/modules/backup-filesystem"
-	moduleshelper "github.com/semi-technologies/weaviate/test/helper/modules"
 	"github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/entities/backup"
+	"github.com/weaviate/weaviate/entities/moduletools"
+	modstgfs "github.com/weaviate/weaviate/modules/backup-filesystem"
+	moduleshelper "github.com/weaviate/weaviate/test/helper/modules"
+	ubak "github.com/weaviate/weaviate/usecases/backup"
+	"github.com/weaviate/weaviate/usecases/config"
 )
 
 func Test_FilesystemBackend_Backup(t *testing.T) {
@@ -45,14 +47,12 @@ func moduleLevelStoreBackupMeta(t *testing.T) {
 	backupID := "backup_id"
 	metadataFilename := "backup.json"
 
-	t.Run("setup env", func(t *testing.T) {
-		require.Nil(t, os.Setenv("BACKUP_FILESYSTEM_PATH", backupDir))
-	})
+	t.Setenv("BACKUP_FILESYSTEM_PATH", backupDir)
 
 	t.Run("store backup meta in fs", func(t *testing.T) {
 		logger, _ := test.NewNullLogger()
 		sp := fakeStorageProvider{dataDir}
-		params := moduletools.NewInitParams(sp, nil, logger)
+		params := moduletools.NewInitParams(sp, nil, config.Config{}, logger)
 
 		fs := modstgfs.New()
 		err := fs.Init(testCtx, params)
@@ -80,7 +80,8 @@ func moduleLevelStoreBackupMeta(t *testing.T) {
 						Name: className,
 					},
 				},
-				Status: string(backup.Started),
+				Status:  string(backup.Started),
+				Version: ubak.Version,
 			}
 
 			b, err := json.Marshal(desc)
@@ -105,25 +106,23 @@ func moduleLevelCopyObjects(t *testing.T) {
 	key := "moduleLevelCopyObjects"
 	backupID := "backup_id"
 
-	t.Run("setup env", func(t *testing.T) {
-		require.Nil(t, os.Setenv("BACKUP_FILESYSTEM_PATH", backupDir))
-	})
+	t.Setenv("BACKUP_FILESYSTEM_PATH", backupDir)
 
 	t.Run("copy objects", func(t *testing.T) {
 		logger, _ := test.NewNullLogger()
 		sp := fakeStorageProvider{dataDir}
-		params := moduletools.NewInitParams(sp, nil, logger)
+		params := moduletools.NewInitParams(sp, nil, config.Config{}, logger)
 
 		fs := modstgfs.New()
 		err := fs.Init(testCtx, params)
 		require.Nil(t, err)
 
-		t.Run("put object to backet", func(t *testing.T) {
+		t.Run("put object to bucket", func(t *testing.T) {
 			err := fs.PutObject(testCtx, backupID, key, []byte("hello"))
 			assert.Nil(t, err)
 		})
 
-		t.Run("get object from backet", func(t *testing.T) {
+		t.Run("get object from bucket", func(t *testing.T) {
 			meta, err := fs.GetObject(testCtx, backupID, key)
 			assert.Nil(t, err)
 			assert.Equal(t, []byte("hello"), meta)
@@ -140,9 +139,7 @@ func moduleLevelCopyFiles(t *testing.T) {
 	key := "moduleLevelCopyFiles"
 	backupID := "backup_id"
 
-	t.Run("setup env", func(t *testing.T) {
-		require.Nil(t, os.Setenv("BACKUP_FILESYSTEM_PATH", backupDir))
-	})
+	t.Setenv("BACKUP_FILESYSTEM_PATH", backupDir)
 
 	t.Run("copy files", func(t *testing.T) {
 		fpaths := moduleshelper.CreateTestFiles(t, dataDir)
@@ -153,7 +150,7 @@ func moduleLevelCopyFiles(t *testing.T) {
 
 		logger, _ := test.NewNullLogger()
 		sp := fakeStorageProvider{dataDir}
-		params := moduletools.NewInitParams(sp, nil, logger)
+		params := moduletools.NewInitParams(sp, nil, config.Config{}, logger)
 
 		fs := modstgfs.New()
 		err = fs.Init(testCtx, params)

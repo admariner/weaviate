@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package scaler
@@ -14,13 +14,15 @@ package scaler
 import (
 	"context"
 	"fmt"
+	"runtime"
+
+	enterrors "github.com/weaviate/weaviate/entities/errors"
 
 	"github.com/google/uuid"
 	"github.com/pkg/errors"
-	"github.com/semi-technologies/weaviate/entities/backup"
-	"github.com/semi-technologies/weaviate/usecases/sharding"
 	"github.com/sirupsen/logrus"
-	"golang.org/x/sync/errgroup"
+	"github.com/weaviate/weaviate/entities/backup"
+	"github.com/weaviate/weaviate/usecases/sharding"
 )
 
 // TODOs: Performance
@@ -32,8 +34,11 @@ import (
 //
 // 3. implement scaler.scaleIn
 
-// ErrUnresolvedName cannot resolve the host address of a node
-var ErrUnresolvedName = errors.New("cannot resolve node name")
+var (
+	// ErrUnresolvedName cannot resolve the host address of a node
+	ErrUnresolvedName = errors.New("cannot resolve node name")
+	_NUMCPU           = runtime.NumCPU()
+)
 
 // Scaler scales out/in class replicas.
 //
@@ -70,8 +75,8 @@ type BackUpper interface {
 
 // cluster is used by the scaler to query cluster
 type cluster interface {
-	// AllNames returns list of existing node in the cluster
-	AllNames() []string
+	// Candidates returns list of existing nodes in the cluster
+	Candidates() []string
 	// LocalName returns name of this node
 	LocalName() string
 	// NodeHostname return hosts address for a specific node name
@@ -80,7 +85,7 @@ type cluster interface {
 
 // SchemaManager is used by the scaler to get and update sharding states
 type SchemaManager interface {
-	ShardingState(class string) *sharding.State
+	CopyShardingState(class string) *sharding.State
 }
 
 func (s *Scaler) SetSchemaManager(sm SchemaManager) {
@@ -98,9 +103,9 @@ func (s *Scaler) Scale(ctx context.Context, className string,
 	// First identify what the sharding state was before this change. This is
 	// mainly to be able to compare the diff later, so we know where we need to
 	// make changes
-	ssBefore := s.schema.ShardingState(className)
+	ssBefore := s.schema.CopyShardingState(className)
 	if ssBefore == nil {
-		return nil, errors.Errorf("no sharding state for class %q", className)
+		return nil, fmt.Errorf("no sharding state for class %q", className)
 	}
 	if newReplFactor > prevReplFactor {
 		return s.scaleOut(ctx, className, ssBefore, updated, newReplFactor)
@@ -131,11 +136,13 @@ func (s *Scaler) scaleOut(ctx context.Context, className string, ssBefore *shard
 	// Identify all shards of the class and adjust the replicas. After this is
 	// done, the affected shards now belong to more nodes than they did before.
 	for name, shard := range ssAfter.Physical {
-		shard.AdjustReplicas(int(replFactor), s.cluster)
+		if err := shard.AdjustReplicas(int(replFactor), s.cluster); err != nil {
+			return nil, err
+		}
 		ssAfter.Physical[name] = shard
 	}
 	lDist, nodeDist := distributions(ssBefore, &ssAfter)
-	g, ctx := errgroup.WithContext(ctx)
+	g, ctx := enterrors.NewErrorGroupWithContextWrapper(s.logger, ctx)
 	// resolve hosts beforehand
 	nodes := nodeDist.nodes()
 	hosts, err := hosts(nodes, s.cluster)
@@ -204,11 +211,11 @@ func (s *Scaler) LocalScaleOut(ctx context.Context,
 		}
 	}()
 	rsync := newRSync(s.client, s.cluster, s.persistenceRoot)
-	return rsync.Push(ctx, bak.Shards, dist, className)
+	return rsync.Push(ctx, bak.Shards, dist, className, s.logger)
 }
 
 func (s *Scaler) scaleIn(ctx context.Context, className string,
 	updated sharding.Config,
 ) (*sharding.State, error) {
-	return nil, errors.Errorf("scaling in (reducing replica count) not supported yet")
+	return nil, errors.Errorf("scaling in not supported yet")
 }

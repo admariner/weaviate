@@ -4,15 +4,16 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package modulecapabilities
 
 import (
 	"context"
+	"io"
 )
 
 type BackupBackend interface {
@@ -40,4 +41,7 @@ type BackupBackend interface {
 	PutObject(ctx context.Context, backupID, key string, byes []byte) error
 	// Initialize initializes backup provider and make sure that app have access rights to write into the object store.
 	Initialize(ctx context.Context, backupID string) error
+
+	Write(ctx context.Context, backupID, key string, r io.ReadCloser) (int64, error)
+	Read(ctx context.Context, backupID, key string, w io.WriteCloser) (int64, error)
 }

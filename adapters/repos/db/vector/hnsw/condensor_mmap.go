@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package hnsw
@@ -32,6 +32,7 @@ func (c *MmapCondensor) Do(fileName string) error {
 	if err != nil {
 		return errors.Wrap(err, "open commit log to be condensed")
 	}
+	defer fd.Close()
 
 	index, err := c.analyze(fd)
 	if err != nil {
@@ -64,25 +65,25 @@ func (c *MmapCondensor) read(source *os.File, index mmapIndex,
 	return newMmapCondensorReader().Do(source, index, targetName)
 }
 
-func (ind *mmapIndex) calculateOffsets() {
-	for i := range ind.nodes {
+func (mi *mmapIndex) calculateOffsets() {
+	for i := range mi.nodes {
 		if i == 0 {
 			// offset for the first element is 0, nothing to do
 			continue
 		}
 
 		// we now have the guarantee that elem i-1 exists
-		ind.nodes[i].offset = ind.nodes[i-1].offset + uint64(ind.nodes[i-1].Size(ind.connectionsPerLevel))
+		mi.nodes[i].offset = mi.nodes[i-1].offset + uint64(mi.nodes[i-1].Size(mi.connectionsPerLevel))
 	}
 }
 
 // Size can only return a useful result if offsets have been calculated prior
 // to calling Size()
-func (ind *mmapIndex) Size() int {
-	if len(ind.nodes) == 0 {
+func (mi *mmapIndex) Size() int {
+	if len(mi.nodes) == 0 {
 		return -1
 	}
 
-	return int(ind.nodes[len(ind.nodes)-1].offset) +
-		ind.nodes[len(ind.nodes)-1].Size(ind.connectionsPerLevel)
+	return int(mi.nodes[len(mi.nodes)-1].offset) +
+		mi.nodes[len(mi.nodes)-1].Size(mi.connectionsPerLevel)
 }

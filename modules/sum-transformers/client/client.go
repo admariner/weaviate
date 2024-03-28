@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package client
@@ -18,10 +18,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/pkg/errors"
-	"github.com/semi-technologies/weaviate/modules/sum-transformers/ent"
 	"github.com/sirupsen/logrus"
+	"github.com/weaviate/weaviate/modules/sum-transformers/ent"
 )
 
 type client struct {
@@ -45,15 +46,17 @@ type sumResponse struct {
 	Summary []summaryResponse `json:"summary"`
 }
 
-func New(origin string, logger logrus.FieldLogger) *client {
+func New(origin string, timeout time.Duration, logger logrus.FieldLogger) *client {
 	return &client{
-		origin:     origin,
-		httpClient: &http.Client{},
-		logger:     logger,
+		origin: origin,
+		httpClient: &http.Client{
+			Timeout: timeout,
+		},
+		logger: logger,
 	}
 }
 
-func (v *client) GetSummary(ctx context.Context, property, text string,
+func (c *client) GetSummary(ctx context.Context, property, text string,
 ) ([]ent.SummaryResult, error) {
 	body, err := json.Marshal(sumInput{
 		Text: text,
@@ -62,13 +65,13 @@ func (v *client) GetSummary(ctx context.Context, property, text string,
 		return nil, errors.Wrapf(err, "marshal body")
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", v.url("/sum/"),
+	req, err := http.NewRequestWithContext(ctx, "POST", c.url("/sum/"),
 		bytes.NewReader(body))
 	if err != nil {
 		return nil, errors.Wrap(err, "create POST request")
 	}
 
-	res, err := v.httpClient.Do(req)
+	res, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, errors.Wrap(err, "send POST request")
 	}
@@ -99,6 +102,6 @@ func (v *client) GetSummary(ctx context.Context, property, text string,
 	return out, nil
 }
 
-func (v *client) url(path string) string {
-	return fmt.Sprintf("%s%s", v.origin, path)
+func (c *client) url(path string) string {
+	return fmt.Sprintf("%s%s", c.origin, path)
 }

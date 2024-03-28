@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package hnsw
@@ -14,8 +14,8 @@ package hnsw
 import (
 	"bufio"
 	"os"
-	"syscall"
 
+	"github.com/edsrzf/mmap-go"
 	"github.com/pkg/errors"
 )
 
@@ -28,9 +28,7 @@ func newMmapCondensorReader() *MmapCondensorReader {
 	return &MmapCondensorReader{}
 }
 
-func (r *MmapCondensorReader) Do(source *os.File, index mmapIndex,
-	targetName string,
-) error {
+func (r *MmapCondensorReader) Do(source *os.File, index mmapIndex, targetName string) error {
 	r.reader = bufio.NewReaderSize(source, 1024*1024)
 
 	scratchFile, err := os.Create(targetName)
@@ -43,8 +41,7 @@ func (r *MmapCondensorReader) Do(source *os.File, index mmapIndex,
 		return errors.Wrap(err, "truncate scratch file to size")
 	}
 
-	mmapSpace, err := syscall.Mmap(int(scratchFile.Fd()), 0, size,
-		syscall.PROT_WRITE, syscall.MAP_PRIVATE)
+	mmapSpace, err := mmap.MapRegion(scratchFile, size, mmap.COPY, 0, 0)
 	if err != nil {
 		return errors.Wrap(err, "mmap scratch file")
 	}
@@ -55,7 +52,7 @@ func (r *MmapCondensorReader) Do(source *os.File, index mmapIndex,
 		return err
 	}
 
-	if err := syscall.Munmap(r.target); err != nil {
+	if err := mmapSpace.Unmap(); err != nil {
 		return errors.Wrap(err, "munmap scratch file")
 	}
 

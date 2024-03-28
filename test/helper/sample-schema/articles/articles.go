@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package articles
@@ -14,7 +14,8 @@ package articles
 import (
 	"github.com/go-openapi/strfmt"
 	"github.com/google/uuid"
-	"github.com/semi-technologies/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
 )
 
 func ArticlesClass() *models.Class {
@@ -22,8 +23,9 @@ func ArticlesClass() *models.Class {
 		Class: "Article",
 		Properties: []*models.Property{
 			{
-				Name:     "title",
-				DataType: []string{"string"},
+				Name:         "title",
+				DataType:     schema.DataTypeText.PropString(),
+				Tokenization: models.PropertyTokenizationWhitespace,
 			},
 			{
 				Name:     "hasParagraphs",
@@ -39,7 +41,7 @@ func ParagraphsClass() *models.Class {
 		Properties: []*models.Property{
 			{
 				Name:     "contents",
-				DataType: []string{"text"},
+				DataType: schema.DataTypeText.PropString(),
 			},
 		},
 		Vectorizer: "none",
@@ -62,6 +64,11 @@ func (a *Article) WithReferences(refs ...*models.SingleRef) *Article {
 func (a *Article) WithTitle(title string) *Article {
 	props := a.Properties.(map[string]interface{})
 	props["title"] = title
+	return a
+}
+
+func (a *Article) WithTenant(tk string) *Article {
+	a.Tenant = tk
 	return a
 }
 
@@ -93,6 +100,11 @@ func (p *Paragraph) WithContents(contents string) *Paragraph {
 
 func (p *Paragraph) WithVector(vec []float32) *Paragraph {
 	p.Vector = vec
+	return p
+}
+
+func (p *Paragraph) WithTenant(tk string) *Paragraph {
+	p.Tenant = tk
 	return p
 }
 

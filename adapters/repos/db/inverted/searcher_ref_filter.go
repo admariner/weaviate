@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package inverted
@@ -14,43 +14,47 @@ package inverted
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/go-openapi/strfmt"
 	"github.com/pkg/errors"
-	"github.com/semi-technologies/weaviate/entities/additional"
-	"github.com/semi-technologies/weaviate/entities/filters"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	"github.com/semi-technologies/weaviate/entities/schema/crossref"
-	"github.com/semi-technologies/weaviate/entities/search"
-	"github.com/semi-technologies/weaviate/usecases/config"
-	"github.com/semi-technologies/weaviate/usecases/traverser"
+	"github.com/sirupsen/logrus"
+	"github.com/weaviate/weaviate/entities/additional"
+	"github.com/weaviate/weaviate/entities/dto"
+	"github.com/weaviate/weaviate/entities/filters"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema/crossref"
+	"github.com/weaviate/weaviate/entities/search"
 )
 
 // a helper tool to extract the uuid beacon for any matching reference
 type refFilterExtractor struct {
-	filter        *filters.Clause
-	className     schema.ClassName
+	logger        logrus.FieldLogger
 	classSearcher ClassSearcher
-	schema        schema.Schema
+	filter        *filters.Clause
+	class         *models.Class
+	property      *models.Property
+	tenant        string
+	limit         int64
 }
 
 // ClassSearcher is anything that allows a root-level ClassSearch
 type ClassSearcher interface {
-	ClassSearch(ctx context.Context,
-		params traverser.GetParams) ([]search.Result, error)
+	Search(ctx context.Context,
+		params dto.GetParams) ([]search.Result, error)
 	GetQueryMaximumResults() int
 }
 
-func newRefFilterExtractor(classSearcher ClassSearcher,
-	filter *filters.Clause, className schema.ClassName,
-	schema schema.Schema,
+func newRefFilterExtractor(logger logrus.FieldLogger, classSearcher ClassSearcher,
+	filter *filters.Clause, class *models.Class, property *models.Property, tenant string, limit int64,
 ) *refFilterExtractor {
 	return &refFilterExtractor{
-		filter:        filter,
-		className:     className,
+		logger:        logger,
 		classSearcher: classSearcher,
-		schema:        schema,
+		filter:        filter,
+		class:         class,
+		property:      property,
+		tenant:        tenant,
+		limit:         limit,
 	}
 }
 
@@ -64,24 +68,32 @@ func (r *refFilterExtractor) Do(ctx context.Context) (*propValuePair, error) {
 		return nil, errors.Wrap(err, "nested request to fetch matching IDs")
 	}
 
+	if len(ids) > r.classSearcher.GetQueryMaximumResults() {
+		r.logger.
+			WithField("nested_reference_results", len(ids)).
+			WithField("query_maximum_results", r.classSearcher.GetQueryMaximumResults()).
+			Warnf("Number of found nested reference results exceeds configured QUERY_MAXIMUM_RESULTS. " +
+				"This may result in search performance degradation or even out of memory errors.")
+	}
+
 	return r.resultsToPropValuePairs(ids)
 }
 
-func (r *refFilterExtractor) paramsForNestedRequest() (traverser.GetParams, error) {
-	return traverser.GetParams{
+func (r *refFilterExtractor) paramsForNestedRequest() (dto.GetParams, error) {
+	return dto.GetParams{
 		Filters:   r.innerFilter(),
 		ClassName: r.filter.On.Child.Class.String(),
 		Pagination: &filters.Pagination{
-			// The limit is chosen arbitrarily, it used to be 1e4 in the ES-based
-			// implementation, so using a 10x as high value should be safe. However,
-			// we might come back to reduce this number in case this leads to
-			// unexpected performance issues
-			Limit: int(config.DefaultQueryMaximumResults),
+			Offset: 0,
+			// Limit can be set to dynamically with QUERY_NESTED_CROSS_REFERENCE_LIMIT
+			Limit: int(r.limit),
 		},
 		// set this to indicate that this is a sub-query, so we do not need
 		// to perform the same search limits cutoff check that we do with
 		// the root query
 		AdditionalProperties: additional.Properties{ReferenceQuery: true},
+		Tenant:               r.tenant,
+		IsRefOrigin:          true,
 	}, nil
 }
 
@@ -106,7 +118,7 @@ func (r *refFilterExtractor) fetchIDs(ctx context.Context) ([]classUUIDPair, err
 		return nil, err
 	}
 
-	res, err := r.classSearcher.ClassSearch(ctx, params)
+	res, err := r.classSearcher.Search(ctx, params)
 	if err != nil {
 		return nil, err
 	}
@@ -133,10 +145,12 @@ func (r *refFilterExtractor) resultsToPropValuePairs(ids []classUUIDPair,
 
 func (r *refFilterExtractor) emptyPropValuePair() *propValuePair {
 	return &propValuePair{
-		prop:         lowercaseFirstLetter(r.filter.On.Property.String()),
-		hasFrequency: false,
-		value:        nil,
-		operator:     filters.OperatorEqual,
+		prop:               r.property.Name,
+		value:              nil,
+		operator:           filters.OperatorEqual,
+		hasFilterableIndex: HasFilterableIndex(r.property),
+		hasSearchableIndex: HasSearchableIndex(r.property),
+		Class:              r.class,
 	}
 }
 
@@ -155,36 +169,36 @@ func (r *refFilterExtractor) backwardCompatibleIDToPropValuePair(p classUUIDPair
 	return r.chainedIDsToPropValuePair([]classUUIDPair{p})
 }
 
-func (r *refFilterExtractor) idToPropValuePairWithClass(p classUUIDPair) (*propValuePair, error) {
+func (r *refFilterExtractor) idToPropValuePairWithValue(v []byte,
+	hasFilterableIndex, hasSearchableIndex bool,
+) (*propValuePair, error) {
 	return &propValuePair{
-		prop:         lowercaseFirstLetter(r.filter.On.Property.String()),
-		hasFrequency: false,
-		value:        []byte(crossref.New("localhost", p.class, p.id).String()),
-		operator:     filters.OperatorEqual,
-	}, nil
-}
-
-func (r *refFilterExtractor) idToPropValuePairLegacyWithoutClass(p classUUIDPair) (*propValuePair, error) {
-	return &propValuePair{
-		prop:         lowercaseFirstLetter(r.filter.On.Property.String()),
-		hasFrequency: false,
-		value:        []byte(crossref.New("localhost", "", p.id).String()),
-		operator:     filters.OperatorEqual,
+		prop:               r.property.Name,
+		value:              v,
+		operator:           filters.OperatorEqual,
+		hasFilterableIndex: hasFilterableIndex,
+		hasSearchableIndex: hasSearchableIndex,
+		Class:              r.class,
 	}, nil
 }
 
 // chain multiple alternatives using an OR operator
 func (r *refFilterExtractor) chainedIDsToPropValuePair(ids []classUUIDPair) (*propValuePair, error) {
-	children, err := r.idsToPropValuePairs(ids)
+	hasFilterableIndex := HasFilterableIndex(r.property)
+	hasSearchableIndex := HasSearchableIndex(r.property)
+
+	children, err := r.idsToPropValuePairs(ids, hasFilterableIndex, hasSearchableIndex)
 	if err != nil {
 		return nil, err
 	}
 
 	return &propValuePair{
-		prop:         lowercaseFirstLetter(r.filter.On.Property.String()),
-		hasFrequency: false,
-		operator:     filters.OperatorOr,
-		children:     children,
+		prop:               r.property.Name,
+		operator:           filters.OperatorOr,
+		children:           children,
+		hasFilterableIndex: hasFilterableIndex,
+		hasSearchableIndex: hasSearchableIndex,
+		Class:              r.class,
 	}, nil
 }
 
@@ -195,11 +209,20 @@ func (r *refFilterExtractor) chainedIDsToPropValuePair(ids []classUUIDPair) (*pr
 // backward-compatible logic should be removed, as soon as we can be sure that
 // no more class-less beacons exist. Most likely this will be the case with the
 // next breaking change, such as v2.0.0.
-func (r *refFilterExtractor) idsToPropValuePairs(ids []classUUIDPair) ([]*propValuePair, error) {
+func (r *refFilterExtractor) idsToPropValuePairs(ids []classUUIDPair,
+	hasFilterableIndex, hasSearchableIndex bool,
+) ([]*propValuePair, error) {
+	// This makes it safe to access the first element later on without further
+	// checks
+	if len(ids) == 0 {
+		return nil, nil
+	}
+
 	out := make([]*propValuePair, len(ids)*2)
+	bb := crossref.NewBulkBuilderWithEstimates(len(ids)*2, ids[0].class, 1.25)
 	for i, id := range ids {
 		// future-proof way
-		pv, err := r.idToPropValuePairWithClass(id)
+		pv, err := r.idToPropValuePairWithValue(bb.ClassAndID(id.class, id.id), hasFilterableIndex, hasSearchableIndex)
 		if err != nil {
 			return nil, err
 		}
@@ -207,7 +230,7 @@ func (r *refFilterExtractor) idsToPropValuePairs(ids []classUUIDPair) ([]*propVa
 		out[i*2] = pv
 
 		// backward-compatible way
-		pv, err = r.idToPropValuePairLegacyWithoutClass(id)
+		pv, err = r.idToPropValuePairWithValue(bb.LegacyIDOnly(id.id), hasFilterableIndex, hasSearchableIndex)
 		if err != nil {
 			return nil, err
 		}
@@ -224,15 +247,4 @@ func (r *refFilterExtractor) validate() error {
 	}
 
 	return nil
-}
-
-func lowercaseFirstLetter(in string) string {
-	switch len(in) {
-	case 0:
-		return in
-	case 1:
-		return strings.ToLower(in)
-	default:
-		return strings.ToLower(in[:1]) + in[1:]
-	}
 }

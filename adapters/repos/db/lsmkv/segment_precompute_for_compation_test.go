@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package lsmkv
@@ -22,26 +22,47 @@ import (
 	"github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/adapters/repos/db/lsmkv/segmentindex"
+	"github.com/weaviate/weaviate/entities/cyclemanager"
 )
 
-func TestPrecomputeSegmentMeta_Replace(t *testing.T) {
+func TestPrecomputeForCompaction(t *testing.T) {
+	ctx := context.Background()
+	tests := bucketTests{
+		{
+			name: "precomputeSegmentMeta_Replace",
+			f:    precomputeSegmentMeta_Replace,
+			opts: []BucketOption{
+				WithStrategy(StrategyReplace),
+				WithSecondaryIndices(1),
+			},
+		},
+		{
+			name: "precomputeSegmentMeta_Set",
+			f:    precomputeSegmentMeta_Set,
+			opts: []BucketOption{
+				WithStrategy(StrategySetCollection),
+			},
+		},
+	}
+	tests.run(ctx, t)
+}
+
+func precomputeSegmentMeta_Replace(ctx context.Context, t *testing.T, opts []BucketOption) {
 	// first build a complete reference segment of which we can then strip its
 	// meta
-
-	ctx := context.Background()
 	dirName := t.TempDir()
 
 	logger, _ := test.NewNullLogger()
 
-	b, err := NewBucket(ctx, dirName, "", logger, nil,
-		WithStrategy(StrategyReplace),
-		WithSecondaryIndices(1))
+	b, err := NewBucketCreator().NewBucket(ctx, dirName, "", logger, nil,
+		cyclemanager.NewCallbackGroupNoop(), cyclemanager.NewCallbackGroupNoop(), opts...)
 	require.Nil(t, err)
 	defer b.Shutdown(ctx)
 
 	require.Nil(t, b.Put([]byte("hello"), []byte("world"),
 		WithSecondaryKey(0, []byte("bonjour"))))
-	require.Nil(t, b.FlushMemtable(ctx))
+	require.Nil(t, b.FlushMemtable())
 
 	for _, ext := range []string{".secondary.0.bloom", ".bloom", ".cna"} {
 		files, err := os.ReadDir(dirName)
@@ -70,7 +91,7 @@ func TestPrecomputeSegmentMeta_Replace(t *testing.T) {
 	err = os.Rename(path.Join(dirName, fname), segmentTmp)
 	require.Nil(t, err)
 
-	fileNames, err := preComputeSegmentMeta(segmentTmp, 1, logger)
+	fileNames, err := preComputeSegmentMeta(segmentTmp, 1, logger, true, true)
 	require.Nil(t, err)
 
 	// there should be 4 files and they should all have a .tmp suffix:
@@ -87,23 +108,21 @@ func TestPrecomputeSegmentMeta_Replace(t *testing.T) {
 // Precomputing of segment is almost identical across segment types, however,
 // only Replace supports CNA, so we should test at least one other segment type
 // which does not support CNA, represented here by using the "Set" type
-func TestPrecomputeSegmentMeta_Set(t *testing.T) {
+func precomputeSegmentMeta_Set(ctx context.Context, t *testing.T, opts []BucketOption) {
 	// first build a complete reference segment of which we can then strip its
 	// meta
-
-	ctx := context.Background()
 	dirName := t.TempDir()
 
 	logger, _ := test.NewNullLogger()
 
-	b, err := NewBucket(ctx, dirName, "", logger, nil,
-		WithStrategy(StrategySetCollection))
+	b, err := NewBucketCreator().NewBucket(ctx, dirName, "", logger, nil,
+		cyclemanager.NewCallbackGroupNoop(), cyclemanager.NewCallbackGroupNoop(), opts...)
 	require.Nil(t, err)
 	defer b.Shutdown(ctx)
 
 	err = b.SetAdd([]byte("greetings"), [][]byte{[]byte("hello"), []byte("hola")})
 	require.Nil(t, err)
-	require.Nil(t, b.FlushMemtable(ctx))
+	require.Nil(t, b.FlushMemtable())
 
 	files, err := os.ReadDir(dirName)
 	require.Nil(t, err)
@@ -129,7 +148,7 @@ func TestPrecomputeSegmentMeta_Set(t *testing.T) {
 	err = os.Rename(path.Join(dirName, fname), segmentTmp)
 	require.Nil(t, err)
 
-	fileNames, err := preComputeSegmentMeta(segmentTmp, 1, logger)
+	fileNames, err := preComputeSegmentMeta(segmentTmp, 1, logger, true, true)
 	require.Nil(t, err)
 
 	// there should be 2 files and they should all have a .tmp suffix:
@@ -144,16 +163,18 @@ func TestPrecomputeSegmentMeta_Set(t *testing.T) {
 func TestPrecomputeSegmentMeta_UnhappyPaths(t *testing.T) {
 	t.Run("file without .tmp suffix", func(t *testing.T) {
 		logger, _ := test.NewNullLogger()
-		_, err := preComputeSegmentMeta("a-path-without-the-required-suffix", 7, logger)
+		_, err := preComputeSegmentMeta("a-path-without-the-required-suffix", 7, logger, true, true)
 		require.NotNil(t, err)
 		assert.Contains(t, err.Error(), "expects a .tmp segment")
 	})
 
 	t.Run("file does not exist", func(t *testing.T) {
 		logger, _ := test.NewNullLogger()
-		_, err := preComputeSegmentMeta("i-dont-exist.tmp", 7, logger)
+		_, err := preComputeSegmentMeta("i-dont-exist.tmp", 7, logger, true, true)
 		require.NotNil(t, err)
-		assert.Contains(t, err.Error(), "no such file or directory")
+		unixErr := "no such file or directory"
+		windowsErr := "The system cannot find the file specified."
+		assert.True(t, strings.Contains(err.Error(), unixErr) || strings.Contains(err.Error(), windowsErr))
 	})
 
 	t.Run("segment header can't be parsed", func(t *testing.T) {
@@ -161,8 +182,8 @@ func TestPrecomputeSegmentMeta_UnhappyPaths(t *testing.T) {
 		dirName := t.TempDir()
 		segmentName := path.Join(dirName, "my-segment.tmp")
 
-		header := &segmentHeader{
-			version: 100, // only supported version as of writing this test is 0
+		header := &segmentindex.Header{
+			Version: 100, // only supported version as of writing this test is 0
 		}
 
 		f, err := os.Create(segmentName)
@@ -174,7 +195,7 @@ func TestPrecomputeSegmentMeta_UnhappyPaths(t *testing.T) {
 		err = f.Close()
 		require.Nil(t, err)
 
-		_, err = preComputeSegmentMeta(segmentName, 7, logger)
+		_, err = preComputeSegmentMeta(segmentName, 7, logger, true, true)
 		require.NotNil(t, err)
 		assert.Contains(t, err.Error(), "parse header")
 	})
@@ -184,9 +205,9 @@ func TestPrecomputeSegmentMeta_UnhappyPaths(t *testing.T) {
 		dirName := t.TempDir()
 		segmentName := path.Join(dirName, "my-segment.tmp")
 
-		header := &segmentHeader{
-			version:  0,
-			strategy: SegmentStrategy(100), // this strategy doesn't exist
+		header := &segmentindex.Header{
+			Version:  0,
+			Strategy: segmentindex.Strategy(100), // this strategy doesn't exist
 		}
 
 		f, err := os.Create(segmentName)
@@ -198,7 +219,7 @@ func TestPrecomputeSegmentMeta_UnhappyPaths(t *testing.T) {
 		err = f.Close()
 		require.Nil(t, err)
 
-		_, err = preComputeSegmentMeta(segmentName, 7, logger)
+		_, err = preComputeSegmentMeta(segmentName, 7, logger, true, true)
 		require.NotNil(t, err)
 		assert.Contains(t, err.Error(), "unsupported strategy")
 	})

@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package clients
@@ -20,7 +20,7 @@ import (
 	"net/http"
 	"net/url"
 
-	"github.com/semi-technologies/weaviate/usecases/cluster"
+	"github.com/weaviate/weaviate/usecases/cluster"
 )
 
 type ClusterSchema struct {
@@ -75,9 +75,9 @@ func (c *ClusterSchema) OpenTransaction(ctx context.Context, host string,
 	}
 
 	// optional for backward-compatibility before v1.17 where only
-	// write-transcactions where supported. They had no return value other than
+	// write-transactions where supported. They had no return value other than
 	// the status code. With the introduction of read-transactions it is now
-	// possible to return the requsted value
+	// possible to return the requested value
 	if len(body) == 0 {
 		return nil
 	}

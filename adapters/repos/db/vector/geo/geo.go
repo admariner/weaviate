@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package geo
@@ -14,16 +14,16 @@ package geo
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/pkg/errors"
-	"github.com/semi-technologies/weaviate/adapters/repos/db/helpers"
-	"github.com/semi-technologies/weaviate/adapters/repos/db/vector/hnsw"
-	"github.com/semi-technologies/weaviate/adapters/repos/db/vector/hnsw/distancer"
-	"github.com/semi-technologies/weaviate/entities/filters"
-	"github.com/semi-technologies/weaviate/entities/models"
-	hnswent "github.com/semi-technologies/weaviate/entities/vectorindex/hnsw"
 	"github.com/sirupsen/logrus"
+	"github.com/weaviate/weaviate/adapters/repos/db/helpers"
+	"github.com/weaviate/weaviate/adapters/repos/db/vector/hnsw"
+	"github.com/weaviate/weaviate/adapters/repos/db/vector/hnsw/distancer"
+	"github.com/weaviate/weaviate/entities/cyclemanager"
+	"github.com/weaviate/weaviate/entities/filters"
+	"github.com/weaviate/weaviate/entities/models"
+	hnswent "github.com/weaviate/weaviate/entities/vectorindex/hnsw"
 )
 
 // Index wraps another index to provide geo searches. This allows us to reuse
@@ -42,7 +42,7 @@ type vectorIndex interface {
 	Add(id uint64, vector []float32) error
 	KnnSearchByVectorMaxDist(query []float32, dist float32, ef int,
 		allowList helpers.AllowList) ([]uint64, error)
-	Delete(id uint64) error
+	Delete(id ...uint64) error
 	Dump(...string)
 	Drop(ctx context.Context) error
 	PostStartup()
@@ -57,18 +57,21 @@ type Config struct {
 	Logger             logrus.FieldLogger
 }
 
-func NewIndex(config Config) (*Index, error) {
+func NewIndex(config Config,
+	commitLogMaintenanceCallbacks, tombstoneCleanupCallbacks,
+	compactionCallbacks, flushCallbacks cyclemanager.CycleCallbackGroup,
+) (*Index, error) {
 	vi, err := hnsw.New(hnsw.Config{
 		VectorForIDThunk:      config.CoordinatesForID.VectorForID,
 		ID:                    config.ID,
 		RootPath:              config.RootPath,
-		MakeCommitLoggerThunk: makeCommitLoggerFromConfig(config),
+		MakeCommitLoggerThunk: makeCommitLoggerFromConfig(config, commitLogMaintenanceCallbacks),
 		DistanceProvider:      distancer.NewGeoProvider(),
 	}, hnswent.UserConfig{
 		MaxConnections:         64,
 		EFConstruction:         128,
 		CleanupIntervalSeconds: hnswent.DefaultCleanupIntervalSeconds,
-	})
+	}, tombstoneCleanupCallbacks, compactionCallbacks, flushCallbacks, nil)
 	if err != nil {
 		return nil, errors.Wrap(err, "underlying hnsw index")
 	}
@@ -94,12 +97,12 @@ func (i *Index) PostStartup() {
 	i.vectorIndex.PostStartup()
 }
 
-func makeCommitLoggerFromConfig(config Config) hnsw.MakeCommitLogger {
+func makeCommitLoggerFromConfig(config Config, maintenanceCallbacks cyclemanager.CycleCallbackGroup,
+) hnsw.MakeCommitLogger {
 	makeCL := hnsw.MakeNoopCommitLogger
 	if !config.DisablePersistence {
 		makeCL = func() (hnsw.CommitLogger, error) {
-			return hnsw.NewCommitLogger(config.RootPath, config.ID, 10*time.Second,
-				config.Logger)
+			return hnsw.NewCommitLogger(config.RootPath, config.ID, config.Logger, maintenanceCallbacks)
 		}
 	}
 	return makeCL

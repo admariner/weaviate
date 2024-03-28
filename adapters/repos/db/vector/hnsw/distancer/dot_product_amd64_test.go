@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package distancer
@@ -14,15 +14,14 @@ package distancer
 import (
 	"fmt"
 	"math"
-	"math/rand"
 	"testing"
-	"time"
 	"unsafe"
 
-	"github.com/semi-technologies/weaviate/adapters/repos/db/vector/hnsw/distancer/asm"
+	"github.com/weaviate/weaviate/adapters/repos/db/vector/hnsw/distancer/asm"
+	"golang.org/x/sys/cpu"
 )
 
-func testDotProductFixedValue(t *testing.T, size uint) {
+func testDotProductFixedValue(t *testing.T, size uint, dotFn func(x []float32, y []float32) float32) {
 	count := 10000
 	countFailed := 0
 	for i := 0; i < count; i++ {
@@ -34,7 +33,7 @@ func testDotProductFixedValue(t *testing.T, size uint) {
 		}
 		vec1 = Normalize(vec1)
 		vec2 = Normalize(vec2)
-		res := -asm.Dot(vec1, vec2)
+		res := -dotFn(vec1, vec2)
 		if math.IsNaN(float64(res)) {
 			panic("NaN")
 		}
@@ -54,7 +53,8 @@ func testDotProductFixedValue(t *testing.T, size uint) {
 	fmt.Printf("total failed: %d\n", countFailed)
 }
 
-func testDotProductRandomValue(t *testing.T, size uint) {
+func testDotProductRandomValue(t *testing.T, size uint, dotFn func(x []float32, y []float32) float32) {
+	r := getRandomSeed()
 	count := 10000
 	countFailed := 0
 
@@ -65,15 +65,15 @@ func testDotProductRandomValue(t *testing.T, size uint) {
 		vec1 := make([]float32, size)
 		vec2 := make([]float32, size)
 		for j := range vec1 {
-			vec1[j] = rand.Float32()
-			vec2[j] = rand.Float32()
+			vec1[j] = r.Float32()
+			vec2[j] = r.Float32()
 		}
 		vec1s[i] = Normalize(vec1)
 		vec2s[i] = Normalize(vec2)
 	}
 
 	for i := 0; i < count; i++ {
-		res := -asm.Dot(vec1s[i], vec2s[i])
+		res := -dotFn(vec1s[i], vec2s[i])
 		if math.IsNaN(float64(res)) {
 			panic("NaN")
 		}
@@ -94,20 +94,46 @@ func testDotProductRandomValue(t *testing.T, size uint) {
 }
 
 func TestCompareDotProductImplementations(t *testing.T) {
-	rand.Seed(time.Now().UnixNano())
 	sizes := []uint{
+		1,
+		2,
+		3,
+		4,
+		5,
+		6,
 		8,
+		10,
+		12,
 		16,
+		24,
+		30,
+		31,
 		32,
 		64,
+		67,
 		128,
 		256,
+		260,
+		299,
+		300,
+		384,
+		390,
+		600,
+		768,
+		777,
+		784,
+		1024,
+		1536,
 	}
 
 	for _, size := range sizes {
 		t.Run(fmt.Sprintf("with size %d", size), func(t *testing.T) {
-			testDotProductFixedValue(t, size)
-			testDotProductRandomValue(t, size)
+			testDotProductFixedValue(t, size, asm.DotAVX256)
+			testDotProductRandomValue(t, size, asm.DotAVX256)
+			if cpu.X86.HasAVX512 {
+				testDotProductFixedValue(t, size, asm.DotAVX512)
+				testDotProductRandomValue(t, size, asm.DotAVX512)
+			}
 		})
 	}
 }

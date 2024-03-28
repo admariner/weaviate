@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package test
@@ -23,10 +23,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/semi-technologies/weaviate/client/objects"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/test/helper"
-	testhelper "github.com/semi-technologies/weaviate/test/helper"
+	"github.com/weaviate/weaviate/client/objects"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/test/helper"
+	testhelper "github.com/weaviate/weaviate/test/helper"
 )
 
 // run from setup_test.go
@@ -296,7 +296,7 @@ func creatingObjects(t *testing.T) {
 			},
 			errorCheck: func(t *testing.T, err *models.ErrorResponse) {
 				assert.Contains(t,
-					"invalid object: invalid string property 'testString' on class 'TestObject': not a string, but json.Number",
+					"invalid object: invalid text property 'testString' on class 'TestObject': not a string, but json.Number",
 					err.Error[0].Message)
 			},
 		},

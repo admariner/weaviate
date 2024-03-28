@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package tokens
@@ -16,9 +16,9 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/search"
-	"github.com/semi-technologies/weaviate/modules/ner-transformers/ent"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/search"
+	"github.com/weaviate/weaviate/modules/ner-transformers/ent"
 )
 
 func (p *TokenProvider) findTokens(ctx context.Context,
@@ -92,13 +92,13 @@ func (p *TokenProvider) findTokens(ctx context.Context,
 }
 
 func cutOffByCertainty(tokens []ent.TokenResult, certainty *float64) []ent.TokenResult {
-	min_certainty := 0.0
+	minCertainty := 0.0
 	if certainty != nil {
-		min_certainty = *certainty
+		minCertainty = *certainty
 	}
 	a := 0
 	for _, x := range tokens {
-		if x.Certainty >= min_certainty {
+		if x.Certainty >= minCertainty {
 			tokens[a] = x
 			a++
 		}

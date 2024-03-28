@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package modules
@@ -16,12 +16,12 @@ import (
 	"testing"
 
 	"github.com/pkg/errors"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/modulecapabilities"
-	"github.com/semi-technologies/weaviate/entities/moduletools"
-	"github.com/semi-technologies/weaviate/entities/schema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/modulecapabilities"
+	"github.com/weaviate/weaviate/entities/moduletools"
+	"github.com/weaviate/weaviate/entities/schema"
 )
 
 func TestSetClassDefaults(t *testing.T) {
@@ -56,8 +56,9 @@ func TestSetClassDefaults(t *testing.T) {
 		class := &models.Class{
 			Class: "Foo",
 			Properties: []*models.Property{{
-				Name:     "Foo",
-				DataType: []string{"string"},
+				Name:         "Foo",
+				DataType:     schema.DataTypeText.PropString(),
+				Tokenization: models.PropertyTokenizationWhitespace,
 			}},
 			Vectorizer: "my-module",
 		}
@@ -70,8 +71,9 @@ func TestSetClassDefaults(t *testing.T) {
 				},
 			},
 			Properties: []*models.Property{{
-				Name:     "Foo",
-				DataType: []string{"string"},
+				Name:         "Foo",
+				DataType:     schema.DataTypeText.PropString(),
+				Tokenization: models.PropertyTokenizationWhitespace,
 				ModuleConfig: map[string]interface{}{
 					"my-module": map[string]interface{}{
 						"per-prop-1": "prop default value",
@@ -103,8 +105,9 @@ func TestSetClassDefaults(t *testing.T) {
 				},
 			},
 			Properties: []*models.Property{{
-				Name:     "Foo",
-				DataType: []string{"string"},
+				Name:         "Foo",
+				DataType:     schema.DataTypeText.PropString(),
+				Tokenization: models.PropertyTokenizationWhitespace,
 				ModuleConfig: map[string]interface{}{
 					"my-module": map[string]interface{}{
 						"per-prop-1": "prop overwritten by user",
@@ -122,8 +125,9 @@ func TestSetClassDefaults(t *testing.T) {
 				},
 			},
 			Properties: []*models.Property{{
-				Name:     "Foo",
-				DataType: []string{"string"},
+				Name:         "Foo",
+				DataType:     schema.DataTypeText.PropString(),
+				Tokenization: models.PropertyTokenizationWhitespace,
 				ModuleConfig: map[string]interface{}{
 					"my-module": map[string]interface{}{
 						"per-prop-1": "prop overwritten by user",
@@ -153,8 +157,9 @@ func TestValidateClass(t *testing.T) {
 		class := &models.Class{
 			Class: "Foo",
 			Properties: []*models.Property{{
-				Name:     "Foo",
-				DataType: []string{"string"},
+				Name:         "Foo",
+				DataType:     schema.DataTypeText.PropString(),
+				Tokenization: models.PropertyTokenizationWhitespace,
 			}},
 			Vectorizer: "none",
 		}
@@ -176,8 +181,9 @@ func TestValidateClass(t *testing.T) {
 			class := &models.Class{
 				Class: "Foo",
 				Properties: []*models.Property{{
-					Name:     "Foo",
-					DataType: []string{"string"},
+					Name:         "Foo",
+					DataType:     schema.DataTypeText.PropString(),
+					Tokenization: models.PropertyTokenizationWhitespace,
 				}},
 				Vectorizer: "my-module",
 			}
@@ -195,8 +201,9 @@ func TestValidateClass(t *testing.T) {
 		class := &models.Class{
 			Class: "Foo",
 			Properties: []*models.Property{{
-				Name:     "Foo",
-				DataType: []string{"string"},
+				Name:         "Foo",
+				DataType:     schema.DataTypeText.PropString(),
+				Tokenization: models.PropertyTokenizationWhitespace,
 			}},
 			Vectorizer: "my-module",
 		}
@@ -214,6 +221,58 @@ func TestValidateClass(t *testing.T) {
 		require.NotNil(t, err)
 		assert.Equal(t, "module 'my-module': no can do!", err.Error())
 	})
+}
+
+func TestSetSinglePropertyDefaults(t *testing.T) {
+	class := &models.Class{
+		Class: "Foo",
+		ModuleConfig: map[string]interface{}{
+			"my-module": map[string]interface{}{
+				"per-class-prop-1": "overwritten by user",
+			},
+		},
+		Properties: []*models.Property{{
+			Name:         "Foo",
+			DataType:     schema.DataTypeText.PropString(),
+			Tokenization: models.PropertyTokenizationWhitespace,
+			ModuleConfig: map[string]interface{}{
+				"my-module": map[string]interface{}{
+					"per-prop-1": "prop overwritten by user",
+				},
+			},
+		}},
+		Vectorizer: "my-module",
+	}
+	prop := &models.Property{
+		DataType: []string{"boolean"},
+		ModuleConfig: map[string]interface{}{
+			"my-module": map[string]interface{}{
+				"per-prop-1": "overwritten by user",
+			},
+		},
+		Name: "newProp",
+	}
+	expected := &models.Property{
+		DataType: []string{"boolean"},
+		ModuleConfig: map[string]interface{}{
+			"my-module": map[string]interface{}{
+				"per-prop-1": "overwritten by user",
+				"per-prop-2": "prop default value",
+			},
+		},
+		Name: "newProp",
+	}
+
+	p := NewProvider()
+	p.Register(&dummyModuleClassConfigurator{
+		dummyText2VecModuleNoCapabilities: dummyText2VecModuleNoCapabilities{
+			name: "my-module",
+		},
+	})
+	p.SetSinglePropertyDefaults(class, prop)
+
+	assert.Equal(t, expected, prop,
+		"user specified module config is used, for rest the default value is used")
 }
 
 type dummyModuleClassConfigurator struct {

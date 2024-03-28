@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package aggregator
@@ -15,10 +15,10 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/semi-technologies/weaviate/adapters/repos/db/helpers"
-	"github.com/semi-technologies/weaviate/adapters/repos/db/inverted"
-	"github.com/semi-technologies/weaviate/entities/additional"
-	"github.com/semi-technologies/weaviate/entities/storobj"
+	"github.com/weaviate/weaviate/adapters/repos/db/helpers"
+	"github.com/weaviate/weaviate/adapters/repos/db/inverted"
+	"github.com/weaviate/weaviate/entities/additional"
+	"github.com/weaviate/weaviate/entities/storobj"
 )
 
 func (a *Aggregator) vectorSearch(allow helpers.AllowList, vec []float32) ([]uint64, []float32, error) {
@@ -90,8 +90,9 @@ func (a *Aggregator) buildAllowList(ctx context.Context) (helpers.AllowList, err
 
 	if a.params.Filters != nil {
 		s := a.getSchema.GetSchemaSkipAuth()
-		allow, err = inverted.NewSearcher(a.store, s, a.invertedRowCache, nil,
-			a.classSearcher, a.deletedDocIDs, a.stopwords, a.shardVersion).
+		allow, err = inverted.NewSearcher(a.logger, a.store, s, nil,
+			a.classSearcher, a.stopwords, a.shardVersion, a.isFallbackToSearchable,
+			a.tenant, a.nestedCrossRefLimit, a.bitmapFactory).
 			DocIDs(ctx, a.params.Filters, additional.Properties{},
 				a.params.ClassName)
 		if err != nil {

@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package filters
@@ -14,8 +14,8 @@ package filters
 import (
 	"encoding/json"
 
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
 )
 
 type Operator int
@@ -29,10 +29,11 @@ const (
 	OperatorLessThanEqual
 	OperatorAnd
 	OperatorOr
-	OperatorNot
 	OperatorWithinGeoRange
 	OperatorLike
 	OperatorIsNull
+	ContainsAny
+	ContainsAll
 )
 
 func (o Operator) OnValue() bool {
@@ -45,7 +46,9 @@ func (o Operator) OnValue() bool {
 		OperatorLessThanEqual,
 		OperatorWithinGeoRange,
 		OperatorLike,
-		OperatorIsNull:
+		OperatorIsNull,
+		ContainsAny,
+		ContainsAll:
 		return true
 	default:
 		return false
@@ -70,14 +73,16 @@ func (o Operator) Name() string {
 		return "And"
 	case OperatorOr:
 		return "Or"
-	case OperatorNot:
-		return "Not"
 	case OperatorWithinGeoRange:
 		return "WithinGeoRange"
 	case OperatorLike:
 		return "Like"
 	case OperatorIsNull:
 		return "IsNull"
+	case ContainsAny:
+		return "ContainsAny"
+	case ContainsAll:
+		return "ContainsAll"
 	default:
 		panic("Unknown operator")
 	}
@@ -108,6 +113,17 @@ func (v *Value) UnmarshalJSON(data []byte) error {
 	asFloat, ok := v.Value.(float64)
 	if v.Type == schema.DataTypeInt && ok {
 		v.Value = int(asFloat)
+	}
+
+	if v.Type == schema.DataTypeGeoCoordinates {
+		temp := struct {
+			Value GeoRange `json:"value"`
+		}{}
+
+		if err := json.Unmarshal(data, &temp); err != nil {
+			return err
+		}
+		v.Value = temp.Value
 	}
 
 	return nil

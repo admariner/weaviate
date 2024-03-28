@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package validation
@@ -14,14 +14,16 @@ package validation
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/go-openapi/strfmt"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/schema/crossref"
-	"github.com/semi-technologies/weaviate/usecases/config"
+	"github.com/weaviate/weaviate/entities/additional"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema/crossref"
+	"github.com/weaviate/weaviate/usecases/config"
 )
 
-type exists func(_ context.Context, class string, _ strfmt.UUID) (bool, error)
+type exists func(_ context.Context, class string, _ strfmt.UUID, _ *additional.ReplicationProperties, _ string) (bool, error)
 
 const (
 	// ErrorMissingActionObjects message
@@ -56,28 +58,34 @@ const (
 	ErrorInvalidCRefType string = "'cref' type '%s' does not exists"
 	// ErrorNotFoundInDatabase message
 	ErrorNotFoundInDatabase string = "%s: no object with id %s found"
+	// ErrorInvalidProperties message
+	ErrorInvalidProperties string = "properties of object %v must be of type map[string]interface"
 )
 
 type Validator struct {
-	exists exists
-	config *config.WeaviateConfig
+	exists           exists
+	config           *config.WeaviateConfig
+	replicationProps *additional.ReplicationProperties
 }
 
-func New(exists exists,
-	config *config.WeaviateConfig,
+func New(exists exists, config *config.WeaviateConfig,
+	repl *additional.ReplicationProperties,
 ) *Validator {
 	return &Validator{
-		exists: exists,
-		config: config,
+		exists:           exists,
+		config:           config,
+		replicationProps: repl,
 	}
 }
 
-func (v *Validator) Object(ctx context.Context, object *models.Object, class *models.Class) error {
-	if err := validateClass(object.Class); err != nil {
+func (v *Validator) Object(ctx context.Context, class *models.Class,
+	incoming *models.Object, existing *models.Object,
+) error {
+	if err := validateClass(incoming.Class); err != nil {
 		return err
 	}
 
-	return v.properties(ctx, object, class)
+	return v.properties(ctx, class, incoming, existing)
 }
 
 func validateClass(class string) error {
@@ -91,22 +99,37 @@ func validateClass(class string) error {
 }
 
 // ValidateSingleRef validates a single ref based on location URL and existence of the object in the database
-func (v *Validator) ValidateSingleRef(ctx context.Context, cref *models.SingleRef,
-	errorVal string,
-) error {
+func (v *Validator) ValidateSingleRef(cref *models.SingleRef) (*crossref.Ref, error) {
 	ref, err := crossref.ParseSingleRef(cref)
 	if err != nil {
-		return fmt.Errorf("invalid reference: %s", err)
+		return nil, fmt.Errorf("invalid reference: %w", err)
 	}
+
+	// target id must be lowercase
+	ref.TargetID = strfmt.UUID(strings.ToLower(ref.TargetID.String()))
 
 	if !ref.Local {
-		return fmt.Errorf("unrecognized cross-ref ref format")
+		return nil, fmt.Errorf("unrecognized cross-ref ref format")
 	}
 
+	return ref, nil
+}
+
+func (v *Validator) ValidateExistence(ctx context.Context, ref *crossref.Ref, errorVal string, tenant string) error {
 	// locally check for object existence
-	ok, err := v.exists(ctx, ref.Class, ref.TargetID)
+	ok, err := v.exists(ctx, ref.Class, ref.TargetID, v.replicationProps, tenant)
 	if err != nil {
-		return err
+		if tenant == "" {
+			return err
+		}
+		// since refs can be created to non-MT classes, check again if non-MT object exists
+		// (use empty tenant, if previously was given)
+		ok2, err2 := v.exists(ctx, ref.Class, ref.TargetID, v.replicationProps, "")
+		if err2 != nil {
+			// return orig error
+			return err
+		}
+		ok = ok2
 	}
 	if !ok {
 		return fmt.Errorf(ErrorNotFoundInDatabase, errorVal, ref.TargetID)
@@ -116,17 +139,21 @@ func (v *Validator) ValidateSingleRef(ctx context.Context, cref *models.SingleRe
 }
 
 func (v *Validator) ValidateMultipleRef(ctx context.Context, refs models.MultipleRef,
-	errorVal string,
-) error {
+	errorVal string, tenant string,
+) ([]*crossref.Ref, error) {
+	parsedRefs := make([]*crossref.Ref, len(refs))
+
 	if refs == nil {
-		return nil
+		return parsedRefs, nil
 	}
 
-	for _, ref := range refs {
-		err := v.ValidateSingleRef(ctx, ref, errorVal)
+	for i, ref := range refs {
+		parsedRef, err := v.ValidateSingleRef(ref)
 		if err != nil {
-			return err
+			return nil, err
 		}
+		parsedRefs[i] = parsedRef
+
 	}
-	return nil
+	return parsedRefs, nil
 }

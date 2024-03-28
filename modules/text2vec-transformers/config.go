@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package modtransformers
@@ -16,12 +16,12 @@ import (
 	"fmt"
 
 	"github.com/pkg/errors"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/modulecapabilities"
-	"github.com/semi-technologies/weaviate/entities/moduletools"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	"github.com/semi-technologies/weaviate/modules/text2vec-transformers/vectorizer"
 	"github.com/sirupsen/logrus"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/modulecapabilities"
+	"github.com/weaviate/weaviate/entities/moduletools"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/modules/text2vec-transformers/vectorizer"
 )
 
 func (m *TransformersModule) ClassConfigDefaults() map[string]interface{} {
@@ -44,6 +44,9 @@ func (m *TransformersModule) ValidateClass(ctx context.Context,
 	class *models.Class, cfg moduletools.ClassConfig,
 ) error {
 	settings := vectorizer.NewClassSettings(cfg)
+	if err := settings.Validate(class); err != nil {
+		return err
+	}
 	return NewConfigValidator(m.logger).Do(ctx, class, cfg, settings)
 }
 
@@ -98,8 +101,7 @@ func (cv *ConfigValidator) validateIndexState(ctx context.Context,
 				"got %v", prop.Name, prop.DataType)
 		}
 
-		if prop.DataType[0] != string(schema.DataTypeString) &&
-			prop.DataType[0] != string(schema.DataTypeText) {
+		if prop.DataType[0] != string(schema.DataTypeText) {
 			// we can only vectorize text-like props
 			continue
 		}
@@ -133,8 +135,7 @@ func (cv *ConfigValidator) checkForPossibilityOfDuplicateVectors(
 	// search if there is at least one indexed, string/text prop. If found exit
 	for _, prop := range class.Properties {
 		// length check skipped, because validation has already passed
-		if prop.DataType[0] != string(schema.DataTypeString) &&
-			prop.DataType[0] != string(schema.DataTypeText) {
+		if prop.DataType[0] != string(schema.DataTypeText) {
 			// we can only vectorize text-like props
 			continue
 		}

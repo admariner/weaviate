@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package schema
@@ -14,6 +14,7 @@ package schema
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"unicode"
 )
 
@@ -22,8 +23,6 @@ type DataType string
 const (
 	// DataTypeCRef The data type is a cross-reference, it is starting with a capital letter
 	DataTypeCRef DataType = "cref"
-	// DataTypeString The data type is a value of type string
-	DataTypeString DataType = "string"
 	// DataTypeText The data type is a value of type string
 	DataTypeText DataType = "text"
 	// DataTypeInt The data type is a value of type int
@@ -34,15 +33,13 @@ const (
 	DataTypeBoolean DataType = "boolean"
 	// DataTypeDate The data type is a value of type date
 	DataTypeDate DataType = "date"
-	// DataTypeGeoCoordinates is used to represent geo coordintaes, i.e. latitude
+	// DataTypeGeoCoordinates is used to represent geo coordinates, i.e. latitude
 	// and longitude pairs of locations on earth
 	DataTypeGeoCoordinates DataType = "geoCoordinates"
 	// DataTypePhoneNumber represents a parsed/to-be-parsed phone number
 	DataTypePhoneNumber DataType = "phoneNumber"
 	// DataTypeBlob represents a base64 encoded data
 	DataTypeBlob DataType = "blob"
-	// DataTypeArrayString The data type is a value of type string array
-	DataTypeStringArray DataType = "string[]"
 	// DataTypeTextArray The data type is a value of type string array
 	DataTypeTextArray DataType = "text[]"
 	// DataTypeIntArray The data type is a value of type int array
@@ -53,15 +50,58 @@ const (
 	DataTypeBooleanArray DataType = "boolean[]"
 	// DataTypeDateArray The data type is a value of type date array
 	DataTypeDateArray DataType = "date[]"
+	// DataTypeUUID is a native UUID data type. It is stored in it's raw byte
+	// representation and therefore takes up less space than storing a UUID as a
+	// string
+	DataTypeUUID DataType = "uuid"
+	// DataTypeUUIDArray is the array version of DataTypeUUID
+	DataTypeUUIDArray DataType = "uuid[]"
+
+	DataTypeObject      DataType = "object"
+	DataTypeObjectArray DataType = "object[]"
+
+	// deprecated as of v1.19, replaced by DataTypeText + relevant tokenization setting
+	// DataTypeString The data type is a value of type string
+	DataTypeString DataType = "string"
+	// deprecated as of v1.19, replaced by DataTypeTextArray + relevant tokenization setting
+	// DataTypeArrayString The data type is a value of type string array
+	DataTypeStringArray DataType = "string[]"
 )
 
-var PrimitiveDataTypes []DataType = []DataType{DataTypeString, DataTypeText, DataTypeInt, DataTypeNumber, DataTypeBoolean, DataTypeDate, DataTypeGeoCoordinates, DataTypePhoneNumber, DataTypeBlob, DataTypeStringArray, DataTypeTextArray, DataTypeIntArray, DataTypeNumberArray, DataTypeBooleanArray, DataTypeDateArray}
+func (dt DataType) String() string {
+	return string(dt)
+}
+
+func (dt DataType) PropString() []string {
+	return []string{dt.String()}
+}
+
+func (dt DataType) AsName() string {
+	return strings.ReplaceAll(dt.String(), "[]", "Array")
+}
+
+var PrimitiveDataTypes []DataType = []DataType{
+	DataTypeText, DataTypeInt, DataTypeNumber, DataTypeBoolean, DataTypeDate,
+	DataTypeGeoCoordinates, DataTypePhoneNumber, DataTypeBlob, DataTypeTextArray,
+	DataTypeIntArray, DataTypeNumberArray, DataTypeBooleanArray, DataTypeDateArray,
+	DataTypeUUID, DataTypeUUIDArray,
+}
+
+var NestedDataTypes []DataType = []DataType{
+	DataTypeObject, DataTypeObjectArray,
+}
+
+var DeprecatedPrimitiveDataTypes []DataType = []DataType{
+	// deprecated as of v1.19
+	DataTypeString, DataTypeStringArray,
+}
 
 type PropertyKind int
 
 const (
 	PropertyKindPrimitive PropertyKind = 1
 	PropertyKindRef       PropertyKind = 2
+	PropertyKindNested    PropertyKind = 3
 )
 
 type PropertyDataType interface {
@@ -71,12 +111,15 @@ type PropertyDataType interface {
 	IsReference() bool
 	Classes() []ClassName
 	ContainsClass(name ClassName) bool
+	IsNested() bool
+	AsNested() DataType
 }
 
 type propertyDataType struct {
 	kind          PropertyKind
 	primitiveType DataType
 	classes       []ClassName
+	nestedType    DataType
 }
 
 // IsPropertyLength returns if a string is a filters for property length. They have the form len(*PROPNAME*)
@@ -103,7 +146,10 @@ func IsArrayType(dt DataType) (DataType, bool) {
 		return DataTypeBoolean, true
 	case DataTypeDateArray:
 		return DataTypeDate, true
-
+	case DataTypeUUIDArray:
+		return DataTypeUUID, true
+	case DataTypeObjectArray:
+		return DataTypeObject, true
 	default:
 		return "", false
 	}
@@ -118,7 +164,7 @@ func (p *propertyDataType) IsPrimitive() bool {
 }
 
 func (p *propertyDataType) AsPrimitive() DataType {
-	if p.kind != PropertyKindPrimitive {
+	if !p.IsPrimitive() {
 		panic("not primitive type")
 	}
 
@@ -130,7 +176,7 @@ func (p *propertyDataType) IsReference() bool {
 }
 
 func (p *propertyDataType) Classes() []ClassName {
-	if p.kind != PropertyKindRef {
+	if !p.IsReference() {
 		panic("not MultipleRef type")
 	}
 
@@ -138,7 +184,7 @@ func (p *propertyDataType) Classes() []ClassName {
 }
 
 func (p *propertyDataType) ContainsClass(needle ClassName) bool {
-	if p.kind != PropertyKindRef {
+	if !p.IsReference() {
 		panic("not MultipleRef type")
 	}
 
@@ -149,6 +195,17 @@ func (p *propertyDataType) ContainsClass(needle ClassName) bool {
 	}
 
 	return false
+}
+
+func (p *propertyDataType) IsNested() bool {
+	return p.kind == PropertyKindNested
+}
+
+func (p *propertyDataType) AsNested() DataType {
+	if !p.IsNested() {
+		panic("not nested type")
+	}
+	return p.nestedType
 }
 
 // Based on the schema, return a valid description of the defined datatype
@@ -173,56 +230,86 @@ func (s *Schema) FindPropertyDataTypeWithRefs(
 ) (PropertyDataType, error) {
 	if len(dataType) < 1 {
 		return nil, errors.New("dataType must have at least one element")
-	} else if len(dataType) == 1 {
-		someDataType := dataType[0]
-		if len(someDataType) == 0 {
-			return nil, fmt.Errorf("dataType cannot be an empty string")
-		}
-		firstLetter := rune(someDataType[0])
-		if unicode.IsLower(firstLetter) {
-			switch someDataType {
-			case string(DataTypeString), string(DataTypeText),
-				string(DataTypeInt), string(DataTypeNumber),
-				string(DataTypeBoolean), string(DataTypeDate), string(DataTypeGeoCoordinates),
-				string(DataTypePhoneNumber), string(DataTypeBlob),
-				string(DataTypeStringArray), string(DataTypeTextArray),
-				string(DataTypeIntArray), string(DataTypeNumberArray),
-				string(DataTypeBooleanArray), string(DataTypeDateArray):
+	}
+	if len(dataType) == 1 {
+		for _, dt := range append(PrimitiveDataTypes, DeprecatedPrimitiveDataTypes...) {
+			if dataType[0] == dt.String() {
 				return &propertyDataType{
 					kind:          PropertyKindPrimitive,
-					primitiveType: DataType(someDataType),
+					primitiveType: dt,
 				}, nil
-			default:
-				return nil, fmt.Errorf("Unknown primitive data type '%s'", someDataType)
 			}
+		}
+		for _, dt := range NestedDataTypes {
+			if dataType[0] == dt.String() {
+				return &propertyDataType{
+					kind:       PropertyKindNested,
+					nestedType: dt,
+				}, nil
+			}
+		}
+		if len(dataType[0]) == 0 {
+			return nil, fmt.Errorf("dataType cannot be an empty string")
+		}
+		firstLetter := rune(dataType[0][0])
+		if unicode.IsLower(firstLetter) {
+			return nil, fmt.Errorf("Unknown primitive data type '%s'", dataType[0])
 		}
 	}
 	/* implies len(dataType) > 1, or first element is a class already */
 	var classes []ClassName
 
 	for _, someDataType := range dataType {
-		if ValidNetworkClassName(someDataType) {
-			// this is a network instance
-			classes = append(classes, ClassName(someDataType))
-		} else {
-			// this is a local reference
-			className, err := ValidateClassName(someDataType)
-			if err != nil {
-				return nil, err
-			}
-
-			if beloningToClass != className && !relaxCrossRefValidation {
-				if s.FindClassByName(className) == nil {
-					return nil, ErrRefToNonexistentClass
-				}
-			}
-
-			classes = append(classes, className)
+		className, err := ValidateClassName(someDataType)
+		if err != nil {
+			return nil, err
 		}
+
+		if beloningToClass != className && !relaxCrossRefValidation {
+			if s.FindClassByName(className) == nil {
+				return nil, ErrRefToNonexistentClass
+			}
+		}
+
+		classes = append(classes, className)
 	}
 
 	return &propertyDataType{
 		kind:    PropertyKindRef,
 		classes: classes,
 	}, nil
+}
+
+func AsPrimitive(dataType []string) (DataType, bool) {
+	if len(dataType) == 1 {
+		for _, dt := range append(PrimitiveDataTypes, DeprecatedPrimitiveDataTypes...) {
+			if dataType[0] == dt.String() {
+				return dt, true
+			}
+		}
+		if len(dataType[0]) == 0 {
+			return "", true
+		}
+	}
+	return "", false
+}
+
+func AsNested(dataType []string) (DataType, bool) {
+	if len(dataType) == 1 {
+		for _, dt := range NestedDataTypes {
+			if dataType[0] == dt.String() {
+				return dt, true
+			}
+		}
+	}
+	return "", false
+}
+
+func IsNested(dataType DataType) bool {
+	for _, dt := range NestedDataTypes {
+		if dt == dataType {
+			return true
+		}
+	}
+	return false
 }

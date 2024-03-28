@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package cluster
@@ -22,30 +22,73 @@ import (
 )
 
 type State struct {
-	list *memberlist.Memberlist
+	config   Config
+	list     *memberlist.Memberlist
+	delegate delegate
 }
 
 type Config struct {
-	Hostname       string `json:"hostname" yaml:"hostname"`
-	GossipBindPort int    `json:"gossipBindPort" yaml:"gossipBindPort"`
-	DataBindPort   int    `json:"dataBindPort" yaml:"dataBindPort"`
-	Join           string `json:"join" yaml:"join"`
+	Hostname                string     `json:"hostname" yaml:"hostname"`
+	GossipBindPort          int        `json:"gossipBindPort" yaml:"gossipBindPort"`
+	DataBindPort            int        `json:"dataBindPort" yaml:"dataBindPort"`
+	Join                    string     `json:"join" yaml:"join"`
+	IgnoreStartupSchemaSync bool       `json:"ignoreStartupSchemaSync" yaml:"ignoreStartupSchemaSync"`
+	SkipSchemaSyncRepair    bool       `json:"skipSchemaSyncRepair" yaml:"skipSchemaSyncRepair"`
+	AuthConfig              AuthConfig `json:"auth" yaml:"auth"`
+	AdvertiseAddr           string     `json:"advertiseAddr" yaml:"advertiseAddr"`
+	AdvertisePort           int        `json:"advertisePort" yaml:"advertisePort"`
 }
 
-func Init(userConfig Config, logger logrus.FieldLogger) (*State, error) {
-	cfg := memberlist.DefaultLocalConfig()
-	cfg.LogOutput = newLogParser(logger)
+type AuthConfig struct {
+	BasicAuth BasicAuth `json:"basic" yaml:"basic"`
+}
 
+type BasicAuth struct {
+	Username string `json:"username" yaml:"username"`
+	Password string `json:"password" yaml:"password"`
+}
+
+func (ba BasicAuth) Enabled() bool {
+	return ba.Username != "" || ba.Password != ""
+}
+
+func Init(userConfig Config, dataPath string, logger logrus.FieldLogger) (_ *State, err error) {
+	cfg := memberlist.DefaultLANConfig()
+	cfg.LogOutput = newLogParser(logger)
 	if userConfig.Hostname != "" {
 		cfg.Name = userConfig.Hostname
 	}
-
+	state := State{
+		config: userConfig,
+		delegate: delegate{
+			Name:     cfg.Name,
+			dataPath: dataPath,
+			log:      logger,
+		},
+	}
+	if err := state.delegate.init(diskSpace); err != nil {
+		logger.WithField("action", "init_state.delete_init").Error(err)
+	}
+	cfg.Delegate = &state.delegate
+	cfg.Events = events{&state.delegate}
 	if userConfig.GossipBindPort != 0 {
 		cfg.BindPort = userConfig.GossipBindPort
 	}
 
-	list, err := memberlist.Create(cfg)
-	if err != nil {
+	if userConfig.AdvertiseAddr != "" {
+		cfg.AdvertiseAddr = userConfig.AdvertiseAddr
+	}
+
+	if userConfig.AdvertisePort != 0 {
+		cfg.AdvertisePort = userConfig.AdvertisePort
+	}
+
+	if state.list, err = memberlist.Create(cfg); err != nil {
+		logger.WithField("action", "memberlist_init").
+			WithField("hostname", userConfig.Hostname).
+			WithField("bind_port", userConfig.GossipBindPort).
+			WithError(err).
+			Error("memberlist not created")
 		return nil, errors.Wrap(err, "create member list")
 	}
 
@@ -64,14 +107,17 @@ func Init(userConfig Config, logger logrus.FieldLogger) (*State, error) {
 				Warn("specified hostname to join cluster cannot be resolved. This is fine" +
 					"if this is the first node of a new cluster, but problematic otherwise.")
 		} else {
-			_, err := list.Join(joinAddr)
+			_, err := state.list.Join(joinAddr)
 			if err != nil {
+				logger.WithField("action", "memberlist_init").
+					WithField("remote_hostname", joinAddr).
+					WithError(err).
+					Error("memberlist join not successful")
 				return nil, errors.Wrap(err, "join cluster")
 			}
 		}
 	}
-
-	return &State{list: list}, nil
+	return &state, nil
 }
 
 // Hostnames for all live members, except self. Use AllHostnames to include
@@ -120,6 +166,12 @@ func (s *State) AllNames() []string {
 	return out
 }
 
+// Candidates returns list of nodes (names) sorted by the
+// free amount of disk space in descending order
+func (s *State) Candidates() []string {
+	return s.delegate.sortCandidates(s.AllNames())
+}
+
 // All node names (not their hostnames!) for live members, including self.
 func (s *State) NodeCount() int {
 	return s.list.NumMembers()
@@ -143,4 +195,16 @@ func (s *State) NodeHostname(nodeName string) (string, bool) {
 	}
 
 	return "", false
+}
+
+func (s *State) SchemaSyncIgnored() bool {
+	return s.config.IgnoreStartupSchemaSync
+}
+
+func (s *State) SkipSchemaRepair() bool {
+	return s.config.SkipSchemaSyncRepair
+}
+
+func (s *State) NodeInfo(node string) (NodeInfo, bool) {
+	return s.delegate.get(node)
 }

@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package test
@@ -15,13 +15,14 @@ import (
 	"os"
 	"testing"
 
-	"github.com/semi-technologies/weaviate/client/nodes"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/test/helper"
-	"github.com/semi-technologies/weaviate/test/helper/sample-schema/books"
-	"github.com/semi-technologies/weaviate/test/helper/sample-schema/multishard"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/client/nodes"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/verbosity"
+	"github.com/weaviate/weaviate/test/helper"
+	"github.com/weaviate/weaviate/test/helper/sample-schema/books"
+	"github.com/weaviate/weaviate/test/helper/sample-schema/multishard"
 )
 
 func Test_WeaviateCluster_NodesAPI(t *testing.T) {
@@ -48,7 +49,9 @@ func Test_WeaviateCluster_NodesAPI(t *testing.T) {
 		for _, endpoint := range []string{weaviateNode1Endpoint, weaviateNode2Endpoint} {
 			t.Run(endpoint, func(t *testing.T) {
 				helper.SetupClient(os.Getenv(endpoint))
-				resp, err := helper.Client(t).Nodes.NodesGet(nodes.NewNodesGetParams(), nil)
+				verbose := verbosity.OutputVerbose
+				params := nodes.NewNodesGetParams().WithOutput(&verbose)
+				resp, err := helper.Client(t).Nodes.NodesGet(params, nil)
 				require.Nil(t, err)
 
 				nodeStatusResp := resp.GetPayload()
@@ -77,6 +80,7 @@ func Test_WeaviateCluster_NodesAPI(t *testing.T) {
 						assert.True(t, len(shard.Name) > 0)
 						assert.True(t, shard.Class == multiShardClass.Class || shard.Class == booksClass.Class)
 						assert.GreaterOrEqual(t, shard.ObjectCount, int64(0))
+						assert.GreaterOrEqual(t, shard.VectorQueueLength, int64(0))
 						objectCount += shard.ObjectCount
 						shardCount++
 					}

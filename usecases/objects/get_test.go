@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package objects
@@ -17,16 +17,16 @@ import (
 	"testing"
 
 	"github.com/go-openapi/strfmt"
-	"github.com/semi-technologies/weaviate/entities/additional"
-	"github.com/semi-technologies/weaviate/entities/filters"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	"github.com/semi-technologies/weaviate/entities/search"
-	"github.com/semi-technologies/weaviate/usecases/config"
 	"github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/entities/additional"
+	"github.com/weaviate/weaviate/entities/filters"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/search"
+	"github.com/weaviate/weaviate/usecases/config"
 )
 
 func Test_GetAction(t *testing.T) {
@@ -73,7 +73,8 @@ func Test_GetAction(t *testing.T) {
 
 		vectorRepo.On("ObjectByID", id, mock.Anything, mock.Anything).Return((*search.Result)(nil), nil).Once()
 
-		_, err := manager.GetObject(context.Background(), &models.Principal{}, "", id, additional.Properties{}, nil)
+		_, err := manager.GetObject(context.Background(), &models.Principal{}, "",
+			id, additional.Properties{}, nil, "")
 		assert.Equal(t, NewErrNotFound("no object with id '99ee9968-22ec-416a-9032-cff80f2f7fdf'"), err)
 	})
 
@@ -95,8 +96,8 @@ func Test_GetAction(t *testing.T) {
 			VectorWeights: (map[string]string)(nil),
 		}
 
-		res, err := manager.GetObject(context.Background(),
-			&models.Principal{}, "", id, additional.Properties{}, nil)
+		res, err := manager.GetObject(context.Background(), &models.Principal{}, "",
+			id, additional.Properties{}, nil, "")
 		require.Nil(t, err)
 		assert.Equal(t, expected, res)
 	})
@@ -124,8 +125,8 @@ func Test_GetAction(t *testing.T) {
 
 		metrics.On("AddUsageDimensions", "ActionClass", "get_rest", "single_include_vector", 3)
 
-		res, err := manager.GetObject(context.Background(),
-			&models.Principal{}, "", id, additional.Properties{Vector: true}, nil)
+		res, err := manager.GetObject(context.Background(), &models.Principal{}, "",
+			id, additional.Properties{Vector: true}, nil, "")
 		require.Nil(t, err)
 		assert.Equal(t, expected, res)
 	})
@@ -141,7 +142,7 @@ func Test_GetAction(t *testing.T) {
 			Vector:    []float32{1, 2, 3},
 			Dims:      3,
 		}
-		vectorRepo.On("Object", "ActionClass", id, mock.Anything, mock.Anything).
+		vectorRepo.On("Object", "ActionClass", id, mock.Anything, mock.Anything, "").
 			Return(result, nil).Once()
 
 		expected := &models.Object{
@@ -155,7 +156,7 @@ func Test_GetAction(t *testing.T) {
 		metrics.On("AddUsageDimensions", "ActionClass", "get_rest", "single_include_vector", 3)
 
 		res, err := manager.GetObject(context.Background(), &models.Principal{},
-			"ActionClass", id, additional.Properties{Vector: true}, nil)
+			"ActionClass", id, additional.Properties{Vector: true}, nil, "")
 		require.Nil(t, err)
 		assert.Equal(t, expected, res)
 	})
@@ -183,7 +184,7 @@ func Test_GetAction(t *testing.T) {
 			},
 		}
 
-		res, err := manager.GetObjects(context.Background(), &models.Principal{}, nil, nil, nil, nil, additional.Properties{})
+		res, err := manager.GetObjects(context.Background(), &models.Principal{}, nil, nil, nil, nil, nil, additional.Properties{}, "")
 		require.Nil(t, err)
 		assert.Equal(t, expected, res)
 	})
@@ -216,7 +217,7 @@ func Test_GetAction(t *testing.T) {
 			},
 		}
 
-		res, err := manager.GetObjects(context.Background(), &models.Principal{}, nil, nil, nil, nil, additional.Properties{Vector: true})
+		res, err := manager.GetObjects(context.Background(), &models.Principal{}, nil, nil, nil, nil, nil, additional.Properties{Vector: true}, "")
 		require.Nil(t, err)
 		assert.Equal(t, expected, res)
 	})
@@ -244,8 +245,7 @@ func Test_GetAction(t *testing.T) {
 			},
 		}
 
-		res, err := manager.GetObjects(context.Background(), &models.Principal{},
-			ptInt64(7), ptInt64(2), nil, nil, additional.Properties{})
+		res, err := manager.GetObjects(context.Background(), &models.Principal{}, ptInt64(7), ptInt64(2), nil, nil, nil, additional.Properties{}, "")
 		require.Nil(t, err)
 		assert.Equal(t, expected, res)
 	})
@@ -253,8 +253,7 @@ func Test_GetAction(t *testing.T) {
 	t.Run("with an offset greater than the maximum", func(t *testing.T) {
 		reset()
 
-		_, err := manager.GetObjects(context.Background(), &models.Principal{},
-			ptInt64(201), ptInt64(2), nil, nil, additional.Properties{})
+		_, err := manager.GetObjects(context.Background(), &models.Principal{}, ptInt64(201), ptInt64(2), nil, nil, nil, additional.Properties{}, "")
 		require.NotNil(t, err)
 		assert.Contains(t, err.Error(), "query maximum results exceeded")
 	})
@@ -262,8 +261,7 @@ func Test_GetAction(t *testing.T) {
 	t.Run("with a limit greater than the minimum", func(t *testing.T) {
 		reset()
 
-		_, err := manager.GetObjects(context.Background(), &models.Principal{},
-			ptInt64(0), ptInt64(202), nil, nil, additional.Properties{})
+		_, err := manager.GetObjects(context.Background(), &models.Principal{}, ptInt64(0), ptInt64(202), nil, nil, nil, additional.Properties{}, "")
 		require.NotNil(t, err)
 		assert.Contains(t, err.Error(), "query maximum results exceeded")
 	})
@@ -271,8 +269,7 @@ func Test_GetAction(t *testing.T) {
 	t.Run("with limit and offset individually smaller, but combined greater", func(t *testing.T) {
 		reset()
 
-		_, err := manager.GetObjects(context.Background(), &models.Principal{},
-			ptInt64(150), ptInt64(150), nil, nil, additional.Properties{})
+		_, err := manager.GetObjects(context.Background(), &models.Principal{}, ptInt64(150), ptInt64(150), nil, nil, nil, additional.Properties{}, "")
 		require.NotNil(t, err)
 		assert.Contains(t, err.Error(), "query maximum results exceeded")
 	})
@@ -289,12 +286,12 @@ func Test_GetAction(t *testing.T) {
 					Schema:    map[string]interface{}{"foo": "bar"},
 				}
 				vectorRepo.On("ObjectByID", id, mock.Anything, mock.Anything).Return(result, nil).Once()
-				_, err := manager.GetObject(context.Background(), &models.Principal{}, "", id,
-					additional.Properties{
+				_, err := manager.GetObject(context.Background(), &models.Principal{}, "",
+					id, additional.Properties{
 						ModuleParams: map[string]interface{}{
 							"featureProjection": getDefaultParam("featureProjection"),
 						},
-					}, nil)
+					}, nil, "")
 				assert.Equal(t, errors.New("get extend: unknown capability: featureProjection"), err)
 			})
 
@@ -308,12 +305,12 @@ func Test_GetAction(t *testing.T) {
 					Schema:    map[string]interface{}{"foo": "bar"},
 				}
 				vectorRepo.On("ObjectByID", id, mock.Anything, mock.Anything).Return(result, nil).Once()
-				_, err := manager.GetObject(context.Background(), &models.Principal{}, "", id,
-					additional.Properties{
+				_, err := manager.GetObject(context.Background(), &models.Principal{}, "",
+					id, additional.Properties{
 						ModuleParams: map[string]interface{}{
 							"semanticPath": getDefaultParam("semanticPath"),
 						},
-					}, nil)
+					}, nil, "")
 				assert.Equal(t, errors.New("get extend: unknown capability: semanticPath"), err)
 			})
 
@@ -362,12 +359,12 @@ func Test_GetAction(t *testing.T) {
 					},
 				}
 
-				res, err := manager.GetObject(context.Background(), &models.Principal{}, "", id,
-					additional.Properties{
+				res, err := manager.GetObject(context.Background(), &models.Principal{}, "",
+					id, additional.Properties{
 						ModuleParams: map[string]interface{}{
 							"nearestNeighbors": true,
 						},
-					}, nil)
+					}, nil, "")
 				require.Nil(t, err)
 				assert.Equal(t, expected, res)
 			})
@@ -385,7 +382,7 @@ func Test_GetAction(t *testing.T) {
 						Schema:    map[string]interface{}{"foo": "bar"},
 					},
 				}
-				vectorRepo.On("ObjectSearch", mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+				vectorRepo.On("ObjectSearch", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
 					mock.Anything).Return(result, nil).Once()
 				extender.multi = []search.Result{
 					{
@@ -424,12 +421,11 @@ func Test_GetAction(t *testing.T) {
 					},
 				}
 
-				res, err := manager.GetObjects(context.Background(), &models.Principal{}, nil, ptInt64(10), nil, nil,
-					additional.Properties{
-						ModuleParams: map[string]interface{}{
-							"nearestNeighbors": true,
-						},
-					})
+				res, err := manager.GetObjects(context.Background(), &models.Principal{}, nil, ptInt64(10), nil, nil, nil, additional.Properties{
+					ModuleParams: map[string]interface{}{
+						"nearestNeighbors": true,
+					},
+				}, "")
 				require.Nil(t, err)
 				assert.Equal(t, expected, res)
 			})
@@ -445,7 +441,7 @@ func Test_GetAction(t *testing.T) {
 						Schema:    map[string]interface{}{"foo": "bar"},
 					},
 				}
-				vectorRepo.On("ObjectSearch", mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+				vectorRepo.On("ObjectSearch", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
 					mock.Anything).Return(result, nil).Once()
 				projectorFake.multi = []search.Result{
 					{
@@ -474,12 +470,11 @@ func Test_GetAction(t *testing.T) {
 					},
 				}
 
-				res, err := manager.GetObjects(context.Background(), &models.Principal{}, nil, ptInt64(10), nil, nil,
-					additional.Properties{
-						ModuleParams: map[string]interface{}{
-							"featureProjection": getDefaultParam("featureProjection"),
-						},
-					})
+				res, err := manager.GetObjects(context.Background(), &models.Principal{}, nil, ptInt64(10), nil, nil, nil, additional.Properties{
+					ModuleParams: map[string]interface{}{
+						"featureProjection": getDefaultParam("featureProjection"),
+					},
+				}, "")
 				require.Nil(t, err)
 				assert.Equal(t, expected, res)
 			})
@@ -507,8 +502,8 @@ func Test_GetAction(t *testing.T) {
 					},
 				},
 			}
-			vectorRepo.On("ObjectSearch", mock.Anything, mock.Anything, expectedSort, mock.Anything,
-				mock.Anything).Return(result, nil).Once()
+			vectorRepo.On("ObjectSearch", mock.AnythingOfType("int"), mock.AnythingOfType("int"), expectedSort,
+				mock.Anything, mock.Anything, mock.Anything).Return(result, nil).Once()
 			projectorFake.multi = []search.Result{
 				{
 					ID:        id,
@@ -532,8 +527,7 @@ func Test_GetAction(t *testing.T) {
 				},
 			}
 
-			res, err := manager.GetObjects(context.Background(), &models.Principal{}, nil, ptInt64(10),
-				&sort, &asc, additional.Properties{})
+			res, err := manager.GetObjects(context.Background(), &models.Principal{}, nil, ptInt64(10), &sort, &asc, nil, additional.Properties{}, "")
 			require.Nil(t, err)
 			assert.Equal(t, expected, res)
 		})
@@ -560,7 +554,7 @@ func Test_GetAction(t *testing.T) {
 					},
 				},
 			}
-			vectorRepo.On("ObjectSearch", mock.Anything, mock.Anything, expectedSort, mock.Anything,
+			vectorRepo.On("ObjectSearch", mock.Anything, mock.Anything, expectedSort, mock.Anything, mock.Anything,
 				mock.Anything).Return(result, nil).Once()
 			projectorFake.multi = []search.Result{
 				{
@@ -585,8 +579,7 @@ func Test_GetAction(t *testing.T) {
 				},
 			}
 
-			res, err := manager.GetObjects(context.Background(), &models.Principal{}, nil, ptInt64(10),
-				&sort, &asc, additional.Properties{})
+			res, err := manager.GetObjects(context.Background(), &models.Principal{}, nil, ptInt64(10), &sort, &asc, nil, additional.Properties{}, "")
 			require.Nil(t, err)
 			assert.Equal(t, expected, res)
 		})
@@ -609,11 +602,10 @@ func Test_GetAction(t *testing.T) {
 				},
 			}
 
-			vectorRepo.On("ObjectSearch", mock.Anything, mock.Anything, expectedSort, mock.Anything,
+			vectorRepo.On("ObjectSearch", mock.Anything, mock.Anything, expectedSort, mock.Anything, mock.Anything,
 				mock.Anything).Return(result, nil).Once()
 
-			_, err := manager.GetObjects(context.Background(), &models.Principal{}, nil, ptInt64(10),
-				&sort, nil, additional.Properties{})
+			_, err := manager.GetObjects(context.Background(), &models.Principal{}, nil, ptInt64(10), &sort, nil, nil, additional.Properties{}, "")
 			require.Nil(t, err)
 		})
 
@@ -636,11 +628,10 @@ func Test_GetAction(t *testing.T) {
 				},
 			}
 
-			vectorRepo.On("ObjectSearch", mock.Anything, mock.Anything, expectedSort, mock.Anything,
+			vectorRepo.On("ObjectSearch", mock.Anything, mock.Anything, expectedSort, mock.Anything, mock.Anything,
 				mock.Anything).Return(result, nil).Once()
 
-			_, err := manager.GetObjects(context.Background(), &models.Principal{}, nil, ptInt64(10),
-				&sort, nil, additional.Properties{})
+			_, err := manager.GetObjects(context.Background(), &models.Principal{}, nil, ptInt64(10), &sort, nil, nil, additional.Properties{}, "")
 			require.Nil(t, err)
 		})
 
@@ -659,11 +650,10 @@ func Test_GetAction(t *testing.T) {
 				},
 			}
 
-			vectorRepo.On("ObjectSearch", mock.Anything, mock.Anything, expectedSort, mock.Anything,
+			vectorRepo.On("ObjectSearch", mock.Anything, mock.Anything, expectedSort, mock.Anything, mock.Anything,
 				mock.Anything).Return(result, nil).Once()
 
-			_, err := manager.GetObjects(context.Background(), &models.Principal{}, nil, ptInt64(10),
-				nil, &order, additional.Properties{})
+			_, err := manager.GetObjects(context.Background(), &models.Principal{}, nil, ptInt64(10), nil, &order, nil, additional.Properties{}, "")
 			require.Nil(t, err)
 		})
 	})
@@ -712,8 +702,8 @@ func Test_GetThing(t *testing.T) {
 
 		vectorRepo.On("ObjectByID", id, mock.Anything, mock.Anything).Return((*search.Result)(nil), nil).Once()
 
-		_, err := manager.GetObject(context.Background(),
-			&models.Principal{}, "", id, additional.Properties{}, nil)
+		_, err := manager.GetObject(context.Background(), &models.Principal{}, "", id,
+			additional.Properties{}, nil, "")
 		assert.Equal(t, NewErrNotFound("no object with id '99ee9968-22ec-416a-9032-cff80f2f7fdf'"), err)
 	})
 
@@ -735,8 +725,8 @@ func Test_GetThing(t *testing.T) {
 			VectorWeights: (map[string]string)(nil),
 		}
 
-		res, err := manager.GetObject(context.Background(),
-			&models.Principal{}, "", id, additional.Properties{}, nil)
+		res, err := manager.GetObject(context.Background(), &models.Principal{}, "", id,
+			additional.Properties{}, nil, "")
 		require.Nil(t, err)
 		assert.Equal(t, expected, res)
 	})
@@ -752,7 +742,7 @@ func Test_GetThing(t *testing.T) {
 				Schema:    map[string]interface{}{"foo": "bar"},
 			},
 		}
-		vectorRepo.On("ObjectSearch", mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+		vectorRepo.On("ObjectSearch", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
 			mock.Anything).Return(results, nil).Once()
 
 		expected := []*models.Object{
@@ -764,7 +754,7 @@ func Test_GetThing(t *testing.T) {
 			},
 		}
 
-		res, err := manager.GetObjects(context.Background(), &models.Principal{}, nil, nil, nil, nil, additional.Properties{})
+		res, err := manager.GetObjects(context.Background(), &models.Principal{}, nil, nil, nil, nil, nil, additional.Properties{}, "")
 		require.Nil(t, err)
 		assert.Equal(t, expected, res)
 	})
@@ -781,12 +771,12 @@ func Test_GetThing(t *testing.T) {
 					Schema:    map[string]interface{}{"foo": "bar"},
 				}
 				vectorRepo.On("ObjectByID", id, mock.Anything, mock.Anything).Return(result, nil).Once()
-				_, err := manager.GetObject(context.Background(), &models.Principal{}, "", id,
-					additional.Properties{
+				_, err := manager.GetObject(context.Background(), &models.Principal{}, "",
+					id, additional.Properties{
 						ModuleParams: map[string]interface{}{
 							"featureProjection": getDefaultParam("featureProjection"),
 						},
-					}, nil)
+					}, nil, "")
 				assert.Equal(t, errors.New("get extend: unknown capability: featureProjection"), err)
 			})
 
@@ -835,12 +825,12 @@ func Test_GetThing(t *testing.T) {
 					},
 				}
 
-				res, err := manager.GetObject(context.Background(), &models.Principal{}, "", id,
-					additional.Properties{
+				res, err := manager.GetObject(context.Background(), &models.Principal{}, "",
+					id, additional.Properties{
 						ModuleParams: map[string]interface{}{
 							"nearestNeighbors": true,
 						},
-					}, nil)
+					}, nil, "")
 				require.Nil(t, err)
 				assert.Equal(t, expected, res)
 			})
@@ -858,7 +848,7 @@ func Test_GetThing(t *testing.T) {
 						Schema:    map[string]interface{}{"foo": "bar"},
 					},
 				}
-				vectorRepo.On("ObjectSearch", mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+				vectorRepo.On("ObjectSearch", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
 					mock.Anything).Return(result, nil).Once()
 				extender.multi = []search.Result{
 					{
@@ -897,12 +887,11 @@ func Test_GetThing(t *testing.T) {
 					},
 				}
 
-				res, err := manager.GetObjects(context.Background(), &models.Principal{}, nil, ptInt64(10), nil, nil,
-					additional.Properties{
-						ModuleParams: map[string]interface{}{
-							"nearestNeighbors": true,
-						},
-					})
+				res, err := manager.GetObjects(context.Background(), &models.Principal{}, nil, ptInt64(10), nil, nil, nil, additional.Properties{
+					ModuleParams: map[string]interface{}{
+						"nearestNeighbors": true,
+					},
+				}, "")
 				require.Nil(t, err)
 				assert.Equal(t, expected, res)
 			})
@@ -918,7 +907,7 @@ func Test_GetThing(t *testing.T) {
 						Schema:    map[string]interface{}{"foo": "bar"},
 					},
 				}
-				vectorRepo.On("ObjectSearch", mock.Anything, mock.Anything, mock.Anything, mock.Anything,
+				vectorRepo.On("ObjectSearch", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything,
 					mock.Anything).Return(result, nil).Once()
 				projectorFake.multi = []search.Result{
 					{
@@ -947,12 +936,11 @@ func Test_GetThing(t *testing.T) {
 					},
 				}
 
-				res, err := manager.GetObjects(context.Background(), &models.Principal{}, nil, ptInt64(10), nil, nil,
-					additional.Properties{
-						ModuleParams: map[string]interface{}{
-							"featureProjection": getDefaultParam("featureProjection"),
-						},
-					})
+				res, err := manager.GetObjects(context.Background(), &models.Principal{}, nil, ptInt64(10), nil, nil, nil, additional.Properties{
+					ModuleParams: map[string]interface{}{
+						"featureProjection": getDefaultParam("featureProjection"),
+					},
+				}, "")
 				require.Nil(t, err)
 				assert.Equal(t, expected, res)
 			})
@@ -984,13 +972,13 @@ func Test_GetObject(t *testing.T) {
 
 	t.Run("without projection", func(t *testing.T) {
 		m := newFakeGetManager(schema)
-		m.repo.On("Object", className, id, mock.Anything, mock.Anything).Return((*search.Result)(nil), nil).Once()
-		_, err := m.GetObject(context.Background(), &principal, className, id, adds, nil)
+		m.repo.On("Object", className, id, mock.Anything, mock.Anything, "").Return((*search.Result)(nil), nil).Once()
+		_, err := m.GetObject(context.Background(), &principal, className, id, adds, nil, "")
 		if err == nil {
 			t.Errorf("GetObject() must return an error for non existing object")
 		}
 
-		m.repo.On("Object", className, id, mock.Anything, mock.Anything).Return(result, nil).Once()
+		m.repo.On("Object", className, id, mock.Anything, mock.Anything, "").Return(result, nil).Once()
 		expected := &models.Object{
 			ID:            id,
 			Class:         className,
@@ -998,7 +986,7 @@ func Test_GetObject(t *testing.T) {
 			VectorWeights: (map[string]string)(nil),
 		}
 
-		got, err := m.GetObject(context.Background(), &principal, className, id, adds, nil)
+		got, err := m.GetObject(context.Background(), &principal, className, id, adds, nil, "")
 		require.Nil(t, err)
 		assert.Equal(t, expected, got)
 	})
@@ -1022,18 +1010,18 @@ func Test_GetObject(t *testing.T) {
 				},
 			},
 		}
-		m.repo.On("Object", className, id, mock.Anything, mock.Anything).Return(result, nil).Once()
+		m.repo.On("Object", className, id, mock.Anything, mock.Anything, "").Return(result, nil).Once()
 		_, err := m.GetObject(context.Background(), &principal, className, id,
 			additional.Properties{
 				ModuleParams: map[string]interface{}{
 					"Unknown": getDefaultParam("Unknown"),
 				},
-			}, nil)
+			}, nil, "")
 		if err == nil {
 			t.Errorf("GetObject() must return unknown feature projection error")
 		}
 
-		m.repo.On("Object", className, id, mock.Anything, mock.Anything).Return(result, nil).Once()
+		m.repo.On("Object", className, id, mock.Anything, mock.Anything, "").Return(result, nil).Once()
 		expected := &models.Object{
 			ID:            id,
 			Class:         className,
@@ -1056,7 +1044,7 @@ func Test_GetObject(t *testing.T) {
 				ModuleParams: map[string]interface{}{
 					"nearestNeighbors": true,
 				},
-			}, nil)
+			}, nil, "")
 		require.Nil(t, err)
 		assert.Equal(t, expected, res)
 	})

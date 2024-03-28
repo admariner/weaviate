@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 //go:build integrationTest
@@ -17,6 +17,8 @@ package clusterintegrationtest
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -24,29 +26,27 @@ import (
 	"sync"
 	"time"
 
-	"github.com/semi-technologies/weaviate/adapters/clients"
-	"github.com/semi-technologies/weaviate/adapters/handlers/rest/clusterapi"
-	"github.com/semi-technologies/weaviate/adapters/repos/db"
-	"github.com/semi-technologies/weaviate/entities/backup"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/modulecapabilities"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	modstgfs "github.com/semi-technologies/weaviate/modules/backup-filesystem"
-	ubak "github.com/semi-technologies/weaviate/usecases/backup"
-	"github.com/semi-technologies/weaviate/usecases/sharding"
 	"github.com/sirupsen/logrus/hooks/test"
+	"github.com/weaviate/weaviate/adapters/clients"
+	"github.com/weaviate/weaviate/adapters/handlers/rest/clusterapi"
+	"github.com/weaviate/weaviate/adapters/repos/db"
+	"github.com/weaviate/weaviate/entities/backup"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/modulecapabilities"
+	"github.com/weaviate/weaviate/entities/schema"
+	modstgfs "github.com/weaviate/weaviate/modules/backup-filesystem"
+	ubak "github.com/weaviate/weaviate/usecases/backup"
+	"github.com/weaviate/weaviate/usecases/sharding"
 )
 
 type node struct {
-	name             string
-	shardingState    *sharding.State
-	repo             *db.DB
-	schemaManager    *fakeSchemaManager
-	backupManager    *ubak.Manager
-	scheduler        *ubak.Scheduler
-	clusterAPIServer *httptest.Server
-	migrator         *db.Migrator
-	hostname         string
+	name          string
+	repo          *db.DB
+	schemaManager *fakeSchemaManager
+	backupManager *ubak.Handler
+	scheduler     *ubak.Scheduler
+	migrator      *db.Migrator
+	hostname      string
 }
 
 func (n *node) init(dirName string, shardStateRaw []byte,
@@ -68,12 +68,15 @@ func (n *node) init(dirName string, shardStateRaw []byte,
 	client := clients.NewRemoteIndex(&http.Client{})
 	nodesClient := clients.NewRemoteNode(&http.Client{})
 	replicaClient := clients.NewReplicationClient(&http.Client{})
-	n.repo = db.New(logger, db.Config{
-		MemtablesFlushIdleAfter:   60,
+	n.repo, err = db.New(logger, db.Config{
+		MemtablesFlushDirtyAfter:  60,
 		RootPath:                  localDir,
 		QueryMaximumResults:       10000,
 		MaxImportGoroutinesFactor: 1,
 	}, client, nodeResolver, nodesClient, replicaClient, nil)
+	if err != nil {
+		panic(err)
+	}
 	n.schemaManager = &fakeSchemaManager{
 		shardState:   shardState,
 		schema:       schema.Schema{Objects: &models.Schema{}},
@@ -87,7 +90,7 @@ func (n *node) init(dirName string, shardStateRaw []byte,
 	}
 
 	backendProvider := newFakeBackupBackendProvider(localDir)
-	n.backupManager = ubak.NewManager(
+	n.backupManager = ubak.NewHandler(
 		logger, &fakeAuthorizer{}, n.schemaManager, n.repo, backendProvider)
 
 	backupClient := clients.NewClusterBackups(&http.Client{})
@@ -96,11 +99,11 @@ func (n *node) init(dirName string, shardStateRaw []byte,
 
 	n.migrator = db.NewMigrator(n.repo, logger)
 
-	indices := clusterapi.NewIndices(sharding.NewRemoteIndexIncoming(n.repo), n.repo)
+	indices := clusterapi.NewIndices(sharding.NewRemoteIndexIncoming(n.repo), n.repo, clusterapi.NewNoopAuthHandler())
 	mux := http.NewServeMux()
 	mux.Handle("/indices/", indices.Indices())
 
-	backups := clusterapi.NewBackups(n.backupManager)
+	backups := clusterapi.NewBackups(n.backupManager, clusterapi.NewNoopAuthHandler())
 	mux.Handle("/backups/can-commit", backups.CanCommit())
 	mux.Handle("/backups/commit", backups.Commit())
 	mux.Handle("/backups/abort", backups.Abort())
@@ -118,7 +121,7 @@ type fakeNodes struct {
 	nodes []string
 }
 
-func (f fakeNodes) AllNames() []string {
+func (f fakeNodes) Candidates() []string {
 	return f.nodes
 }
 
@@ -136,11 +139,41 @@ func (f *fakeSchemaManager) GetSchemaSkipAuth() schema.Schema {
 	return f.schema
 }
 
-func (f *fakeSchemaManager) ShardingState(class string) *sharding.State {
+func (f *fakeSchemaManager) CopyShardingState(class string) *sharding.State {
 	return f.shardState
 }
 
-func (f *fakeSchemaManager) RestoreClass(ctx context.Context, d *backup.ClassDescriptor) error {
+func (f *fakeSchemaManager) ShardOwner(class, shard string) (string, error) {
+	ss := f.shardState
+	x, ok := ss.Physical[shard]
+	if !ok {
+		return "", fmt.Errorf("shard not found")
+	}
+	if len(x.BelongsToNodes) < 1 || x.BelongsToNodes[0] == "" {
+		return "", fmt.Errorf("owner node not found")
+	}
+	return ss.Physical[shard].BelongsToNodes[0], nil
+}
+
+func (f *fakeSchemaManager) ShardReplicas(class, shard string) ([]string, error) {
+	ss := f.shardState
+	x, ok := ss.Physical[shard]
+	if !ok {
+		return nil, fmt.Errorf("shard not found")
+	}
+	return x.BelongsToNodes, nil
+}
+
+func (f *fakeSchemaManager) TenantShard(class, tenant string) (string, string) {
+	return tenant, models.TenantActivityStatusHOT
+}
+
+func (f *fakeSchemaManager) ShardFromUUID(class string, uuid []byte) string {
+	ss := f.shardState
+	return ss.Shard("", string(uuid))
+}
+
+func (f *fakeSchemaManager) RestoreClass(ctx context.Context, d *backup.ClassDescriptor, nodeMapping map[string]string) error {
 	return nil
 }
 
@@ -156,13 +189,26 @@ func (f *fakeSchemaManager) ClusterHealthScore() int {
 	return 0
 }
 
+func (f *fakeSchemaManager) ResolveParentNodes(_ string, shard string,
+) (map[string]string, error) {
+	return nil, nil
+}
+
 type nodeResolver struct {
 	nodes *[]*node
 	local string
 }
 
 func (r nodeResolver) AllNames() []string {
-	panic("node resolving not implemented yet")
+	xs := []string{}
+	for _, n := range *r.nodes {
+		xs = append(xs, n.name)
+	}
+	return xs
+}
+
+func (r nodeResolver) Candidates() []string {
+	return nil
 }
 
 func (r nodeResolver) LocalName() string {
@@ -241,6 +287,20 @@ func (f *fakeBackupBackend) WriteToFile(ctx context.Context, backupID, key, dest
 	return nil
 }
 
+func (f *fakeBackupBackend) Write(ctx context.Context, backupID, key string, r io.ReadCloser) (int64, error) {
+	f.Lock()
+	defer f.Unlock()
+	defer r.Close()
+	return 0, nil
+}
+
+func (f *fakeBackupBackend) Read(ctx context.Context, backupID, key string, w io.WriteCloser) (int64, error) {
+	f.Lock()
+	defer f.Unlock()
+	defer w.Close()
+	return 0, nil
+}
+
 func (f *fakeBackupBackend) SourceDataPath() string {
 	f.Lock()
 	defer f.Unlock()
@@ -292,7 +352,7 @@ func (f *fakeBackupBackend) successGlobalMeta() backup.DistributedBackupDescript
 			},
 		},
 		Status:        "SUCCESS",
-		Version:       "some-version",
+		Version:       ubak.Version,
 		ServerVersion: "x.x.x",
 	}
 }
@@ -302,12 +362,12 @@ func (f *fakeBackupBackend) successLocalMeta() backup.BackupDescriptor {
 		ID:            f.backupID,
 		Status:        "SUCCESS",
 		ServerVersion: "x.x.x",
-		Version:       "some-version",
+		Version:       ubak.Version,
 		StartedAt:     f.startedAt,
 		Classes: []backup.ClassDescriptor{
 			{
 				Name: distributedClass,
-				Shards: []backup.ShardDescriptor{
+				Shards: []*backup.ShardDescriptor{
 					{
 						Name:                  "123",
 						Node:                  "node-0",

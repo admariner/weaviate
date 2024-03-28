@@ -4,38 +4,55 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package rest
 
 import (
+	"errors"
+
 	middleware "github.com/go-openapi/runtime/middleware"
 	"github.com/go-openapi/strfmt"
-	"github.com/semi-technologies/weaviate/adapters/handlers/rest/operations"
-	"github.com/semi-technologies/weaviate/adapters/handlers/rest/operations/batch"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/usecases/auth/authorization/errors"
-	"github.com/semi-technologies/weaviate/usecases/objects"
+	"github.com/sirupsen/logrus"
+	"github.com/weaviate/weaviate/adapters/handlers/rest/operations"
+	"github.com/weaviate/weaviate/adapters/handlers/rest/operations/batch"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/verbosity"
+	autherrs "github.com/weaviate/weaviate/usecases/auth/authorization/errors"
+	"github.com/weaviate/weaviate/usecases/monitoring"
+	"github.com/weaviate/weaviate/usecases/objects"
 )
 
 type batchObjectHandlers struct {
-	manager *objects.BatchManager
+	manager             *objects.BatchManager
+	metricRequestsTotal restApiRequestsTotal
 }
 
 func (h *batchObjectHandlers) addObjects(params batch.BatchObjectsCreateParams,
 	principal *models.Principal,
 ) middleware.Responder {
-	objs, err := h.manager.AddObjects(params.HTTPRequest.Context(), principal,
-		params.Body.Objects, params.Body.Fields)
+	repl, err := getReplicationProperties(params.ConsistencyLevel, nil)
 	if err != nil {
+		h.metricRequestsTotal.logError("", err)
+		return batch.NewBatchObjectsCreateBadRequest().
+			WithPayload(errPayloadFromSingleErr(err))
+	}
+
+	objs, err := h.manager.AddObjects(params.HTTPRequest.Context(), principal,
+		params.Body.Objects, params.Body.Fields, repl)
+	if err != nil {
+		h.metricRequestsTotal.logError("", err)
 		switch err.(type) {
-		case errors.Forbidden:
+		case autherrs.Forbidden:
 			return batch.NewBatchObjectsCreateForbidden().
 				WithPayload(errPayloadFromSingleErr(err))
 		case objects.ErrInvalidUserInput:
+			return batch.NewBatchObjectsCreateUnprocessableEntity().
+				WithPayload(errPayloadFromSingleErr(err))
+		case objects.ErrMultiTenancy:
 			return batch.NewBatchObjectsCreateUnprocessableEntity().
 				WithPayload(errPayloadFromSingleErr(err))
 		default:
@@ -44,6 +61,7 @@ func (h *batchObjectHandlers) addObjects(params batch.BatchObjectsCreateParams,
 		}
 	}
 
+	h.metricRequestsTotal.logOk("")
 	return batch.NewBatchObjectsCreateOK().
 		WithPayload(h.objectsResponse(objs))
 }
@@ -52,8 +70,10 @@ func (h *batchObjectHandlers) objectsResponse(input objects.BatchObjects) []*mod
 	response := make([]*models.ObjectsGetResponse, len(input))
 	for i, object := range input {
 		var errorResponse *models.ErrorResponse
+		status := models.ObjectsGetResponseAO2ResultStatusSUCCESS
 		if object.Err != nil {
 			errorResponse = errPayloadFromSingleErr(object.Err)
+			status = models.ObjectsGetResponseAO2ResultStatusFAILED
 		}
 
 		object.Object.ID = object.UUID
@@ -61,6 +81,7 @@ func (h *batchObjectHandlers) objectsResponse(input objects.BatchObjects) []*mod
 			Object: *object.Object,
 			Result: &models.ObjectsGetResponseAO2Result{
 				Errors: errorResponse,
+				Status: &status,
 			},
 		}
 	}
@@ -71,13 +92,24 @@ func (h *batchObjectHandlers) objectsResponse(input objects.BatchObjects) []*mod
 func (h *batchObjectHandlers) addReferences(params batch.BatchReferencesCreateParams,
 	principal *models.Principal,
 ) middleware.Responder {
-	references, err := h.manager.AddReferences(params.HTTPRequest.Context(), principal, params.Body)
+	repl, err := getReplicationProperties(params.ConsistencyLevel, nil)
 	if err != nil {
+		h.metricRequestsTotal.logError("", err)
+		return batch.NewBatchReferencesCreateBadRequest().
+			WithPayload(errPayloadFromSingleErr(err))
+	}
+
+	references, err := h.manager.AddReferences(params.HTTPRequest.Context(), principal, params.Body, repl)
+	if err != nil {
+		h.metricRequestsTotal.logError("", err)
 		switch err.(type) {
-		case errors.Forbidden:
+		case autherrs.Forbidden:
 			return batch.NewBatchReferencesCreateForbidden().
 				WithPayload(errPayloadFromSingleErr(err))
 		case objects.ErrInvalidUserInput:
+			return batch.NewBatchReferencesCreateUnprocessableEntity().
+				WithPayload(errPayloadFromSingleErr(err))
+		case objects.ErrMultiTenancy:
 			return batch.NewBatchReferencesCreateUnprocessableEntity().
 				WithPayload(errPayloadFromSingleErr(err))
 		default:
@@ -86,6 +118,7 @@ func (h *batchObjectHandlers) addReferences(params batch.BatchReferencesCreatePa
 		}
 	}
 
+	h.metricRequestsTotal.logOk("")
 	return batch.NewBatchReferencesCreateOK().
 		WithPayload(h.referencesResponse(references))
 }
@@ -120,22 +153,35 @@ func (h *batchObjectHandlers) referencesResponse(input objects.BatchReferences) 
 func (h *batchObjectHandlers) deleteObjects(params batch.BatchObjectsDeleteParams,
 	principal *models.Principal,
 ) middleware.Responder {
-	res, err := h.manager.DeleteObjects(params.HTTPRequest.Context(), principal,
-		params.Body.Match, params.Body.DryRun, params.Body.Output)
+	repl, err := getReplicationProperties(params.ConsistencyLevel, nil)
 	if err != nil {
-		switch err.(type) {
-		case errors.Forbidden:
-			return batch.NewBatchObjectsDeleteForbidden().
-				WithPayload(errPayloadFromSingleErr(err))
-		case objects.ErrInvalidUserInput:
+		h.metricRequestsTotal.logError("", err)
+		return batch.NewBatchObjectsDeleteBadRequest().
+			WithPayload(errPayloadFromSingleErr(err))
+	}
+
+	tenant := getTenant(params.Tenant)
+
+	res, err := h.manager.DeleteObjects(params.HTTPRequest.Context(), principal,
+		params.Body.Match, params.Body.DryRun, params.Body.Output, repl, tenant)
+	if err != nil {
+		h.metricRequestsTotal.logError("", err)
+		if errors.As(err, &objects.ErrInvalidUserInput{}) {
 			return batch.NewBatchObjectsDeleteUnprocessableEntity().
 				WithPayload(errPayloadFromSingleErr(err))
-		default:
+		} else if errors.As(err, &objects.ErrMultiTenancy{}) {
+			return batch.NewBatchObjectsDeleteUnprocessableEntity().
+				WithPayload(errPayloadFromSingleErr(err))
+		} else if errors.As(err, &autherrs.Forbidden{}) {
+			return batch.NewBatchObjectsDeleteForbidden().
+				WithPayload(errPayloadFromSingleErr(err))
+		} else {
 			return batch.NewBatchObjectsDeleteInternalServerError().
 				WithPayload(errPayloadFromSingleErr(err))
 		}
 	}
 
+	h.metricRequestsTotal.logOk("")
 	return batch.NewBatchObjectsDeleteOK().
 		WithPayload(h.objectsDeleteResponse(res))
 }
@@ -158,7 +204,7 @@ func (h *batchObjectHandlers) objectsDeleteResponse(input *objects.BatchDeleteRe
 			successful += 1
 		}
 
-		if output == "minimal" &&
+		if output == verbosity.OutputMinimal &&
 			(status == models.BatchDeleteResponseResultsObjectsItems0StatusSUCCESS ||
 				status == models.BatchDeleteResponseResultsObjectsItems0StatusDRYRUN) {
 			// only add SUCCESS and DRYRUN results if output is "verbose"
@@ -190,8 +236,8 @@ func (h *batchObjectHandlers) objectsDeleteResponse(input *objects.BatchDeleteRe
 	return response
 }
 
-func setupObjectBatchHandlers(api *operations.WeaviateAPI, manager *objects.BatchManager) {
-	h := &batchObjectHandlers{manager}
+func setupObjectBatchHandlers(api *operations.WeaviateAPI, manager *objects.BatchManager, metrics *monitoring.PrometheusMetrics, logger logrus.FieldLogger) {
+	h := &batchObjectHandlers{manager, newBatchRequestsTotal(metrics, logger)}
 
 	api.BatchBatchObjectsCreateHandler = batch.
 		BatchObjectsCreateHandlerFunc(h.addObjects)
@@ -199,4 +245,33 @@ func setupObjectBatchHandlers(api *operations.WeaviateAPI, manager *objects.Batc
 		BatchReferencesCreateHandlerFunc(h.addReferences)
 	api.BatchBatchObjectsDeleteHandler = batch.
 		BatchObjectsDeleteHandlerFunc(h.deleteObjects)
+}
+
+type batchRequestsTotal struct {
+	*restApiRequestsTotalImpl
+}
+
+func newBatchRequestsTotal(metrics *monitoring.PrometheusMetrics, logger logrus.FieldLogger) restApiRequestsTotal {
+	return &batchRequestsTotal{
+		restApiRequestsTotalImpl: &restApiRequestsTotalImpl{newRequestsTotalMetric(metrics, "rest"), "rest", "batch", logger},
+	}
+}
+
+func (e *batchRequestsTotal) logError(className string, err error) {
+	switch err.(type) {
+	case errReplication:
+		e.logUserError(className)
+	case autherrs.Forbidden, objects.ErrInvalidUserInput:
+		e.logUserError(className)
+	case objects.ErrMultiTenancy:
+		e.logUserError(className)
+	default:
+		if errors.As(err, &objects.ErrMultiTenancy{}) ||
+			errors.As(err, &objects.ErrInvalidUserInput{}) ||
+			errors.As(err, &autherrs.Forbidden{}) {
+			e.logUserError(className)
+		} else {
+			e.logServerError(className, err)
+		}
+	}
 }

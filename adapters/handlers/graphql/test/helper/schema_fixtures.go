@@ -4,17 +4,17 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package helper
 
 import (
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	"github.com/semi-technologies/weaviate/usecases/config"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/usecases/config"
 )
 
 var SimpleSchema = CreateSimpleSchema(config.VectorizerModuleText2VecContextionary)
@@ -52,6 +52,14 @@ func CreateSimpleSchema(vectorizer string) schema.Schema {
 							DataType: []string{"int"},
 						},
 						{
+							Name:     "uuidField",
+							DataType: []string{"uuid"},
+						},
+						{
+							Name:     "uuidArrayField",
+							DataType: []string{"uuid[]"},
+						},
+						{
 							Name:     "location",
 							DataType: []string{"geoCoordinates"},
 						},
@@ -74,7 +82,7 @@ func CreateSimpleSchema(vectorizer string) schema.Schema {
 	}
 }
 
-// CarSchema contains a car which has every primtive field and a ref field there is
+// CarSchema contains a car which has every primitive field and a ref field there is
 var CarSchema = schema.Schema{
 	Objects: &models.Schema{
 		Classes: []*models.Class{
@@ -82,8 +90,9 @@ var CarSchema = schema.Schema{
 				Class: "Manufacturer",
 				Properties: []*models.Property{
 					{
-						Name:     "name",
-						DataType: []string{"string"},
+						Name:         "name",
+						DataType:     schema.DataTypeText.PropString(),
+						Tokenization: models.PropertyTokenizationWhitespace,
 					},
 				},
 			},
@@ -99,8 +108,9 @@ var CarSchema = schema.Schema{
 						DataType: []string{"number"},
 					},
 					{
-						Name:     "modelName",
-						DataType: []string{"string"},
+						Name:         "modelName",
+						DataType:     schema.DataTypeText.PropString(),
+						Tokenization: models.PropertyTokenizationWhitespace,
 					},
 					{
 						Name:     "madeBy",

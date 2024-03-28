@@ -4,15 +4,15 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package cluster
 
 import (
-	"errors"
+	"fmt"
 	"math/rand"
 )
 
@@ -32,21 +32,20 @@ type HostnameSource interface {
 	AllNames() []string
 }
 
-func NewNodeIterator(source HostnameSource,
+func NewNodeIterator(nodeNames []string,
 	strategy NodeIterationStrategy,
 ) (*NodeIterator, error) {
 	if strategy != StartRandom && strategy != StartAfter {
-		return nil, errors.New("unsupported strategy")
+		return nil, fmt.Errorf("unsupported strategy: %v", strategy)
 	}
 
-	hostnames := source.AllNames()
 	startState := 0
 	if strategy == StartRandom {
-		startState = rand.Intn(len(hostnames))
+		startState = rand.Intn(len(nodeNames))
 	}
 
 	return &NodeIterator{
-		hostnames: hostnames,
+		hostnames: nodeNames,
 		state:     startState,
 	}, nil
 }

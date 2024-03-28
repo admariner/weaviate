@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package classification
@@ -21,15 +21,15 @@ import (
 
 	"github.com/go-openapi/strfmt"
 	"github.com/pkg/errors"
-	"github.com/semi-technologies/weaviate/entities/additional"
-	libfilters "github.com/semi-technologies/weaviate/entities/filters"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/modulecapabilities"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	"github.com/semi-technologies/weaviate/entities/search"
-	"github.com/semi-technologies/weaviate/usecases/objects"
-	"github.com/semi-technologies/weaviate/usecases/sharding"
-	"github.com/semi-technologies/weaviate/usecases/traverser"
+	"github.com/weaviate/weaviate/entities/additional"
+	"github.com/weaviate/weaviate/entities/dto"
+	libfilters "github.com/weaviate/weaviate/entities/filters"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/modulecapabilities"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/search"
+	"github.com/weaviate/weaviate/usecases/objects"
+	"github.com/weaviate/weaviate/usecases/sharding"
 )
 
 type fakeSchemaGetter struct {
@@ -40,9 +40,22 @@ func (f *fakeSchemaGetter) GetSchemaSkipAuth() schema.Schema {
 	return f.schema
 }
 
-func (f *fakeSchemaGetter) ShardingState(class string) *sharding.State {
+func (f *fakeSchemaGetter) CopyShardingState(class string) *sharding.State {
 	panic("not implemented")
 }
+
+func (f *fakeSchemaGetter) ShardOwner(class, shard string) (string, error) {
+	return shard, nil
+}
+
+func (f *fakeSchemaGetter) ShardReplicas(class, shard string) ([]string, error) {
+	return []string{shard}, nil
+}
+
+func (f *fakeSchemaGetter) TenantShard(class, tenant string) (string, string) {
+	return tenant, models.TenantActivityStatusHOT
+}
+func (f *fakeSchemaGetter) ShardFromUUID(class string, uuid []byte) string { return string(uuid) }
 
 func (f *fakeSchemaGetter) Nodes() []string {
 	panic("not implemented")
@@ -53,6 +66,11 @@ func (f *fakeSchemaGetter) NodeName() string {
 }
 
 func (f *fakeSchemaGetter) ClusterHealthScore() int {
+	panic("not implemented")
+}
+
+func (f *fakeSchemaGetter) ResolveParentNodes(string, string,
+) (map[string]string, error) {
 	panic("not implemented")
 }
 
@@ -175,15 +193,15 @@ func (f *fakeVectorRepoKNN) ZeroShotSearch(ctx context.Context, vector []float32
 	return []search.Result{}, nil
 }
 
-func (f *fakeVectorRepoKNN) VectorClassSearch(ctx context.Context,
-	params traverser.GetParams,
+func (f *fakeVectorRepoKNN) VectorSearch(ctx context.Context,
+	params dto.GetParams,
 ) ([]search.Result, error) {
 	f.Lock()
 	defer f.Unlock()
 	return nil, fmt.Errorf("vector class search not implemented in fake")
 }
 
-func (f *fakeVectorRepoKNN) BatchPutObjects(ctx context.Context, objects objects.BatchObjects) (objects.BatchObjects, error) {
+func (f *fakeVectorRepoKNN) BatchPutObjects(ctx context.Context, objects objects.BatchObjects, repl *additional.ReplicationProperties) (objects.BatchObjects, error) {
 	f.Lock()
 	defer f.Unlock()
 
@@ -256,7 +274,7 @@ func (f *fakeVectorRepoContextual) ZeroShotSearch(ctx context.Context, vector []
 	panic("not implemented")
 }
 
-func (f *fakeVectorRepoContextual) BatchPutObjects(ctx context.Context, objects objects.BatchObjects) (objects.BatchObjects, error) {
+func (f *fakeVectorRepoContextual) BatchPutObjects(ctx context.Context, objects objects.BatchObjects, repl *additional.ReplicationProperties) (objects.BatchObjects, error) {
 	f.Lock()
 	defer f.Unlock()
 	for _, batchObject := range objects {
@@ -265,8 +283,8 @@ func (f *fakeVectorRepoContextual) BatchPutObjects(ctx context.Context, objects 
 	return objects, nil
 }
 
-func (f *fakeVectorRepoContextual) VectorClassSearch(ctx context.Context,
-	params traverser.GetParams,
+func (f *fakeVectorRepoContextual) VectorSearch(ctx context.Context,
+	params dto.GetParams,
 ) ([]search.Result, error) {
 	if params.SearchVector == nil {
 		filteredTargets := matchClassName(f.targets, params.ClassName)

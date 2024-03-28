@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package test
@@ -17,10 +17,11 @@ import (
 	"testing"
 
 	"github.com/go-openapi/strfmt"
-	"github.com/semi-technologies/weaviate/client/objects"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/test/helper"
+	"github.com/weaviate/weaviate/client/objects"
+	"github.com/weaviate/weaviate/entities/models"
+
 	"github.com/stretchr/testify/assert"
+	"github.com/weaviate/weaviate/test/helper"
 )
 
 // executed in setup_test.go
@@ -110,7 +111,6 @@ func addingObjects(t *testing.T) {
 	})
 
 	t.Run("can add single ref", func(t *testing.T) {
-		fmt.Println("before first")
 		firstID := helper.AssertCreateObject(t, class, map[string]interface{}{})
 		helper.AssertGetObjectEventually(t, class, firstID)
 
@@ -126,6 +126,6 @@ func addingObjects(t *testing.T) {
 		secondObject := helper.AssertGetObjectEventually(t, "TestObjectTwo", secondID)
 
 		singleRef := secondObject.Properties.(map[string]interface{})["testReference"].([]interface{})[0].(map[string]interface{})
-		assert.Equal(t, singleRef["beacon"].(string), fmt.Sprintf("weaviate://localhost/%s", firstID))
+		assert.Equal(t, singleRef["beacon"].(string), fmt.Sprintf("weaviate://localhost/TestObject/%s", firstID))
 	})
 }

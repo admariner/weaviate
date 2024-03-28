@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package additional
@@ -14,11 +14,11 @@ package additional
 import (
 	"context"
 
-	"github.com/semi-technologies/weaviate/entities/moduletools"
+	"github.com/weaviate/weaviate/entities/moduletools"
 
-	"github.com/semi-technologies/weaviate/entities/modulecapabilities"
-	"github.com/semi-technologies/weaviate/entities/search"
 	"github.com/tailor-inc/graphql/language/ast"
+	"github.com/weaviate/weaviate/entities/modulecapabilities"
+	"github.com/weaviate/weaviate/entities/search"
 )
 
 type AdditionalProperty interface {
@@ -26,7 +26,7 @@ type AdditionalProperty interface {
 		in []search.Result, params interface{}, limit *int,
 		argumentModuleParams map[string]interface{}, cfg moduletools.ClassConfig) ([]search.Result, error)
 	ExtractAdditionalFn(param []*ast.Argument) interface{}
-	AdditonalPropertyDefaultValue() interface{}
+	AdditionalPropertyDefaultValue() interface{}
 }
 
 type GraphQLAdditionalArgumentsProvider struct {
@@ -57,7 +57,7 @@ func (p *GraphQLAdditionalArgumentsProvider) getNearestNeighbors() modulecapabil
 			"nearest-neighbors",
 			"nearest_neighbors",
 		},
-		DefaultValue:           p.nnExtender.AdditonalPropertyDefaultValue(),
+		DefaultValue:           p.nnExtender.AdditionalPropertyDefaultValue(),
 		GraphQLNames:           []string{"nearestNeighbors"},
 		GraphQLFieldFunction:   additionalNearestNeighborsField,
 		GraphQLExtractFunction: p.nnExtender.ExtractAdditionalFn,
@@ -78,7 +78,7 @@ func (p *GraphQLAdditionalArgumentsProvider) getFeatureProjection() modulecapabi
 			"feature-projection",
 			"feature_projection",
 		},
-		DefaultValue:           p.projector.AdditonalPropertyDefaultValue(),
+		DefaultValue:           p.projector.AdditionalPropertyDefaultValue(),
 		GraphQLNames:           []string{"featureProjection"},
 		GraphQLFieldFunction:   additionalFeatureProjectionField,
 		GraphQLExtractFunction: p.projector.ExtractAdditionalFn,
@@ -92,7 +92,7 @@ func (p *GraphQLAdditionalArgumentsProvider) getFeatureProjection() modulecapabi
 
 func (p *GraphQLAdditionalArgumentsProvider) getSemanticPath() modulecapabilities.AdditionalProperty {
 	return modulecapabilities.AdditionalProperty{
-		DefaultValue:           p.sempathBuilder.AdditonalPropertyDefaultValue(),
+		DefaultValue:           p.sempathBuilder.AdditionalPropertyDefaultValue(),
 		GraphQLNames:           []string{"semanticPath"},
 		GraphQLFieldFunction:   additionalSemanticPathField,
 		GraphQLExtractFunction: p.sempathBuilder.ExtractAdditionalFn,
@@ -107,7 +107,7 @@ func (p *GraphQLAdditionalArgumentsProvider) getInterpretation() modulecapabilit
 		RestNames: []string{
 			"interpretation",
 		},
-		DefaultValue:           p.interpretation.AdditonalPropertyDefaultValue(),
+		DefaultValue:           p.interpretation.AdditionalPropertyDefaultValue(),
 		GraphQLNames:           []string{"interpretation"},
 		GraphQLFieldFunction:   additionalInterpretationField,
 		GraphQLExtractFunction: p.interpretation.ExtractAdditionalFn,

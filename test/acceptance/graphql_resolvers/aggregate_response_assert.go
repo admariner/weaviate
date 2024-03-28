@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package test
@@ -16,8 +16,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/semi-technologies/weaviate/entities/schema"
 	"github.com/stretchr/testify/assert"
+	"github.com/weaviate/weaviate/entities/schema"
 )
 
 const delta = 0.00001
@@ -296,20 +296,6 @@ func (a *aggregateResponseAssert) typedStrings(dataType schema.DataType, propNam
 	}
 }
 
-func (a *aggregateResponseAssert) stringArray(propName string,
-	count int64,
-	values []string, occurrences []int64,
-) assertFunc {
-	return a.typedStrings(schema.DataTypeStringArray, propName, count, values, occurrences)
-}
-
-func (a *aggregateResponseAssert) string(propName string,
-	count int64,
-	values []string, occurrences []int64,
-) assertFunc {
-	return a.typedStrings(schema.DataTypeString, propName, count, values, occurrences)
-}
-
 func (a *aggregateResponseAssert) typedStrings0(dataType schema.DataType, propName string) assertFunc {
 	return func(response map[string]interface{}) bool {
 		if !a.assert.Contains(response, propName) {
@@ -322,14 +308,6 @@ func (a *aggregateResponseAssert) typedStrings0(dataType schema.DataType, propNa
 			a.hasOccurrences(aggMap, propName, nil, nil),
 		)
 	}
-}
-
-func (a *aggregateResponseAssert) stringArray0(propName string) assertFunc {
-	return a.typedStrings0(schema.DataTypeStringArray, propName)
-}
-
-func (a *aggregateResponseAssert) string0(propName string) assertFunc {
-	return a.typedStrings0(schema.DataTypeString, propName)
 }
 
 func (a *aggregateResponseAssert) textArray(propName string,

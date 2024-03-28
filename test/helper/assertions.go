@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package helper
@@ -19,27 +19,28 @@ import (
 
 // Asserts that the request did not return an error.
 // Optionally perform some checks only if the request did not fail
-func AssertRequestOk(t *testing.T, response interface{}, err error, check_fn func()) {
+func AssertRequestOk(t *testing.T, response interface{}, err error, checkFn func()) {
+	t.Helper()
 	if err != nil {
-		response_json, _ := json.MarshalIndent(response, "", "  ")
+		responseJson, _ := json.MarshalIndent(response, "", "  ")
 		errorPayload, _ := json.MarshalIndent(err, "", " ")
-		t.Fatalf("Failed to perform request! Error: %s %s (Original error %s). Response: %s", getType(err), errorPayload, err, response_json)
+		t.Fatalf("Failed to perform request! Error: %s %s (Original error %s). Response: %s", getType(err), errorPayload, err, responseJson)
 	} else {
-		if check_fn != nil {
-			check_fn()
+		if checkFn != nil {
+			checkFn()
 		}
 	}
 }
 
 // Asserts that the request _did_ return an error.
 // Optionally perform some checks only if the request failed
-func AssertRequestFail(t *testing.T, response interface{}, err error, check_fn func()) {
+func AssertRequestFail(t *testing.T, response interface{}, err error, checkFn func()) {
 	if err == nil {
-		response_json, _ := json.MarshalIndent(response, "", "  ")
-		t.Fatalf("Request succeeded unexpectedly. Response:\n%s", response_json)
+		responseJson, _ := json.MarshalIndent(response, "", "  ")
+		t.Fatalf("Request succeeded unexpectedly. Response:\n%s", responseJson)
 	} else {
-		if check_fn != nil {
-			check_fn()
+		if checkFn != nil {
+			checkFn()
 		}
 	}
 }

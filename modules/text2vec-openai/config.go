@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package modopenai
@@ -14,20 +14,19 @@ package modopenai
 import (
 	"context"
 
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/modulecapabilities"
-	"github.com/semi-technologies/weaviate/entities/moduletools"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	"github.com/semi-technologies/weaviate/modules/text2vec-openai/vectorizer"
+	"github.com/weaviate/weaviate/modules/text2vec-openai/ent"
+
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/modulecapabilities"
+	"github.com/weaviate/weaviate/entities/moduletools"
+	"github.com/weaviate/weaviate/entities/schema"
 )
 
 func (m *OpenAIModule) ClassConfigDefaults() map[string]interface{} {
 	return map[string]interface{}{
-		"vectorizeClassName": vectorizer.DefaultVectorizeClassName,
-		"type":               vectorizer.DefaultOpenAIDocumentType,
-		"model":              vectorizer.DefaultOpenAIModel,
-		"modelVersion": vectorizer.PickDefaultModelVersion(vectorizer.DefaultOpenAIModel,
-			vectorizer.DefaultOpenAIDocumentType),
+		"vectorizeClassName": ent.DefaultVectorizeClassName,
+		"baseURL":            ent.DefaultBaseURL,
+		"model":              ent.DefaultOpenAIModel,
 	}
 }
 
@@ -35,15 +34,15 @@ func (m *OpenAIModule) PropertyConfigDefaults(
 	dt *schema.DataType,
 ) map[string]interface{} {
 	return map[string]interface{}{
-		"skip":                  !vectorizer.DefaultPropertyIndexed,
-		"vectorizePropertyName": vectorizer.DefaultVectorizePropertyName,
+		"skip":                  !ent.DefaultPropertyIndexed,
+		"vectorizePropertyName": ent.DefaultVectorizePropertyName,
 	}
 }
 
 func (m *OpenAIModule) ValidateClass(ctx context.Context,
 	class *models.Class, cfg moduletools.ClassConfig,
 ) error {
-	settings := vectorizer.NewClassSettings(cfg)
+	settings := ent.NewClassSettings(cfg)
 	return settings.Validate(class)
 }
 
@@ -96,8 +95,7 @@ var _ = modulecapabilities.ClassConfigurator(New())
 // 				"got %v", prop.Name, prop.DataType)
 // 		}
 
-// 		if prop.DataType[0] != string(schema.DataTypeString) &&
-// 			prop.DataType[0] != string(schema.DataTypeText) {
+// 		if prop.DataType[0] != string(schema.DataTypeText) {
 // 			// we can only vectorize text-like props
 // 			continue
 // 		}
@@ -130,8 +128,7 @@ var _ = modulecapabilities.ClassConfigurator(New())
 // 	// search if there is at least one indexed, string/text prop. If found exit
 // 	for _, prop := range class.Properties {
 // 		// length check skipped, because validation has already passed
-// 		if prop.DataType[0] != string(schema.DataTypeString) &&
-// 			prop.DataType[0] != string(schema.DataTypeText) {
+// 		if prop.DataType[0] != string(schema.DataTypeText) {
 // 			// we can only vectorize text-like props
 // 			continue
 // 		}

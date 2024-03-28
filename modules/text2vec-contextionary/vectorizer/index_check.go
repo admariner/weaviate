@@ -4,69 +4,28 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package vectorizer
 
 import (
-	"github.com/semi-technologies/weaviate/entities/moduletools"
-)
-
-const (
-	DefaultPropertyIndexed       = true
-	DefaultVectorizeClassName    = true
-	DefaultVectorizePropertyName = false
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/moduletools"
+	basesettings "github.com/weaviate/weaviate/usecases/modulecomponents/settings"
 )
 
 type indexChecker struct {
+	basesettings.BaseClassSettings
 	cfg moduletools.ClassConfig
 }
 
 func NewIndexChecker(cfg moduletools.ClassConfig) *indexChecker {
-	return &indexChecker{cfg: cfg}
+	return &indexChecker{cfg: cfg, BaseClassSettings: *basesettings.NewBaseClassSettings(cfg)}
 }
 
-func (ic *indexChecker) PropertyIndexed(propName string) bool {
-	vcn, ok := ic.cfg.Property(propName)["skip"]
-	if !ok {
-		return DefaultPropertyIndexed
-	}
-
-	asBool, ok := vcn.(bool)
-	if !ok {
-		return DefaultPropertyIndexed
-	}
-
-	return !asBool
-}
-
-func (ic *indexChecker) VectorizePropertyName(propName string) bool {
-	vcn, ok := ic.cfg.Property(propName)["vectorizePropertyName"]
-	if !ok {
-		return DefaultVectorizePropertyName
-	}
-
-	asBool, ok := vcn.(bool)
-	if !ok {
-		return DefaultVectorizePropertyName
-	}
-
-	return asBool
-}
-
-func (ic *indexChecker) VectorizeClassName() bool {
-	vcn, ok := ic.cfg.Class()["vectorizeClassName"]
-	if !ok {
-		return DefaultVectorizeClassName
-	}
-
-	asBool, ok := vcn.(bool)
-	if !ok {
-		return DefaultVectorizeClassName
-	}
-
-	return asBool
+func (ic *indexChecker) Validate(class *models.Class) error {
+	return ic.BaseClassSettings.Validate()
 }

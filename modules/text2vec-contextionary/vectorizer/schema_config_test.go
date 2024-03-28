@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package vectorizer
@@ -15,12 +15,12 @@ import (
 	"context"
 	"testing"
 
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/schema"
 	"github.com/sirupsen/logrus"
 	ltest "github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
 )
 
 func TestConfigValidator(t *testing.T) {
@@ -77,7 +77,7 @@ func TestConfigValidator(t *testing.T) {
 				vectorize: true,
 			},
 
-			// inavlid names
+			// invalid names
 			{
 				name:      "Single uppercase word NOT present in the c11y",
 				input:     "Carrot",
@@ -159,8 +159,9 @@ func TestConfigValidator(t *testing.T) {
 				class := &models.Class{
 					Class: test.input,
 					Properties: []*models.Property{{
-						Name:     "dummyPropSoWeDontRunIntoAllNoindexedError",
-						DataType: []string{"string"},
+						Name:         "dummyPropSoWeDontRunIntoAllNoindexedError",
+						DataType:     schema.DataTypeText.PropString(),
+						Tokenization: models.PropertyTokenizationWhitespace,
 					}},
 				}
 
@@ -231,7 +232,7 @@ func TestConfigValidator(t *testing.T) {
 				vectorize: true,
 			},
 
-			// inavlid names
+			// invalid names
 			{
 				name:      "Single uppercase word NOT present in the c11y",
 				input:     "Carrot",
@@ -307,8 +308,9 @@ func TestConfigValidator(t *testing.T) {
 				class := &models.Class{
 					Class: "ValidName",
 					Properties: []*models.Property{{
-						DataType: []string{"string"},
-						Name:     test.input,
+						DataType:     schema.DataTypeText.PropString(),
+						Tokenization: models.PropertyTokenizationWhitespace,
+						Name:         test.input,
 					}},
 				}
 
@@ -331,11 +333,12 @@ func TestConfigValidator(t *testing.T) {
 				Properties: []*models.Property{
 					{
 						DataType: []string{"text"},
-						Name:     "decsription",
+						Name:     "description",
 					},
 					{
-						DataType: []string{"string"},
-						Name:     "name",
+						DataType:     schema.DataTypeText.PropString(),
+						Tokenization: models.PropertyTokenizationWhitespace,
+						Name:         "name",
 					},
 					{
 						DataType: []string{"int"},
@@ -362,11 +365,12 @@ func TestConfigValidator(t *testing.T) {
 			Properties: []*models.Property{
 				{
 					DataType: []string{"text[]"},
-					Name:     "decsriptions",
+					Name:     "descriptions",
 				},
 				{
-					DataType: []string{"string[]"},
-					Name:     "names",
+					DataType:     schema.DataTypeTextArray.PropString(),
+					Tokenization: models.PropertyTokenizationWhitespace,
+					Name:         "names",
 				},
 			},
 		}

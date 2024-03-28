@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package aggregator
@@ -16,16 +16,15 @@ import (
 	"fmt"
 
 	"github.com/pkg/errors"
-	"github.com/semi-technologies/weaviate/adapters/repos/db/docid"
-	"github.com/semi-technologies/weaviate/adapters/repos/db/inverted"
-	"github.com/semi-technologies/weaviate/adapters/repos/db/propertyspecific"
-	"github.com/semi-technologies/weaviate/entities/additional"
-	"github.com/semi-technologies/weaviate/entities/aggregation"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	"github.com/semi-technologies/weaviate/entities/searchparams"
-	"github.com/semi-technologies/weaviate/entities/storobj"
-	"github.com/semi-technologies/weaviate/usecases/traverser/hybrid"
+	"github.com/weaviate/weaviate/adapters/repos/db/docid"
+	"github.com/weaviate/weaviate/adapters/repos/db/inverted"
+	"github.com/weaviate/weaviate/adapters/repos/db/propertyspecific"
+	"github.com/weaviate/weaviate/entities/aggregation"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/searchparams"
+	"github.com/weaviate/weaviate/entities/storobj"
+	"github.com/weaviate/weaviate/usecases/traverser/hybrid"
 )
 
 type filteredAggregator struct {
@@ -34,6 +33,10 @@ type filteredAggregator struct {
 
 func newFilteredAggregator(agg *Aggregator) *filteredAggregator {
 	return &filteredAggregator{Aggregator: agg}
+}
+
+func (fa *filteredAggregator) GetPropertyLengthTracker() *inverted.JsonPropertyLengthTracker {
+	return fa.propLenTracker
 }
 
 func (fa *filteredAggregator) Do(ctx context.Context) (*aggregation.Result, error) {
@@ -56,19 +59,15 @@ func (fa *filteredAggregator) hybrid(ctx context.Context) (*aggregation.Result, 
 			fa.params.ObjectLimit = &limit
 		}
 
-		sparse, dists, err := fa.bm25Objects(ctx, kw)
+		sparse, scores, err := fa.bm25Objects(ctx, kw)
 		if err != nil {
 			return nil, nil, fmt.Errorf("aggregate sparse search: %w", err)
 		}
 
-		return sparse, dists, nil
+		return sparse, scores, nil
 	}
 
 	denseSearch := func(vec []float32) ([]*storobj.Object, []float32, error) {
-		if vec == nil {
-			return nil, nil, fmt.Errorf("must provide hybrid search vector if alpha > 0")
-		}
-
 		allowList, err := fa.buildAllowList(ctx)
 		if err != nil {
 			return nil, nil, err
@@ -82,19 +81,17 @@ func (fa *filteredAggregator) hybrid(ctx context.Context) (*aggregation.Result, 
 		return res, dists, nil
 	}
 
-	h := hybrid.NewSearcher(&hybrid.Params{
+	res, err := hybrid.Search(ctx, &hybrid.Params{
 		HybridSearch: fa.params.Hybrid,
 		Class:        fa.params.ClassName.String(),
-	}, fa.logger, sparseSearch, denseSearch, nil)
-
-	res, err := h.Search(ctx)
+	}, fa.logger, sparseSearch, denseSearch, nil, nil, nil, nil)
 	if err != nil {
 		return nil, err
 	}
 
 	ids := make([]uint64, len(res))
 	for i, r := range res {
-		ids[i] = r.DocID
+		ids[i] = *r.DocID
 	}
 
 	return fa.prepareResult(ctx, ids)
@@ -126,16 +123,14 @@ func (fa *filteredAggregator) bm25Objects(ctx context.Context, kw *searchparams.
 		class = s.GetClass(fa.params.ClassName)
 		cfg   = inverted.ConfigFromModel(class.InvertedIndexConfig)
 	)
-
-	objs, dists, err := inverted.NewBM25Searcher(cfg.BM25, fa.store, s,
-		fa.invertedRowCache, propertyspecific.Indices{}, fa.classSearcher,
-		nil, fa.propLengths, fa.logger, fa.shardVersion,
-	).Objects(ctx, *fa.params.ObjectLimit, kw, fa.params.Filters,
-		nil, additional.Properties{}, fa.params.ClassName)
+	objs, scores, err := inverted.NewBM25Searcher(cfg.BM25, fa.store, s,
+		propertyspecific.Indices{}, fa.classSearcher,
+		fa.GetPropertyLengthTracker(), fa.logger, fa.shardVersion,
+	).BM25F(ctx, nil, fa.params.ClassName, *fa.params.ObjectLimit, *kw)
 	if err != nil {
 		return nil, nil, fmt.Errorf("bm25 objects: %w", err)
 	}
-	return objs, dists, nil
+	return objs, scores, nil
 }
 
 func (fa *filteredAggregator) properties(ctx context.Context,
@@ -147,7 +142,7 @@ func (fa *filteredAggregator) properties(ctx context.Context,
 	}
 
 	scan := func(properties *models.PropertySchema, docID uint64) (bool, error) {
-		if err := fa.analyzeObject(ctx, properties, propAggs); err != nil {
+		if err := fa.AnalyzeObject(ctx, properties, propAggs); err != nil {
 			return false, errors.Wrapf(err, "analyze object %d", docID)
 		}
 		return true, nil
@@ -165,7 +160,7 @@ func (fa *filteredAggregator) properties(ctx context.Context,
 	return propAggs.results()
 }
 
-func (fa *filteredAggregator) analyzeObject(ctx context.Context,
+func (fa *filteredAggregator) AnalyzeObject(ctx context.Context,
 	properties *models.PropertySchema, propAggs map[string]propAgg,
 ) error {
 	if err := ctx.Err(); err != nil {
@@ -262,11 +257,11 @@ func (fa *filteredAggregator) addPropValue(prop propAgg, value interface{}) erro
 			return nil
 		}
 		switch prop.dataType {
-		case schema.DataTypeText, schema.DataTypeString:
+		case schema.DataTypeText:
 			if err := analyzeString(value); err != nil {
 				return err
 			}
-		case schema.DataTypeTextArray, schema.DataTypeStringArray:
+		case schema.DataTypeTextArray:
 			valueStruct, ok := value.([]interface{})
 			if !ok {
 				return fmt.Errorf("expected property type []text or []string, received %T", valueStruct)

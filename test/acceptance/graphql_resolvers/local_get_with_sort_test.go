@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package test
@@ -17,10 +17,10 @@ import (
 	"strings"
 	"testing"
 
-	graphqlhelper "github.com/semi-technologies/weaviate/test/helper/graphql"
+	graphqlhelper "github.com/weaviate/weaviate/test/helper/graphql"
 
-	"github.com/semi-technologies/weaviate/test/helper"
 	"github.com/stretchr/testify/assert"
+	"github.com/weaviate/weaviate/test/helper"
 )
 
 func gettingObjectsWithSort(t *testing.T) {
@@ -592,8 +592,8 @@ func gettingObjectsWithSort(t *testing.T) {
 					where: {
 						operator: Or,
 						operands: [
-							{valueString: "6ffb03f8-a853-4ec5-a5d8-302e45aaaf13", path: ["id"], operator: Equal},
-							{valueString: "823abeca-eef3-41c7-b587-7a6977b08003", path: ["id"], operator: Equal}
+							{valueText: "6ffb03f8-a853-4ec5-a5d8-302e45aaaf13", path: ["id"], operator: Equal},
+							{valueText: "823abeca-eef3-41c7-b587-7a6977b08003", path: ["id"], operator: Equal}
 					]}
 				) {
 					name
@@ -644,7 +644,7 @@ func gettingObjectsWithSort(t *testing.T) {
 						order: asc
 					}]
 					where: {
-						valueString: "non-existent-uuid", path: ["id"], operator: Equal
+						valueText: "non-existent-uuid", path: ["id"], operator: Equal
 					}
 				) {
 					name
@@ -1157,7 +1157,7 @@ func gettingObjectsWithSort(t *testing.T) {
 				sort: []string{
 					buildSort([]string{}, "asc"),
 				},
-				expectedMsg: "invalid 'sort' filter: sort parameter at position 0: " +
+				expectedMsg: "invalid 'sort' parameter: sort parameter at position 0: " +
 					"path parameter cannot be empty",
 			},
 			{
@@ -1166,7 +1166,7 @@ func gettingObjectsWithSort(t *testing.T) {
 				sort: []string{
 					buildSort([]string{""}, "asc"),
 				},
-				expectedMsg: "invalid 'sort' filter: sort parameter at position 0: " +
+				expectedMsg: "invalid 'sort' parameter: sort parameter at position 0: " +
 					"no such prop with name '' found in class 'City' in the schema. " +
 					"Check your schema files for which properties in this class are available",
 			},
@@ -1176,7 +1176,7 @@ func gettingObjectsWithSort(t *testing.T) {
 				sort: []string{
 					buildSort([]string{"ref", "prop"}, "asc"),
 				},
-				expectedMsg: "invalid 'sort' filter: sort parameter at position 0: " +
+				expectedMsg: "invalid 'sort' parameter: sort parameter at position 0: " +
 					"sorting by reference not supported, path must have exactly one argument",
 			},
 			{
@@ -1193,7 +1193,7 @@ func gettingObjectsWithSort(t *testing.T) {
 				sort: []string{
 					buildSort([]string{"nonexistentproperty"}, "asc"),
 				},
-				expectedMsg: "invalid 'sort' filter: sort parameter at position 0: " +
+				expectedMsg: "invalid 'sort' parameter: sort parameter at position 0: " +
 					"no such prop with name 'nonexistentproperty' found in class 'City' in the schema. " +
 					"Check your schema files for which properties in this class are available",
 			},
@@ -1203,7 +1203,7 @@ func gettingObjectsWithSort(t *testing.T) {
 				sort: []string{
 					buildSort([]string{"inCountry"}, "asc"),
 				},
-				expectedMsg: "invalid 'sort' filter: sort parameter at position 0: " +
+				expectedMsg: "invalid 'sort' parameter: sort parameter at position 0: " +
 					"sorting by reference not supported, " +
 					"property \"inCountry\" is a ref prop to the class \"Country\"",
 			},

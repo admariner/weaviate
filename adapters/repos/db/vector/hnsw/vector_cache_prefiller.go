@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package hnsw
@@ -16,38 +16,26 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
+	"github.com/weaviate/weaviate/adapters/repos/db/vector/cache"
 )
 
-type vectorCachePrefiller struct {
-	cache  cache
+type vectorCachePrefiller[T any] struct {
+	cache  cache.Cache[T]
 	index  *hnsw
 	logger logrus.FieldLogger
 }
 
-type cache interface {
-	get(ctx context.Context, id uint64) ([]float32, error)
-	len() int32
-	countVectors() int64
-	delete(ctx context.Context, id uint64)
-	preload(id uint64, vec []float32)
-	prefetch(id uint64)
-	grow(size uint64)
-	drop()
-	updateMaxSize(size int64)
-	copyMaxSize() int64
-}
-
-func newVectorCachePrefiller(cache cache, index *hnsw,
+func newVectorCachePrefiller[T any](cache cache.Cache[T], index *hnsw,
 	logger logrus.FieldLogger,
-) *vectorCachePrefiller {
-	return &vectorCachePrefiller{
+) *vectorCachePrefiller[T] {
+	return &vectorCachePrefiller[T]{
 		cache:  cache,
 		index:  index,
 		logger: logger,
 	}
 }
 
-func (pf *vectorCachePrefiller) Prefill(ctx context.Context, limit int) error {
+func (pf *vectorCachePrefiller[T]) Prefill(ctx context.Context, limit int) error {
 	before := time.Now()
 	for level := pf.maxLevel(); level >= 0; level-- {
 		ok, err := pf.prefillLevel(ctx, level, limit)
@@ -60,12 +48,12 @@ func (pf *vectorCachePrefiller) Prefill(ctx context.Context, limit int) error {
 		}
 	}
 
-	pf.logTotal(int(pf.cache.len()), limit, before)
+	pf.logTotal(int(pf.cache.Len()), limit, before)
 	return nil
 }
 
 // returns false if the max has been reached, true otherwise
-func (pf *vectorCachePrefiller) prefillLevel(ctx context.Context,
+func (pf *vectorCachePrefiller[T]) prefillLevel(ctx context.Context,
 	level, limit int,
 ) (bool, error) {
 	// TODO: this makes zero sense, just copy the lists, don't actually block
@@ -79,7 +67,7 @@ func (pf *vectorCachePrefiller) prefillLevel(ctx context.Context,
 	pf.index.Unlock()
 
 	for i := 0; i < nodesLen; i++ {
-		if int(pf.cache.len()) >= limit {
+		if int(pf.cache.Len()) >= limit {
 			break
 		}
 
@@ -87,9 +75,9 @@ func (pf *vectorCachePrefiller) prefillLevel(ctx context.Context,
 			return false, err
 		}
 
-		pf.index.Lock()
+		pf.index.shardedNodeLocks.RLock(uint64(i))
 		node := pf.index.nodes[i]
-		pf.index.Unlock()
+		pf.index.shardedNodeLocks.RUnlock(uint64(i))
 
 		if node == nil {
 			continue
@@ -102,7 +90,7 @@ func (pf *vectorCachePrefiller) prefillLevel(ctx context.Context,
 		// we are not really interested in the result, we just want to populate the
 		// cache
 		pf.index.Lock()
-		pf.cache.get(ctx, uint64(i))
+		pf.cache.Get(ctx, uint64(i))
 		layerCount++
 		pf.index.Unlock()
 	}
@@ -111,7 +99,7 @@ func (pf *vectorCachePrefiller) prefillLevel(ctx context.Context,
 	return true, nil
 }
 
-func (pf *vectorCachePrefiller) logLevel(level, count int, before time.Time) {
+func (pf *vectorCachePrefiller[T]) logLevel(level, count int, before time.Time) {
 	pf.logger.WithFields(logrus.Fields{
 		"action":     "hnsw_vector_cache_prefill_level",
 		"hnsw_level": level,
@@ -121,7 +109,7 @@ func (pf *vectorCachePrefiller) logLevel(level, count int, before time.Time) {
 	}).Debug("prefilled level in vector cache")
 }
 
-func (pf *vectorCachePrefiller) logTotal(count, limit int, before time.Time) {
+func (pf *vectorCachePrefiller[T]) logTotal(count, limit int, before time.Time) {
 	pf.logger.WithFields(logrus.Fields{
 		"action":   "hnsw_vector_cache_prefill",
 		"limit":    limit,
@@ -138,7 +126,7 @@ func levelOfNode(node *vertex) int {
 	return node.level
 }
 
-func (pf *vectorCachePrefiller) maxLevel() int {
+func (pf *vectorCachePrefiller[T]) maxLevel() int {
 	pf.index.Lock()
 	defer pf.index.Unlock()
 

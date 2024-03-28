@@ -4,19 +4,20 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package config
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"github.com/pkg/errors"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/moduletools"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/moduletools"
 )
 
 const (
@@ -26,6 +27,7 @@ const (
 	frequencyPenaltyProperty = "frequencyPenalty"
 	presencePenaltyProperty  = "presencePenalty"
 	topPProperty             = "topP"
+	baseURLProperty          = "baseURL"
 )
 
 var (
@@ -35,14 +37,16 @@ var (
 	DefaultOpenAIFrequencyPenalty float64 = 0.0
 	DefaultOpenAIPresencePenalty  float64 = 0.0
 	DefaultOpenAITopP             float64 = 1.0
+	DefaultOpenAIBaseURL                  = "https://api.openai.com"
 )
 
 var maxTokensForModel = map[string]float64{
-	"text-ada-001":     2048,
-	"text-babbage-001": 2048,
-	"text-curie-001":   2048,
-	"text-davinci-002": 4000,
-	"text-davinci-003": 4000,
+	"text-ada-001":           2048,
+	"text-babbage-001":       2048,
+	"text-curie-001":         2048,
+	"text-davinci-002":       4000,
+	"text-davinci-003":       4000,
+	"gpt-3.5-turbo-instruct": 4000,
 }
 
 var availableOpenAIModels = []string{
@@ -51,6 +55,7 @@ var availableOpenAIModels = []string{
 	"text-curie-001",
 	"text-davinci-002",
 	"text-davinci-003",
+	"gpt-3.5-turbo-instruct",
 }
 
 type classSettings struct {
@@ -95,6 +100,11 @@ func (ic *classSettings) Validate(class *models.Class) error {
 	topP := ic.getFloatProperty(topPProperty, &DefaultOpenAITopP)
 	if topP == nil || (*topP < 0 || *topP > 5) {
 		return errors.Errorf("Wrong topP configuration, values are should have a minimal value of 1 and max of 5")
+	}
+
+	err := ic.validateAzureConfig(ic.ResourceName(), ic.DeploymentID())
+	if err != nil {
+		return err
 	}
 
 	return nil
@@ -171,6 +181,10 @@ func (ic *classSettings) MaxTokens() float64 {
 	return *ic.getFloatProperty(maxTokensProperty, &DefaultOpenAIMaxTokens)
 }
 
+func (ic *classSettings) BaseURL() string {
+	return *ic.getStringProperty(baseURLProperty, DefaultOpenAIBaseURL)
+}
+
 func (ic *classSettings) Temperature() float64 {
 	return *ic.getFloatProperty(temperatureProperty, &DefaultOpenAITemperature)
 }
@@ -185,4 +199,23 @@ func (ic *classSettings) PresencePenalty() float64 {
 
 func (ic *classSettings) TopP() float64 {
 	return *ic.getFloatProperty(topPProperty, &DefaultOpenAITopP)
+}
+
+func (ic *classSettings) ResourceName() string {
+	return *ic.getStringProperty("resourceName", "")
+}
+
+func (ic *classSettings) DeploymentID() string {
+	return *ic.getStringProperty("deploymentId", "")
+}
+
+func (ic *classSettings) IsAzure() bool {
+	return ic.ResourceName() != "" && ic.DeploymentID() != ""
+}
+
+func (ic *classSettings) validateAzureConfig(resourceName string, deploymentId string) error {
+	if (resourceName == "" && deploymentId != "") || (resourceName != "" && deploymentId == "") {
+		return fmt.Errorf("both resourceName and deploymentId must be provided")
+	}
+	return nil
 }

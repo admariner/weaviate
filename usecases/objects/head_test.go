@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package objects
@@ -17,7 +17,7 @@ import (
 
 	"github.com/go-openapi/strfmt"
 	"github.com/pkg/errors"
-	"github.com/semi-technologies/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/schema"
 )
 
 func Test_HeadObject(t *testing.T) {
@@ -78,7 +78,7 @@ func Test_HeadObject(t *testing.T) {
 		if tc.authErr == nil && tc.lockErr == nil {
 			m.repo.On("Exists", tc.class, id).Return(tc.mockedOk, tc.mockedErr).Once()
 		}
-		ok, err := m.Manager.HeadObject(context.Background(), nil, tc.class, id)
+		ok, err := m.Manager.HeadObject(context.Background(), nil, tc.class, id, nil, "")
 		code := 0
 		if err != nil {
 			code = err.Code

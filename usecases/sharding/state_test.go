@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package sharding
@@ -19,6 +19,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/entities/models"
 )
 
 func TestState(t *testing.T) {
@@ -28,7 +29,7 @@ func TestState(t *testing.T) {
 	require.Nil(t, err)
 
 	nodes := fakeNodes{[]string{"node1", "node2"}}
-	state, err := InitState("my-index", cfg, nodes, 1)
+	state, err := InitState("my-index", cfg, nodes, 1, false)
 	require.Nil(t, err)
 
 	physicalCount := map[string]int{}
@@ -78,7 +79,7 @@ type fakeNodes struct {
 	nodes []string
 }
 
-func (f fakeNodes) AllNames() []string {
+func (f fakeNodes) Candidates() []string {
 	return f.nodes
 }
 
@@ -86,11 +87,12 @@ func (f fakeNodes) LocalName() string {
 	return f.nodes[0]
 }
 
-func TestInitShardWithReplicas(t *testing.T) {
+func TestInitState(t *testing.T) {
 	type test struct {
 		nodes             []string
 		replicationFactor int
 		shards            int
+		ok                bool
 	}
 
 	// this tests asserts that nodes are assigned evenly with various
@@ -101,36 +103,54 @@ func TestInitShardWithReplicas(t *testing.T) {
 			nodes:             []string{"node1", "node2", "node3"},
 			replicationFactor: 1,
 			shards:            3,
+			ok:                true,
 		},
 		{
 			nodes:             []string{"node1", "node2", "node3"},
 			replicationFactor: 2,
 			shards:            3,
+			ok:                true,
 		},
 		{
 			nodes:             []string{"node1", "node2", "node3"},
 			replicationFactor: 3,
 			shards:            1,
+			ok:                true,
 		},
 		{
 			nodes:             []string{"node1", "node2", "node3"},
 			replicationFactor: 3,
 			shards:            3,
+			ok:                true,
 		},
 		{
 			nodes:             []string{"node1", "node2", "node3"},
 			replicationFactor: 3,
 			shards:            2,
+			ok:                true,
 		},
 		{
 			nodes:             []string{"node1", "node2", "node3", "node4", "node5", "node6"},
 			replicationFactor: 4,
 			shards:            6,
+			ok:                true,
+		},
+		{
+			nodes:             []string{"node1", "node2"},
+			replicationFactor: 4,
+			shards:            4,
+			ok:                false,
+		},
+		{
+			nodes:             []string{"node1", "node2", "node3", "node4", "node5", "node6", "node7", "node8", "node9", "node10", "node11", "node12"},
+			replicationFactor: 3,
+			shards:            4,
+			ok:                true,
 		},
 	}
 
 	for _, test := range tests {
-		t.Run(fmt.Sprintf("shards=%d, rf=%d", test.shards, test.replicationFactor),
+		t.Run(fmt.Sprintf("Shards=%d_RF=%d", test.shards, test.replicationFactor),
 			func(t *testing.T) {
 				nodes := fakeNodes{test.nodes}
 				cfg, err := ParseConfig(map[string]interface{}{
@@ -139,23 +159,26 @@ func TestInitShardWithReplicas(t *testing.T) {
 				}, 3)
 				require.Nil(t, err)
 
-				state, err := InitState("my-index", cfg, nodes, int64(test.replicationFactor))
+				state, err := InitState("my-index", cfg, nodes, int64(test.replicationFactor), false)
+				if !test.ok {
+					require.NotNil(t, err)
+					return
+				}
 				require.Nil(t, err)
 
 				nodeCounter := map[string]int{}
-
+				actual := 0
 				for _, shard := range state.Physical {
 					for _, node := range shard.BelongsToNodes {
 						nodeCounter[node]++
+						actual++
 					}
 				}
 
+				assert.Equal(t, len(nodeCounter), len(test.nodes))
+
 				// assert that total no of associations is correct
 				desired := test.shards * test.replicationFactor
-				actual := 0
-				for _, count := range nodeCounter {
-					actual += count
-				}
 				assert.Equal(t, desired, actual, "correct number of node associations")
 
 				// assert that shards are hit evenly
@@ -168,48 +191,122 @@ func TestInitShardWithReplicas(t *testing.T) {
 }
 
 func TestAdjustReplicas(t *testing.T) {
-	t.Run("scaling up from 1 to 3", func(t *testing.T) {
-		nodes := fakeNodes{nodes: []string{"node1", "node2", "node3"}}
-		shard := Physical{BelongsToNodes: []string{"node1"}}
-		expected := Physical{BelongsToNodes: []string{"node1", "node2", "node3"}}
-
+	t.Run("1->3", func(t *testing.T) {
+		nodes := fakeNodes{nodes: []string{"N1", "N2", "N3", "N4", "N5"}}
+		shard := Physical{BelongsToNodes: []string{"N1"}}
 		require.Nil(t, shard.AdjustReplicas(3, nodes))
-		assert.Equal(t, expected, shard)
+		assert.ElementsMatch(t, []string{"N1", "N2", "N3"}, shard.BelongsToNodes)
 	})
 
-	t.Run("scaling up from 2 to 3", func(t *testing.T) {
-		nodes := fakeNodes{nodes: []string{"node1", "node2", "node3"}}
-		shard := Physical{BelongsToNodes: []string{"node2", "node3"}}
-		expected := Physical{BelongsToNodes: []string{"node2", "node3", "node1"}}
-
+	t.Run("2->3", func(t *testing.T) {
+		nodes := fakeNodes{nodes: []string{"N1", "N2", "N3", "N4", "N5"}}
+		shard := Physical{BelongsToNodes: []string{"N2", "N3"}}
 		require.Nil(t, shard.AdjustReplicas(3, nodes))
-		assert.Equal(t, expected, shard)
+		assert.ElementsMatch(t, []string{"N1", "N2", "N3"}, shard.BelongsToNodes)
 	})
 
-	t.Run("scaling from 3 to 3 - no change required", func(t *testing.T) {
-		nodes := fakeNodes{nodes: []string{"node1", "node2", "node3"}}
-		shard := Physical{BelongsToNodes: []string{"node1", "node2", "node3"}}
-		expected := Physical{BelongsToNodes: []string{"node1", "node2", "node3"}}
-
+	t.Run("3->3", func(t *testing.T) {
+		nodes := fakeNodes{nodes: []string{"N1", "N2", "N3", "N4", "N5"}}
+		shard := Physical{BelongsToNodes: []string{"N1", "N2", "N3"}}
 		require.Nil(t, shard.AdjustReplicas(3, nodes))
-		assert.Equal(t, expected, shard)
+		assert.ElementsMatch(t, []string{"N1", "N2", "N3"}, shard.BelongsToNodes)
 	})
 
-	t.Run("scaling down from 3 to 2", func(t *testing.T) {
-		nodes := fakeNodes{nodes: []string{"node1", "node2", "node3"}}
-		shard := Physical{BelongsToNodes: []string{"node1", "node2", "node3"}}
-		expected := Physical{BelongsToNodes: []string{"node1", "node2"}}
-
+	t.Run("3->2", func(t *testing.T) {
+		nodes := fakeNodes{nodes: []string{"N1", "N2", "N3"}}
+		shard := Physical{BelongsToNodes: []string{"N1", "N2", "N3"}}
 		require.Nil(t, shard.AdjustReplicas(2, nodes))
-		assert.Equal(t, expected, shard)
+		assert.ElementsMatch(t, []string{"N1", "N2"}, shard.BelongsToNodes)
 	})
 
-	t.Run("attempting to scale to a negative value", func(t *testing.T) {
-		nodes := fakeNodes{nodes: []string{"node1", "node2", "node3"}}
-		shard := Physical{BelongsToNodes: []string{"node1", "node2", "node3"}}
-
-		require.NotNil(t, shard.AdjustReplicas(-22, nodes))
+	t.Run("Min", func(t *testing.T) {
+		nodes := fakeNodes{nodes: []string{"N1", "N2", "N3"}}
+		shard := Physical{BelongsToNodes: []string{"N1", "N2", "N3"}}
+		require.NotNil(t, shard.AdjustReplicas(-1, nodes))
 	})
+	t.Run("Max", func(t *testing.T) {
+		nodes := fakeNodes{nodes: []string{"N1", "N2", "N3"}}
+		shard := Physical{BelongsToNodes: []string{"N1", "N2", "N3"}}
+		require.NotNil(t, shard.AdjustReplicas(4, nodes))
+	})
+	t.Run("Bug", func(t *testing.T) {
+		names := []string{"N1", "N2", "N3", "N4"}
+		nodes := fakeNodes{nodes: names} // bug
+		shard := Physical{BelongsToNodes: []string{"N1", "N1", "N1", "N2", "N2"}}
+		require.Nil(t, shard.AdjustReplicas(4, nodes)) // correct
+		require.ElementsMatch(t, names, shard.BelongsToNodes)
+	})
+}
+
+func TestGetPartitions(t *testing.T) {
+	t.Run("EmptyCandidatesList", func(t *testing.T) {
+		// nodes := fakeNodes{nodes: []string{"N1", "N2", "N3", "N4", "N5"}}
+		shards := []string{"H1"}
+		state := State{}
+		partitions, err := state.GetPartitions(fakeNodes{}, shards, 1)
+		require.Nil(t, partitions)
+		require.ErrorContains(t, err, "empty")
+	})
+	t.Run("NotEnoughReplicas", func(t *testing.T) {
+		shards := []string{"H1"}
+		state := State{}
+		partitions, err := state.GetPartitions(fakeNodes{nodes: []string{"N1"}}, shards, 2)
+		require.Nil(t, partitions)
+		require.ErrorContains(t, err, "not enough replicas")
+	})
+	t.Run("Success/RF3", func(t *testing.T) {
+		nodes := fakeNodes{nodes: []string{"N1", "N2", "N3"}}
+		shards := []string{"H1", "H2", "H3", "H4", "H5"}
+		state := State{}
+		got, err := state.GetPartitions(nodes, shards, 3)
+		require.Nil(t, err)
+		want := map[string][]string{
+			"H1": {"N1", "N2", "N3"},
+			"H2": {"N2", "N3", "N1"},
+			"H3": {"N3", "N1", "N2"},
+			"H4": {"N3", "N1", "N2"},
+			"H5": {"N1", "N2", "N3"},
+		}
+		require.Equal(t, want, got)
+	})
+
+	t.Run("Success/RF2", func(t *testing.T) {
+		nodes := fakeNodes{nodes: []string{"N1", "N2", "N3", "N4", "N5", "N6", "N7"}}
+		shards := []string{"H1", "H2", "H3", "H4", "H5"}
+		state := State{}
+		got, err := state.GetPartitions(nodes, shards, 2)
+		require.Nil(t, err)
+		want := map[string][]string{
+			"H1": {"N1", "N2"},
+			"H2": {"N3", "N4"},
+			"H3": {"N5", "N6"},
+			"H4": {"N7", "N1"},
+			"H5": {"N2", "N3"},
+		}
+		require.Equal(t, want, got)
+	})
+}
+
+func TestAddPartition(t *testing.T) {
+	var (
+		nodes1 = []string{"N", "M"}
+		nodes2 = []string{"L", "M", "O"}
+	)
+	cfg, err := ParseConfig(map[string]interface{}{"desiredCount": float64(4)}, 14)
+	require.Nil(t, err)
+
+	nodes := fakeNodes{[]string{"node1", "node2"}}
+	s, err := InitState("my-index", cfg, nodes, 1, true)
+	require.Nil(t, err)
+
+	s.AddPartition("A", nodes1, models.TenantActivityStatusHOT)
+	s.AddPartition("B", nodes2, models.TenantActivityStatusCOLD)
+
+	want := map[string]Physical{
+		"A": {Name: "A", BelongsToNodes: nodes1, OwnsPercentage: 1, Status: models.TenantActivityStatusHOT},
+		"B": {Name: "B", BelongsToNodes: nodes2, OwnsPercentage: 1, Status: models.TenantActivityStatusCOLD},
+	}
+	require.Equal(t, want, s.Physical)
 }
 
 func TestStateDeepCopy(t *testing.T) {
@@ -231,7 +328,8 @@ func TestStateDeepCopy(t *testing.T) {
 				Name:           "original",
 				OwnsVirtual:    []string{"original"},
 				OwnsPercentage: 7,
-				BelongsToNodes: []string{"orignal"},
+				BelongsToNodes: []string{"original"},
+				Status:         models.TenantActivityStatusHOT,
 			},
 		},
 		Virtual: []Virtual{
@@ -262,7 +360,8 @@ func TestStateDeepCopy(t *testing.T) {
 				Name:           "original",
 				OwnsVirtual:    []string{"original"},
 				OwnsPercentage: 7,
-				BelongsToNodes: []string{"orignal"},
+				BelongsToNodes: []string{"original"},
+				Status:         models.TenantActivityStatusHOT,
 			},
 		},
 		Virtual: []Virtual{
@@ -296,6 +395,7 @@ func TestStateDeepCopy(t *testing.T) {
 	physical1.BelongsToNodes = append(physical1.BelongsToNodes, "changed")
 	physical1.OwnsPercentage = 100
 	physical1.OwnsVirtual = append(physical1.OwnsVirtual, "changed")
+	physical1.Status = models.TenantActivityStatusCOLD
 	copied.Physical["physical1"] = physical1
 	copied.Physical["physical2"] = Physical{}
 	copied.Virtual[0].Name = "original"
@@ -332,4 +432,132 @@ func TestBackwardCompatibilityBefore1_17(t *testing.T) {
 
 	assert.Equal(t, []string{"the-best-node"},
 		newVersion.Physical["hello-replication"].BelongsToNodes)
+}
+
+func TestApplyNodeMapping(t *testing.T) {
+	type test struct {
+		name        string
+		state       State
+		control     State
+		nodeMapping map[string]string
+	}
+
+	tests := []test{
+		{
+			name: "no mapping",
+			state: State{
+				Physical: map[string]Physical{
+					"hello-node-mapping": {
+						Name:                                 "hello-node-mapping",
+						LegacyBelongsToNodeForBackwardCompat: "node1",
+						BelongsToNodes:                       []string{"node1"},
+					},
+				},
+			},
+			control: State{
+				Physical: map[string]Physical{
+					"hello-node-mapping": {
+						Name:                                 "hello-node-mapping",
+						LegacyBelongsToNodeForBackwardCompat: "node1",
+						BelongsToNodes:                       []string{"node1"},
+					},
+				},
+			},
+		},
+		{
+			name: "map one node",
+			state: State{
+				Physical: map[string]Physical{
+					"hello-node-mapping": {
+						Name:                                 "hello-node-mapping",
+						LegacyBelongsToNodeForBackwardCompat: "node1",
+						BelongsToNodes:                       []string{"node1"},
+					},
+				},
+			},
+			control: State{
+				Physical: map[string]Physical{
+					"hello-node-mapping": {
+						Name:                                 "hello-node-mapping",
+						LegacyBelongsToNodeForBackwardCompat: "new-node1",
+						BelongsToNodes:                       []string{"new-node1"},
+					},
+				},
+			},
+			nodeMapping: map[string]string{"node1": "new-node1"},
+		},
+		{
+			name: "map multiple nodes",
+			state: State{
+				Physical: map[string]Physical{
+					"hello-node-mapping": {
+						Name:                                 "hello-node-mapping",
+						LegacyBelongsToNodeForBackwardCompat: "node1",
+						BelongsToNodes:                       []string{"node1", "node2"},
+					},
+				},
+			},
+			control: State{
+				Physical: map[string]Physical{
+					"hello-node-mapping": {
+						Name:                                 "hello-node-mapping",
+						LegacyBelongsToNodeForBackwardCompat: "new-node1",
+						BelongsToNodes:                       []string{"new-node1", "new-node2"},
+					},
+				},
+			},
+			nodeMapping: map[string]string{"node1": "new-node1", "node2": "new-node2"},
+		},
+		{
+			name: "map multiple nodes with exceptions",
+			state: State{
+				Physical: map[string]Physical{
+					"hello-node-mapping": {
+						Name:                                 "hello-node-mapping",
+						LegacyBelongsToNodeForBackwardCompat: "node1",
+						BelongsToNodes:                       []string{"node1", "node2", "node3"},
+					},
+				},
+			},
+			control: State{
+				Physical: map[string]Physical{
+					"hello-node-mapping": {
+						Name:                                 "hello-node-mapping",
+						LegacyBelongsToNodeForBackwardCompat: "new-node1",
+						BelongsToNodes:                       []string{"new-node1", "new-node2", "node3"},
+					},
+				},
+			},
+			nodeMapping: map[string]string{"node1": "new-node1", "node2": "new-node2"},
+		},
+		{
+			name: "map multiple nodes with legacy exception",
+			state: State{
+				Physical: map[string]Physical{
+					"hello-node-mapping": {
+						Name:                                 "hello-node-mapping",
+						LegacyBelongsToNodeForBackwardCompat: "node3",
+						BelongsToNodes:                       []string{"node1", "node2", "node3"},
+					},
+				},
+			},
+			control: State{
+				Physical: map[string]Physical{
+					"hello-node-mapping": {
+						Name:                                 "hello-node-mapping",
+						LegacyBelongsToNodeForBackwardCompat: "node3",
+						BelongsToNodes:                       []string{"new-node1", "new-node2", "node3"},
+					},
+				},
+			},
+			nodeMapping: map[string]string{"node1": "new-node1", "node2": "new-node2"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.state.ApplyNodeMapping(tc.nodeMapping)
+			assert.Equal(t, tc.control, tc.state)
+		})
+	}
 }

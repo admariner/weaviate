@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package modules
@@ -14,17 +14,18 @@ package modules
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"testing"
 
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/modulecapabilities"
-	"github.com/semi-technologies/weaviate/entities/moduletools"
-	enitiesSchema "github.com/semi-technologies/weaviate/entities/schema"
-	ubackup "github.com/semi-technologies/weaviate/usecases/backup"
 	"github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/tailor-inc/graphql"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/modulecapabilities"
+	"github.com/weaviate/weaviate/entities/moduletools"
+	enitiesSchema "github.com/weaviate/weaviate/entities/schema"
+	ubackup "github.com/weaviate/weaviate/usecases/backup"
 )
 
 func TestModulesProvider(t *testing.T) {
@@ -222,6 +223,12 @@ func TestModulesProvider(t *testing.T) {
 			withExtractFn("nearVector").
 			withExtractFn("nearObject").
 			withExtractFn("group").
+			withExtractFn("groupBy").
+			withExtractFn("hybrid").
+			withExtractFn("bm25").
+			withExtractFn("offset").
+			withExtractFn("after").
+			withGraphQLArg("group", []string{"group"}).
 			withGraphQLArg("classification", []string{"classification"}).
 			withRestApiArg("classification", []string{"classification"}).
 			withGraphQLArg("certainty", []string{"certainty"}).
@@ -240,7 +247,12 @@ func TestModulesProvider(t *testing.T) {
 		assert.Contains(t, err.Error(), "searcher: nearVector conflicts with weaviate's internal searcher in modules: [mod3]")
 		assert.Contains(t, err.Error(), "searcher: where conflicts with weaviate's internal searcher in modules: [mod3]")
 		assert.Contains(t, err.Error(), "searcher: group conflicts with weaviate's internal searcher in modules: [mod3]")
+		assert.Contains(t, err.Error(), "searcher: groupBy conflicts with weaviate's internal searcher in modules: [mod3]")
+		assert.Contains(t, err.Error(), "searcher: hybrid conflicts with weaviate's internal searcher in modules: [mod3]")
+		assert.Contains(t, err.Error(), "searcher: bm25 conflicts with weaviate's internal searcher in modules: [mod3]")
 		assert.Contains(t, err.Error(), "searcher: limit conflicts with weaviate's internal searcher in modules: [mod3]")
+		assert.Contains(t, err.Error(), "searcher: offset conflicts with weaviate's internal searcher in modules: [mod3]")
+		assert.Contains(t, err.Error(), "searcher: after conflicts with weaviate's internal searcher in modules: [mod3]")
 		assert.Contains(t, err.Error(), "rest api additional property: classification conflicts with weaviate's internal searcher in modules: [mod3]")
 		assert.Contains(t, err.Error(), "rest api additional property: certainty conflicts with weaviate's internal searcher in modules: [mod3]")
 		assert.Contains(t, err.Error(), "rest api additional property: distance conflicts with weaviate's internal searcher in modules: [mod3]")
@@ -249,6 +261,7 @@ func TestModulesProvider(t *testing.T) {
 		assert.Contains(t, err.Error(), "graphql additional property: certainty conflicts with weaviate's internal searcher in modules: [mod3]")
 		assert.Contains(t, err.Error(), "graphql additional property: distance conflicts with weaviate's internal searcher in modules: [mod3]")
 		assert.Contains(t, err.Error(), "graphql additional property: id conflicts with weaviate's internal searcher in modules: [mod3]")
+		assert.Contains(t, err.Error(), "graphql additional property: group conflicts with weaviate's internal searcher in modules: [mod3]")
 	})
 
 	t.Run("should not register additional property modules providing faulty params", func(t *testing.T) {
@@ -349,7 +362,7 @@ func fakeValidateFn(param interface{}) error {
 
 func newGraphQLModule(name string) *dummyGraphQLModule {
 	return &dummyGraphQLModule{
-		dummyText2VecModuleNoCapabilities: newDummyText2VecModule(name),
+		dummyText2VecModuleNoCapabilities: newDummyText2VecModule(name, nil),
 		arguments:                         map[string]modulecapabilities.GraphQLArgument{},
 	}
 }
@@ -501,6 +514,14 @@ func (m *dummyBackupModuleWithAltNames) GetObject(ctx context.Context, backupID,
 
 func (m *dummyBackupModuleWithAltNames) WriteToFile(ctx context.Context, backupID, key, destPath string) error {
 	return nil
+}
+
+func (m *dummyBackupModuleWithAltNames) Write(ctx context.Context, backupID, key string, r io.ReadCloser) (int64, error) {
+	return 0, nil
+}
+
+func (m *dummyBackupModuleWithAltNames) Read(ctx context.Context, backupID, key string, w io.WriteCloser) (int64, error) {
+	return 0, nil
 }
 
 func (m *dummyBackupModuleWithAltNames) SourceDataPath() string {

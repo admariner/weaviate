@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package modcontextionary
@@ -16,21 +16,22 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/semi-technologies/weaviate/adapters/handlers/graphql/local/explore"
-	"github.com/semi-technologies/weaviate/adapters/handlers/graphql/local/get"
-	test_helper "github.com/semi-technologies/weaviate/adapters/handlers/graphql/test/helper"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/modulecapabilities"
-	"github.com/semi-technologies/weaviate/entities/moduletools"
-	"github.com/semi-technologies/weaviate/entities/search"
-	text2vecadditional "github.com/semi-technologies/weaviate/modules/text2vec-contextionary/additional"
-	text2vecadditionalprojector "github.com/semi-technologies/weaviate/modules/text2vec-contextionary/additional/projector"
-	text2vecadditionalsempath "github.com/semi-technologies/weaviate/modules/text2vec-contextionary/additional/sempath"
-	text2vecneartext "github.com/semi-technologies/weaviate/modules/text2vec-contextionary/neartext"
-	"github.com/semi-technologies/weaviate/usecases/traverser"
 	"github.com/sirupsen/logrus/hooks/test"
 	"github.com/tailor-inc/graphql"
 	"github.com/tailor-inc/graphql/language/ast"
+	"github.com/weaviate/weaviate/adapters/handlers/graphql/local/explore"
+	"github.com/weaviate/weaviate/adapters/handlers/graphql/local/get"
+	test_helper "github.com/weaviate/weaviate/adapters/handlers/graphql/test/helper"
+	"github.com/weaviate/weaviate/entities/dto"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/modulecapabilities"
+	"github.com/weaviate/weaviate/entities/moduletools"
+	"github.com/weaviate/weaviate/entities/search"
+	text2vecadditional "github.com/weaviate/weaviate/modules/text2vec-contextionary/additional"
+	text2vecadditionalsempath "github.com/weaviate/weaviate/modules/text2vec-contextionary/additional/sempath"
+	text2vecadditionalprojector "github.com/weaviate/weaviate/usecases/modulecomponents/additional/projector"
+	text2vecneartext "github.com/weaviate/weaviate/usecases/modulecomponents/arguments/nearText"
+	"github.com/weaviate/weaviate/usecases/traverser"
 )
 
 type mockRequestsLog struct{}
@@ -55,7 +56,7 @@ func (f *fakeInterpretation) ExtractAdditionalFn(param []*ast.Argument) interfac
 	return true
 }
 
-func (f *fakeInterpretation) AdditonalPropertyDefaultValue() interface{} {
+func (f *fakeInterpretation) AdditionalPropertyDefaultValue() interface{} {
 	return true
 }
 
@@ -74,7 +75,7 @@ func (f *fakeExtender) ExtractAdditionalFn(param []*ast.Argument) interface{} {
 	return true
 }
 
-func (f *fakeExtender) AdditonalPropertyDefaultValue() interface{} {
+func (f *fakeExtender) AdditionalPropertyDefaultValue() interface{} {
 	return true
 }
 
@@ -103,7 +104,7 @@ func (f *fakeProjector) ExtractAdditionalFn(param []*ast.Argument) interface{} {
 	}
 }
 
-func (f *fakeProjector) AdditonalPropertyDefaultValue() interface{} {
+func (f *fakeProjector) AdditionalPropertyDefaultValue() interface{} {
 	return &text2vecadditionalprojector.Params{}
 }
 
@@ -122,7 +123,7 @@ func (f *fakePathBuilder) ExtractAdditionalFn(param []*ast.Argument) interface{}
 	return &text2vecadditionalsempath.Params{}
 }
 
-func (f *fakePathBuilder) AdditonalPropertyDefaultValue() interface{} {
+func (f *fakePathBuilder) AdditionalPropertyDefaultValue() interface{} {
 	return &text2vecadditionalsempath.Params{}
 }
 
@@ -152,15 +153,15 @@ func (m *mockText2vecContextionaryModule) AdditionalProperties() map[string]modu
 
 type fakeModulesProvider struct{}
 
-func (f *fakeModulesProvider) GetAll() []modulecapabilities.Module {
+func (fmp *fakeModulesProvider) GetAll() []modulecapabilities.Module {
 	panic("implement me")
 }
 
-func (p *fakeModulesProvider) VectorFromInput(ctx context.Context, className string, input string) ([]float32, error) {
+func (fmp *fakeModulesProvider) VectorFromInput(ctx context.Context, className string, input string) ([]float32, error) {
 	panic("not implemented")
 }
 
-func (p *fakeModulesProvider) GetArguments(class *models.Class) map[string]*graphql.ArgumentConfig {
+func (fmp *fakeModulesProvider) GetArguments(class *models.Class) map[string]*graphql.ArgumentConfig {
 	args := map[string]*graphql.ArgumentConfig{}
 	txt2vec := &mockText2vecContextionaryModule{}
 	if class.Vectorizer == txt2vec.Name() {
@@ -171,7 +172,7 @@ func (p *fakeModulesProvider) GetArguments(class *models.Class) map[string]*grap
 	return args
 }
 
-func (p *fakeModulesProvider) ExploreArguments(schema *models.Schema) map[string]*graphql.ArgumentConfig {
+func (fmp *fakeModulesProvider) ExploreArguments(schema *models.Schema) map[string]*graphql.ArgumentConfig {
 	args := map[string]*graphql.ArgumentConfig{}
 	txt2vec := &mockText2vecContextionaryModule{}
 	for _, c := range schema.Classes {
@@ -184,11 +185,11 @@ func (p *fakeModulesProvider) ExploreArguments(schema *models.Schema) map[string
 	return args
 }
 
-func (p *fakeModulesProvider) CrossClassExtractSearchParams(arguments map[string]interface{}) map[string]interface{} {
-	return p.ExtractSearchParams(arguments, "")
+func (fmp *fakeModulesProvider) CrossClassExtractSearchParams(arguments map[string]interface{}) map[string]interface{} {
+	return fmp.ExtractSearchParams(arguments, "")
 }
 
-func (p *fakeModulesProvider) ExtractSearchParams(arguments map[string]interface{}, className string) map[string]interface{} {
+func (fmp *fakeModulesProvider) ExtractSearchParams(arguments map[string]interface{}, className string) map[string]interface{} {
 	exractedParams := map[string]interface{}{}
 	if param, ok := arguments["nearText"]; ok {
 		exractedParams["nearText"] = extractNearTextParam(param.(map[string]interface{}))
@@ -196,7 +197,7 @@ func (p *fakeModulesProvider) ExtractSearchParams(arguments map[string]interface
 	return exractedParams
 }
 
-func (p *fakeModulesProvider) GetAdditionalFields(class *models.Class) map[string]*graphql.Field {
+func (fmp *fakeModulesProvider) GetAdditionalFields(class *models.Class) map[string]*graphql.Field {
 	txt2vec := &mockText2vecContextionaryModule{}
 	additionalProperties := map[string]*graphql.Field{}
 	for name, additionalProperty := range txt2vec.AdditionalProperties() {
@@ -207,7 +208,7 @@ func (p *fakeModulesProvider) GetAdditionalFields(class *models.Class) map[strin
 	return additionalProperties
 }
 
-func (p *fakeModulesProvider) ExtractAdditionalField(className, name string, params []*ast.Argument) interface{} {
+func (fmp *fakeModulesProvider) ExtractAdditionalField(className, name string, params []*ast.Argument) interface{} {
 	txt2vec := &mockText2vecContextionaryModule{}
 	if additionalProperties := txt2vec.AdditionalProperties(); len(additionalProperties) > 0 {
 		if additionalProperty, ok := additionalProperties[name]; ok {
@@ -219,21 +220,21 @@ func (p *fakeModulesProvider) ExtractAdditionalField(className, name string, par
 	return nil
 }
 
-func (p *fakeModulesProvider) GetExploreAdditionalExtend(ctx context.Context, in []search.Result,
+func (fmp *fakeModulesProvider) GetExploreAdditionalExtend(ctx context.Context, in []search.Result,
 	moduleParams map[string]interface{}, searchVector []float32,
 	argumentModuleParams map[string]interface{}, cfg moduletools.ClassConfig,
 ) ([]search.Result, error) {
-	return p.additionalExtend(ctx, in, moduleParams, searchVector, "ExploreGet", argumentModuleParams, nil)
+	return fmp.additionalExtend(ctx, in, moduleParams, searchVector, "ExploreGet", argumentModuleParams, nil)
 }
 
-func (p *fakeModulesProvider) additionalExtend(ctx context.Context,
+func (fmp *fakeModulesProvider) additionalExtend(ctx context.Context,
 	in search.Results, moduleParams map[string]interface{},
 	searchVector []float32, capability string, argumentModuleParams map[string]interface{}, cfg moduletools.ClassConfig,
 ) (search.Results, error) {
 	txt2vec := &mockText2vecContextionaryModule{}
 	additionalProperties := txt2vec.AdditionalProperties()
 	for name, value := range moduleParams {
-		additionalPropertyFn := p.getAdditionalPropertyFn(additionalProperties[name], capability)
+		additionalPropertyFn := fmp.getAdditionalPropertyFn(additionalProperties[name], capability)
 		if additionalPropertyFn != nil && value != nil {
 			searchValue := value
 			if searchVectorValue, ok := value.(modulecapabilities.AdditionalPropertyWithSearchVector); ok {
@@ -250,7 +251,7 @@ func (p *fakeModulesProvider) additionalExtend(ctx context.Context,
 	return in, nil
 }
 
-func (p *fakeModulesProvider) getAdditionalPropertyFn(additionalProperty modulecapabilities.AdditionalProperty,
+func (fmp *fakeModulesProvider) getAdditionalPropertyFn(additionalProperty modulecapabilities.AdditionalProperty,
 	capability string,
 ) modulecapabilities.AdditionalPropertyFn {
 	switch capability {
@@ -267,7 +268,7 @@ func (p *fakeModulesProvider) getAdditionalPropertyFn(additionalProperty modulec
 	}
 }
 
-func (p *fakeModulesProvider) GraphQLAdditionalFieldNames() []string {
+func (fmp *fakeModulesProvider) GraphQLAdditionalFieldNames() []string {
 	txt2vec := &mockText2vecContextionaryModule{}
 	additionalPropertiesNames := []string{}
 	for _, additionalProperty := range txt2vec.AdditionalProperties() {
@@ -347,10 +348,10 @@ func newExploreMockResolver() *mockResolver {
 }
 
 func (m *mockResolver) GetClass(ctx context.Context, principal *models.Principal,
-	params traverser.GetParams,
-) (interface{}, error) {
+	params dto.GetParams,
+) ([]interface{}, error) {
 	args := m.Called(params)
-	return args.Get(0), args.Error(1)
+	return args.Get(0).([]interface{}), args.Error(1)
 }
 
 func (m *mockResolver) Explore(ctx context.Context,
@@ -362,7 +363,7 @@ func (m *mockResolver) Explore(ctx context.Context,
 
 // Resolver is a local abstraction of the required UC resolvers
 type GetResolver interface {
-	GetClass(ctx context.Context, principal *models.Principal, info traverser.GetParams) (interface{}, error)
+	GetClass(ctx context.Context, principal *models.Principal, info dto.GetParams) ([]interface{}, error)
 }
 
 type ExploreResolver interface {

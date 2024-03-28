@@ -4,22 +4,39 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package backup
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
+	"os"
 	"sync"
 
-	"github.com/semi-technologies/weaviate/entities/backup"
-	"github.com/semi-technologies/weaviate/entities/modulecapabilities"
 	"github.com/stretchr/testify/mock"
+	"github.com/weaviate/weaviate/entities/backup"
+	"github.com/weaviate/weaviate/entities/modulecapabilities"
 )
+
+var chunks map[string][]byte
+
+func init() {
+	path := "test_data/chunk-1.tar.gz"
+	data, err := os.ReadFile(path)
+	if err != nil {
+		panic("missing test file: " + path)
+	}
+
+	chunks = map[string][]byte{
+		chunkKey("Article", 1): data,
+	}
+}
 
 type fakeBackupBackendProvider struct {
 	backend modulecapabilities.BackupBackend
@@ -65,77 +82,115 @@ type fakeBackend struct {
 	sync.RWMutex
 	meta     backup.BackupDescriptor
 	glMeta   backup.DistributedBackupDescriptor
+	files    map[string][]byte
+	chunks   map[string][]byte
 	doneChan chan bool
 }
 
 func newFakeBackend() *fakeBackend {
-	return &fakeBackend{doneChan: make(chan bool)}
+	return &fakeBackend{
+		doneChan: make(chan bool),
+		files:    map[string][]byte{},
+		chunks:   chunks,
+	}
 }
 
-func (s *fakeBackend) HomeDir(backupID string) string {
-	s.RLock()
-	defer s.RUnlock()
-	args := s.Called(backupID)
+func (fb *fakeBackend) HomeDir(backupID string) string {
+	fb.RLock()
+	defer fb.RUnlock()
+	args := fb.Called(backupID)
 	return args.String(0)
 }
 
-func (s *fakeBackend) PutFile(ctx context.Context, backupID, key, srcPath string) error {
-	s.Lock()
-	defer s.Unlock()
-	args := s.Called(ctx, backupID, key, srcPath)
+func (fb *fakeBackend) PutFile(ctx context.Context, backupID, key, srcPath string) error {
+	fb.Lock()
+	defer fb.Unlock()
+	args := fb.Called(ctx, backupID, key, srcPath)
 	return args.Error(0)
 }
 
-func (s *fakeBackend) PutObject(ctx context.Context, backupID, key string, bytes []byte) error {
-	s.Lock()
-	defer s.Unlock()
-	args := s.Called(ctx, backupID, key, bytes)
+func (fb *fakeBackend) PutObject(ctx context.Context, backupID, key string, bytes []byte) error {
+	fb.Lock()
+	defer fb.Unlock()
+	args := fb.Called(ctx, backupID, key, bytes)
 	if key == BackupFile {
-		json.Unmarshal(bytes, &s.meta)
+		json.Unmarshal(bytes, &fb.meta)
 	} else if key == GlobalBackupFile || key == GlobalRestoreFile {
-		json.Unmarshal(bytes, &s.glMeta)
-		if s.glMeta.Status == backup.Success || s.glMeta.Status == backup.Failed {
-			close(s.doneChan)
+		json.Unmarshal(bytes, &fb.glMeta)
+		if fb.glMeta.Status == backup.Success || fb.glMeta.Status == backup.Failed {
+			close(fb.doneChan)
 		}
 	}
 	return args.Error(0)
 }
 
-func (s *fakeBackend) GetObject(ctx context.Context, backupID, key string) ([]byte, error) {
-	s.RLock()
-	defer s.RUnlock()
-	args := s.Called(ctx, backupID, key)
+func (fb *fakeBackend) GetObject(ctx context.Context, backupID, key string) ([]byte, error) {
+	fb.RLock()
+	defer fb.RUnlock()
+	args := fb.Called(ctx, backupID, key)
 	if args.Get(0) != nil {
 		return args.Get(0).([]byte), args.Error(1)
 	}
 	return nil, args.Error(1)
 }
 
-func (s *fakeBackend) Initialize(ctx context.Context, backupID string) error {
-	s.Lock()
-	defer s.Unlock()
-	args := s.Called(ctx, backupID)
+func (fb *fakeBackend) Initialize(ctx context.Context, backupID string) error {
+	fb.Lock()
+	defer fb.Unlock()
+	args := fb.Called(ctx, backupID)
 	return args.Error(0)
 }
 
-func (s *fakeBackend) SourceDataPath() string {
-	s.RLock()
-	defer s.RUnlock()
-	args := s.Called()
+func (fb *fakeBackend) SourceDataPath() string {
+	fb.RLock()
+	defer fb.RUnlock()
+	args := fb.Called()
 	return args.String(0)
 }
 
-func (s *fakeBackend) IsExternal() bool {
+func (fb *fakeBackend) IsExternal() bool {
 	return true
 }
 
-func (f *fakeBackend) Name() string {
+func (fb *fakeBackend) Name() string {
 	return "fakeBackend"
 }
 
-func (s *fakeBackend) WriteToFile(ctx context.Context, backupID, key, destPath string) error {
-	s.Lock()
-	defer s.Unlock()
-	args := s.Called(ctx, backupID, key, destPath)
+func (fb *fakeBackend) WriteToFile(ctx context.Context, backupID, key, destPath string) error {
+	fb.Lock()
+	defer fb.Unlock()
+	args := fb.Called(ctx, backupID, key, destPath)
 	return args.Error(0)
+}
+
+func (fb *fakeBackend) Read(ctx context.Context, backupID, key string, w io.WriteCloser) (int64, error) {
+	fb.Lock()
+	defer fb.Unlock()
+	defer w.Close()
+
+	args := fb.Called(ctx, backupID, key, w)
+	if err := args.Error(1); err != nil {
+		return 0, err
+	}
+
+	if data := fb.chunks[key]; data != nil {
+		io.Copy(w, bytes.NewReader(data))
+	}
+	return 0, args.Error(1)
+}
+
+func (fb *fakeBackend) Write(ctx context.Context, backupID, key string, r io.ReadCloser) (int64, error) {
+	fb.Lock()
+	defer fb.Unlock()
+	defer r.Close()
+
+	args := fb.Called(ctx, backupID, key, r)
+	if err := args.Error(1); err != nil {
+		return 0, err
+	}
+	buf := bytes.Buffer{}
+	n, err := io.Copy(&buf, r)
+	fb.files[backupID+"/"+key] = buf.Bytes()
+
+	return n, err
 }

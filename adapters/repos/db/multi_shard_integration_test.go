@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 //go:build integrationTest
@@ -21,29 +21,30 @@ import (
 	"math/rand"
 	"sort"
 	"testing"
-	"time"
 
 	"github.com/go-openapi/strfmt"
 	"github.com/google/uuid"
-	"github.com/semi-technologies/weaviate/adapters/repos/db/vector/hnsw/distancer"
-	"github.com/semi-technologies/weaviate/entities/additional"
-	"github.com/semi-technologies/weaviate/entities/filters"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	"github.com/semi-technologies/weaviate/entities/schema/crossref"
-	"github.com/semi-technologies/weaviate/entities/search"
-	"github.com/semi-technologies/weaviate/entities/searchparams"
-	enthnsw "github.com/semi-technologies/weaviate/entities/vectorindex/hnsw"
-	"github.com/semi-technologies/weaviate/usecases/objects"
-	"github.com/semi-technologies/weaviate/usecases/sharding"
-	"github.com/semi-technologies/weaviate/usecases/traverser"
 	"github.com/sirupsen/logrus"
 	"github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/adapters/repos/db/vector/hnsw/distancer"
+	"github.com/weaviate/weaviate/entities/additional"
+	"github.com/weaviate/weaviate/entities/dto"
+	"github.com/weaviate/weaviate/entities/filters"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/schema/crossref"
+	"github.com/weaviate/weaviate/entities/search"
+	"github.com/weaviate/weaviate/entities/searchparams"
+	enthnsw "github.com/weaviate/weaviate/entities/vectorindex/hnsw"
+	"github.com/weaviate/weaviate/entities/verbosity"
+	"github.com/weaviate/weaviate/usecases/objects"
+	"github.com/weaviate/weaviate/usecases/sharding"
 )
 
 func Test_MultiShardJourneys_IndividualImports(t *testing.T) {
+	r := getRandomSeed()
 	repo, logger := setupMultiShardTest(t)
 	defer func() {
 		repo.Shutdown(context.Background())
@@ -51,14 +52,14 @@ func Test_MultiShardJourneys_IndividualImports(t *testing.T) {
 
 	t.Run("prepare", makeTestMultiShardSchema(repo, logger, false, testClassesForImporting()...))
 
-	data := multiShardTestData()
-	queryVec := exampleQueryVec()
+	data := multiShardTestData(r)
+	queryVec := exampleQueryVec(r)
 	groundTruth := bruteForceObjectsByQuery(data, queryVec)
-	refData := multiShardRefClassData(data)
+	refData := multiShardRefClassData(r, data)
 
 	t.Run("import all individually", func(t *testing.T) {
 		for _, obj := range data {
-			require.Nil(t, repo.PutObject(context.Background(), obj, obj.Vector))
+			require.Nil(t, repo.PutObject(context.Background(), obj, obj.Vector, nil, nil))
 		}
 	})
 
@@ -71,7 +72,7 @@ func Test_MultiShardJourneys_IndividualImports(t *testing.T) {
 
 	t.Run("import refs individually", func(t *testing.T) {
 		for _, obj := range refData {
-			require.Nil(t, repo.PutObject(context.Background(), obj, obj.Vector))
+			require.Nil(t, repo.PutObject(context.Background(), obj, obj.Vector, nil, nil))
 		}
 	})
 
@@ -81,6 +82,7 @@ func Test_MultiShardJourneys_IndividualImports(t *testing.T) {
 }
 
 func Test_MultiShardJourneys_BatchedImports(t *testing.T) {
+	r := getRandomSeed()
 	repo, logger := setupMultiShardTest(t)
 	defer func() {
 		repo.Shutdown(context.Background())
@@ -88,10 +90,10 @@ func Test_MultiShardJourneys_BatchedImports(t *testing.T) {
 
 	t.Run("prepare", makeTestMultiShardSchema(repo, logger, false, testClassesForImporting()...))
 
-	data := multiShardTestData()
-	queryVec := exampleQueryVec()
+	data := multiShardTestData(r)
+	queryVec := exampleQueryVec(r)
 	groundTruth := bruteForceObjectsByQuery(data, queryVec)
-	refData := multiShardRefClassData(data)
+	refData := multiShardRefClassData(r, data)
 
 	t.Run("import in a batch", func(t *testing.T) {
 		batch := make(objects.BatchObjects, len(data))
@@ -99,12 +101,11 @@ func Test_MultiShardJourneys_BatchedImports(t *testing.T) {
 			batch[i] = objects.BatchObject{
 				OriginalIndex: i,
 				Object:        obj,
-				Vector:        obj.Vector,
 				UUID:          obj.ID,
 			}
 		}
 
-		_, err := repo.BatchPutObjects(context.Background(), batch)
+		_, err := repo.BatchPutObjects(context.Background(), batch, nil)
 		require.Nil(t, err)
 	})
 
@@ -125,8 +126,7 @@ func Test_MultiShardJourneys_BatchedImports(t *testing.T) {
 				Properties: map[string]interface{}{}, // empty so we remove the ref
 			}
 
-			require.Nil(t, repo.PutObject(context.Background(), withoutRef,
-				withoutRef.Vector))
+			require.Nil(t, repo.PutObject(context.Background(), withoutRef, withoutRef.Vector, nil, nil))
 		}
 
 		index := 0
@@ -143,7 +143,7 @@ func Test_MultiShardJourneys_BatchedImports(t *testing.T) {
 			}
 		}
 
-		_, err := repo.AddBatchReferences(context.Background(), refBatch)
+		_, err := repo.AddBatchReferences(context.Background(), refBatch, nil)
 		require.Nil(t, err)
 	})
 
@@ -169,15 +169,14 @@ func Test_MultiShardJourneys_BM25_Search(t *testing.T) {
 			},
 			Properties: []*models.Property{
 				{
-					Name:          "contents",
-					DataType:      []string{string(schema.DataTypeText)},
-					Tokenization:  "word",
-					IndexInverted: truePointer(),
+					Name:         "contents",
+					DataType:     schema.DataTypeText.PropString(),
+					Tokenization: models.PropertyTokenizationWord,
 				},
 				{
-					Name:          "stringProp",
-					DataType:      []string{string(schema.DataTypeString)},
-					IndexInverted: truePointer(),
+					Name:         "stringProp",
+					DataType:     schema.DataTypeText.PropString(),
+					Tokenization: models.PropertyTokenizationWhitespace,
 				},
 				{
 					Name:     "textArrayProp",
@@ -233,7 +232,7 @@ func Test_MultiShardJourneys_BM25_Search(t *testing.T) {
 			},
 		}
 
-		_, err := repo.BatchPutObjects(context.Background(), objs)
+		_, err := repo.BatchPutObjects(context.Background(), objs, nil)
 		require.Nil(t, err)
 	})
 
@@ -258,7 +257,7 @@ func Test_MultiShardJourneys_BM25_Search(t *testing.T) {
 		}
 
 		for _, test := range tests {
-			res, err := repo.ClassSearch(context.Background(), traverser.GetParams{
+			res, err := repo.Search(context.Background(), dto.GetParams{
 				ClassName:      className,
 				Pagination:     &filters.Pagination{Limit: 10},
 				KeywordRanking: test.rankingParams,
@@ -274,19 +273,18 @@ func Test_MultiShardJourneys_BM25_Search(t *testing.T) {
 }
 
 func setupMultiShardTest(t *testing.T) (*DB, *logrus.Logger) {
-	rand.Seed(time.Now().UnixNano())
 	dirName := t.TempDir()
 
 	logger, _ := test.NewNullLogger()
-	repo := New(logger, Config{
+	repo, err := New(logger, Config{
 		ServerVersion:             "server-version",
 		GitHash:                   "git-hash",
-		MemtablesFlushIdleAfter:   60,
+		MemtablesFlushDirtyAfter:  60,
 		RootPath:                  dirName,
 		QueryMaximumResults:       10000,
 		MaxImportGoroutinesFactor: 1,
 	}, &fakeRemoteClient{}, &fakeNodeResolver{}, &fakeRemoteNodeClient{}, &fakeReplicationClient{}, nil)
-
+	require.Nil(t, err)
 	return repo, logger
 }
 
@@ -298,7 +296,10 @@ func makeTestMultiShardSchema(repo *DB, logger logrus.FieldLogger, fixedShardSta
 		} else {
 			shardState = multiShardState()
 		}
-		schemaGetter := &fakeSchemaGetter{shardState: shardState}
+		schemaGetter := &fakeSchemaGetter{
+			schema:     schema.Schema{Objects: &models.Schema{Classes: nil}},
+			shardState: shardState,
+		}
 		repo.SetSchemaGetter(schemaGetter)
 		err := repo.WaitForStartup(testCtx())
 		require.Nil(t, err)
@@ -325,8 +326,7 @@ func makeTestRetrievingBaseClass(repo *DB, data []*models.Object,
 	return func(t *testing.T) {
 		t.Run("retrieve all individually", func(t *testing.T) {
 			for _, desired := range data {
-				res, err := repo.ObjectByID(context.Background(), desired.ID,
-					search.SelectProperties{}, additional.Properties{})
+				res, err := repo.ObjectByID(context.Background(), desired.ID, search.SelectProperties{}, additional.Properties{}, "")
 				assert.Nil(t, err)
 
 				require.NotNil(t, res)
@@ -350,8 +350,8 @@ func makeTestRetrievingBaseClass(repo *DB, data []*models.Object,
 						},
 					},
 				}
-				res, err := repo.ObjectSearch(context.Background(), 0, limit, filters,
-					nil, additional.Properties{})
+				res, err := repo.ObjectSearch(context.Background(), 0, limit, filters, nil,
+					additional.Properties{}, "")
 				assert.Nil(t, err)
 
 				assert.Len(t, res, expected)
@@ -383,7 +383,7 @@ func makeTestRetrievingBaseClass(repo *DB, data []*models.Object,
 						},
 					},
 				}
-				res, err := repo.ClassSearch(context.Background(), traverser.GetParams{
+				res, err := repo.Search(context.Background(), dto.GetParams{
 					Filters: filter,
 					Pagination: &filters.Pagination{
 						Limit: limit,
@@ -409,7 +409,7 @@ func makeTestRetrievingBaseClass(repo *DB, data []*models.Object,
 
 		t.Run("retrieve through class-level vector search", func(t *testing.T) {
 			do := func(t *testing.T, limit, expected int) {
-				res, err := repo.VectorClassSearch(context.Background(), traverser.GetParams{
+				res, err := repo.VectorSearch(context.Background(), dto.GetParams{
 					SearchVector: queryVec,
 					Pagination: &filters.Pagination{
 						Limit: limit,
@@ -434,7 +434,7 @@ func makeTestRetrievingBaseClass(repo *DB, data []*models.Object,
 
 		t.Run("retrieve through inter-class vector search", func(t *testing.T) {
 			do := func(t *testing.T, limit, expected int) {
-				res, err := repo.VectorSearch(context.Background(), queryVec, 0, limit, nil)
+				res, err := repo.CrossClassVectorSearch(context.Background(), queryVec, "", 0, limit, nil)
 				assert.Nil(t, err)
 				assert.Len(t, res, expected)
 				for i, obj := range res {
@@ -457,20 +457,19 @@ func makeTestRetrieveRefClass(repo *DB, data, refData []*models.Object) func(t *
 	return func(t *testing.T) {
 		t.Run("retrieve ref data individually with select props", func(t *testing.T) {
 			for _, desired := range refData {
-				res, err := repo.ObjectByID(context.Background(), desired.ID,
-					search.SelectProperties{
-						search.SelectProperty{
-							IsPrimitive: false,
-							Name:        "toOther",
-							Refs: []search.SelectClass{{
-								ClassName: "TestClass",
-								RefProperties: search.SelectProperties{{
-									Name:        "index",
-									IsPrimitive: true,
-								}},
+				res, err := repo.ObjectByID(context.Background(), desired.ID, search.SelectProperties{
+					search.SelectProperty{
+						IsPrimitive: false,
+						Name:        "toOther",
+						Refs: []search.SelectClass{{
+							ClassName: "TestClass",
+							RefProperties: search.SelectProperties{{
+								Name:        "index",
+								IsPrimitive: true,
 							}},
-						},
-					}, additional.Properties{})
+						}},
+					},
+				}, additional.Properties{}, "")
 				assert.Nil(t, err)
 				refs := res.Schema.(map[string]interface{})["toOther"].([]interface{})
 				assert.Len(t, refs, len(data))
@@ -608,7 +607,7 @@ func makeTestSortingClass(repo *DB) func(t *testing.T) {
 			for _, test := range tests {
 				t.Run(test.name, func(t *testing.T) {
 					res, err := repo.ObjectSearch(context.Background(), 0, 1000, nil, test.sort,
-						additional.Properties{})
+						additional.Properties{}, "")
 					if len(test.constainsErrorMsgs) > 0 {
 						require.NotNil(t, err)
 						for _, errorMsg := range test.constainsErrorMsgs {
@@ -645,7 +644,7 @@ func makeTestSortingClass(repo *DB) func(t *testing.T) {
 
 func testNodesAPI(repo *DB) func(t *testing.T) {
 	return func(t *testing.T) {
-		nodeStatues, err := repo.GetNodeStatuses(context.Background())
+		nodeStatues, err := repo.GetNodeStatus(context.Background(), "", verbosity.OutputVerbose)
 		require.Nil(t, err)
 		require.NotNil(t, nodeStatues)
 
@@ -669,10 +668,11 @@ func testNodesAPI(repo *DB) func(t *testing.T) {
 			}
 		}
 		assert.Equal(t, int64(3), testClassShardsCount)
-		assert.Equal(t, int64(20), testClassObjectsCount)
+		// a previous version of this test made assertions on object counts,
+		// however with object count becoming async, we can no longer make exact
+		// assertions here. See https://github.com/weaviate/weaviate/issues/4193
+		// for details.
 		assert.Equal(t, int64(3), testRefClassShardsCount)
-		assert.Equal(t, int64(0), testRefClassObjectsCount)
-		assert.Equal(t, int64(20), nodeStatus.Stats.ObjectCount)
 		assert.Equal(t, int64(6), nodeStatus.Stats.ShardCount)
 	}
 }
@@ -688,7 +688,7 @@ func makeTestBatchDeleteAllObjects(repo *DB) func(t *testing.T) {
 							Operator: filters.OperatorLike,
 							Value: &filters.Value{
 								Value: "*",
-								Type:  schema.DataTypeString,
+								Type:  schema.DataTypeText,
 							},
 							On: &filters.Path{
 								Property: "id",
@@ -700,7 +700,7 @@ func makeTestBatchDeleteAllObjects(repo *DB) func(t *testing.T) {
 				}
 			}
 			performClassSearch := func(className string) ([]search.Result, error) {
-				return repo.ClassSearch(context.Background(), traverser.GetParams{
+				return repo.Search(context.Background(), dto.GetParams{
 					ClassName:  className,
 					Pagination: &filters.Pagination{Limit: 10000},
 				})
@@ -711,8 +711,7 @@ func makeTestBatchDeleteAllObjects(repo *DB) func(t *testing.T) {
 			beforeDelete := len(res)
 			require.True(t, beforeDelete > 0)
 			// dryRun == true
-			batchDeleteRes, err := repo.BatchDeleteObjects(context.Background(),
-				getParams(className, true))
+			batchDeleteRes, err := repo.BatchDeleteObjects(context.Background(), getParams(className, true), nil, "")
 			require.Nil(t, err)
 			require.Equal(t, int64(beforeDelete), batchDeleteRes.Matches)
 			require.Equal(t, beforeDelete, len(batchDeleteRes.Objects))
@@ -724,8 +723,7 @@ func makeTestBatchDeleteAllObjects(repo *DB) func(t *testing.T) {
 			require.Nil(t, err)
 			require.Equal(t, beforeDelete, len(res))
 			// dryRun == false, perform actual delete
-			batchDeleteRes, err = repo.BatchDeleteObjects(context.Background(),
-				getParams(className, false))
+			batchDeleteRes, err = repo.BatchDeleteObjects(context.Background(), getParams(className, false), nil, "")
 			require.Nil(t, err)
 			require.Equal(t, int64(beforeDelete), batchDeleteRes.Matches)
 			require.Equal(t, beforeDelete, len(batchDeleteRes.Objects))
@@ -746,23 +744,23 @@ func makeTestBatchDeleteAllObjects(repo *DB) func(t *testing.T) {
 	}
 }
 
-func exampleQueryVec() []float32 {
+func exampleQueryVec(r *rand.Rand) []float32 {
 	dim := 10
 	vec := make([]float32, dim)
 	for j := range vec {
-		vec[j] = rand.Float32()
+		vec[j] = r.Float32()
 	}
 	return vec
 }
 
-func multiShardTestData() []*models.Object {
+func multiShardTestData(r *rand.Rand) []*models.Object {
 	size := 20
 	dim := 10
 	out := make([]*models.Object, size)
 	for i := range out {
 		vec := make([]float32, dim)
 		for j := range vec {
-			vec[j] = rand.Float32()
+			vec[j] = r.Float32()
 		}
 
 		out[i] = &models.Object{
@@ -782,7 +780,7 @@ func multiShardTestData() []*models.Object {
 	return out
 }
 
-func multiShardRefClassData(targets []*models.Object) []*models.Object {
+func multiShardRefClassData(r *rand.Rand, targets []*models.Object) []*models.Object {
 	// each class will link to all possible targets, so that we can be sure that
 	// we hit cross-shard links
 	targetLinks := make(models.MultipleRef, len(targets))
@@ -798,7 +796,7 @@ func multiShardRefClassData(targets []*models.Object) []*models.Object {
 	for i := range out {
 		vec := make([]float32, dim)
 		for j := range vec {
-			vec[j] = rand.Float32()
+			vec[j] = r.Float32()
 		}
 
 		out[i] = &models.Object{
@@ -865,9 +863,9 @@ func testClassesForImporting() []*models.Class {
 					DataType: []string{string(schema.DataTypeInt)},
 				},
 				{
-					Name:          "stringProp",
-					DataType:      []string{string(schema.DataTypeString)},
-					IndexInverted: truePointer(),
+					Name:         "stringProp",
+					DataType:     schema.DataTypeText.PropString(),
+					Tokenization: models.PropertyTokenizationWhitespace,
 				},
 				{
 					Name:     "textArrayProp",
@@ -893,8 +891,9 @@ func testClassesForImporting() []*models.Class {
 					DataType: []string{string(schema.DataTypeInt)},
 				},
 				{
-					Name:     "stringProp",
-					DataType: []string{string(schema.DataTypeString)},
+					Name:         "stringProp",
+					DataType:     schema.DataTypeText.PropString(),
+					Tokenization: models.PropertyTokenizationWhitespace,
 				},
 				{
 					Name:     "textArrayProp",

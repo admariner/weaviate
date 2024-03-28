@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package clusterapi
@@ -22,24 +22,31 @@ import (
 
 	"github.com/go-openapi/strfmt"
 	"github.com/pkg/errors"
-	"github.com/semi-technologies/weaviate/entities/additional"
-	"github.com/semi-technologies/weaviate/entities/aggregation"
-	"github.com/semi-technologies/weaviate/entities/filters"
-	"github.com/semi-technologies/weaviate/entities/search"
-	"github.com/semi-technologies/weaviate/entities/searchparams"
-	"github.com/semi-technologies/weaviate/entities/storobj"
-	"github.com/semi-technologies/weaviate/usecases/objects"
+	"github.com/weaviate/weaviate/entities/additional"
+	"github.com/weaviate/weaviate/entities/aggregation"
+	"github.com/weaviate/weaviate/entities/filters"
+	entschema "github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/search"
+	"github.com/weaviate/weaviate/entities/searchparams"
+	"github.com/weaviate/weaviate/entities/storobj"
+	"github.com/weaviate/weaviate/usecases/objects"
+	"github.com/weaviate/weaviate/usecases/replica"
 )
 
 type indices struct {
-	shards                    shards
-	db                        db
-	regexpObjects             *regexp.Regexp
-	regexpObjectsSearch       *regexp.Regexp
-	regexpObjectsFind         *regexp.Regexp
+	shards                 shards
+	db                     db
+	auth                   auth
+	regexpObjects          *regexp.Regexp
+	regexpObjectsOverwrite *regexp.Regexp
+	regexObjectsDigest     *regexp.Regexp
+	regexpObjectsSearch    *regexp.Regexp
+	regexpObjectsFind      *regexp.Regexp
+
 	regexpObjectsAggregations *regexp.Regexp
 	regexpObject              *regexp.Regexp
 	regexpReferences          *regexp.Regexp
+	regexpShardsQueueSize     *regexp.Regexp
 	regexpShardsStatus        *regexp.Regexp
 	regexpShardFiles          *regexp.Regexp
 	regexpShard               *regexp.Regexp
@@ -47,26 +54,36 @@ type indices struct {
 }
 
 const (
-	urlPatternObjects = `\/indices\/([A-Za-z0-9_+-]+)` +
-		`\/shards\/([A-Za-z0-9]+)\/objects`
-	urlPatternObjectsSearch = `\/indices\/([A-Za-z0-9_+-]+)` +
-		`\/shards\/([A-Za-z0-9]+)\/objects\/_search`
-	urlPatternObjectsFind = `\/indices\/([A-Za-z0-9_+-]+)` +
-		`\/shards\/([A-Za-z0-9]+)\/objects\/_find`
-	urlPatternObjectsAggregations = `\/indices\/([A-Za-z0-9_+-]+)` +
-		`\/shards\/([A-Za-z0-9]+)\/objects\/_aggregations`
-	urlPatternObject = `\/indices\/([A-Za-z0-9_+-]+)` +
-		`\/shards\/([A-Za-z0-9]+)\/objects\/([A-Za-z0-9_+-]+)`
-	urlPatternReferences = `\/indices\/([A-Za-z0-9_+-]+)` +
-		`\/shards\/([A-Za-z0-9]+)\/references`
-	urlPatternShardsStatus = `\/indices\/([A-Za-z0-9_+-]+)` +
-		`\/shards\/([A-Za-z0-9]+)\/status`
-	urlPatternShardFiles = `\/indices\/([A-Za-z0-9_+-]+)` +
-		`\/shards\/([A-Za-z0-9]+)\/files/(.*)`
-	urlPatternShard = `\/indices\/([A-Za-z0-9_+-]+)` +
-		`\/shards\/([A-Za-z0-9]+)$`
-	urlPatternShardReinit = `\/indices\/([A-Za-z0-9_+-]+)` +
-		`\/shards\/([A-Za-z0-9]+):reinit`
+	cl = entschema.ClassNameRegexCore
+	sh = entschema.ShardNameRegexCore
+	ob = `[A-Za-z0-9_+-]+`
+
+	urlPatternObjects = `\/indices\/(` + cl + `)` +
+		`\/shards\/(` + sh + `)\/objects`
+	urlPatternObjectsOverwrite = `\/indices\/(` + cl + `)` +
+		`\/shards\/(` + sh + `)\/objects:overwrite`
+	urlPatternObjectsDigest = `\/indices\/(` + cl + `)` +
+		`\/shards\/(` + sh + `)\/objects:digest`
+	urlPatternObjectsSearch = `\/indices\/(` + cl + `)` +
+		`\/shards\/(` + sh + `)\/objects\/_search`
+	urlPatternObjectsFind = `\/indices\/(` + cl + `)` +
+		`\/shards\/(` + sh + `)\/objects\/_find`
+	urlPatternObjectsAggregations = `\/indices\/(` + cl + `)` +
+		`\/shards\/(` + sh + `)\/objects\/_aggregations`
+	urlPatternObject = `\/indices\/(` + cl + `)` +
+		`\/shards\/(` + sh + `)\/objects\/(` + ob + `)`
+	urlPatternReferences = `\/indices\/(` + cl + `)` +
+		`\/shards\/(` + sh + `)\/references`
+	urlPatternShardsQueueSize = `\/indices\/(` + cl + `)` +
+		`\/shards\/(` + sh + `)\/queuesize`
+	urlPatternShardsStatus = `\/indices\/(` + cl + `)` +
+		`\/shards\/(` + sh + `)\/status`
+	urlPatternShardFiles = `\/indices\/(` + cl + `)` +
+		`\/shards\/(` + sh + `)\/files/(.*)`
+	urlPatternShard = `\/indices\/(` + cl + `)` +
+		`\/shards\/(` + sh + `)$`
+	urlPatternShardReinit = `\/indices\/(` + cl + `)` +
+		`\/shards\/(` + sh + `):reinit`
 )
 
 type shards interface {
@@ -88,18 +105,27 @@ type shards interface {
 	MultiGetObjects(ctx context.Context, indexName, shardName string,
 		id []strfmt.UUID) ([]*storobj.Object, error)
 	Search(ctx context.Context, indexName, shardName string,
-		vector []float32, distance float32, limit int, filters *filters.LocalFilter,
-		keywordRanking *searchparams.KeywordRanking, sort []filters.Sort,
-		additional additional.Properties) ([]*storobj.Object, []float32, error)
+		vector []float32, targetVector string, distance float32, limit int,
+		filters *filters.LocalFilter, keywordRanking *searchparams.KeywordRanking,
+		sort []filters.Sort, cursor *filters.Cursor, groupBy *searchparams.GroupBy,
+		additional additional.Properties,
+	) ([]*storobj.Object, []float32, error)
 	Aggregate(ctx context.Context, indexName, shardName string,
 		params aggregation.Params) (*aggregation.Result, error)
-	FindDocIDs(ctx context.Context, indexName, shardName string,
-		filters *filters.LocalFilter) ([]uint64, error)
+	FindUUIDs(ctx context.Context, indexName, shardName string,
+		filters *filters.LocalFilter) ([]strfmt.UUID, error)
 	DeleteObjectBatch(ctx context.Context, indexName, shardName string,
-		docIDs []uint64, dryRun bool) objects.BatchSimpleObjects
+		uuids []strfmt.UUID, dryRun bool) objects.BatchSimpleObjects
+	GetShardQueueSize(ctx context.Context, indexName, shardName string) (int64, error)
 	GetShardStatus(ctx context.Context, indexName, shardName string) (string, error)
 	UpdateShardStatus(ctx context.Context, indexName, shardName,
 		targetStatus string) error
+
+	// Replication-specific
+	OverwriteObjects(ctx context.Context, indexName, shardName string,
+		vobjects []*objects.VObject) ([]replica.RepairResponse, error)
+	DigestObjects(ctx context.Context, indexName, shardName string,
+		ids []strfmt.UUID) (result []replica.RepairResponse, err error)
 
 	// Scale-out Replication POC
 	FilePutter(ctx context.Context, indexName, shardName,
@@ -112,25 +138,34 @@ type db interface {
 	StartupComplete() bool
 }
 
-func NewIndices(shards shards, db db) *indices {
+func NewIndices(shards shards, db db, auth auth) *indices {
 	return &indices{
-		regexpObjects:             regexp.MustCompile(urlPatternObjects),
-		regexpObjectsSearch:       regexp.MustCompile(urlPatternObjectsSearch),
-		regexpObjectsFind:         regexp.MustCompile(urlPatternObjectsFind),
+		regexpObjects:          regexp.MustCompile(urlPatternObjects),
+		regexpObjectsOverwrite: regexp.MustCompile(urlPatternObjectsOverwrite),
+		regexObjectsDigest:     regexp.MustCompile(urlPatternObjectsDigest),
+		regexpObjectsSearch:    regexp.MustCompile(urlPatternObjectsSearch),
+		regexpObjectsFind:      regexp.MustCompile(urlPatternObjectsFind),
+
 		regexpObjectsAggregations: regexp.MustCompile(urlPatternObjectsAggregations),
 		regexpObject:              regexp.MustCompile(urlPatternObject),
 		regexpReferences:          regexp.MustCompile(urlPatternReferences),
+		regexpShardsQueueSize:     regexp.MustCompile(urlPatternShardsQueueSize),
 		regexpShardsStatus:        regexp.MustCompile(urlPatternShardsStatus),
 		regexpShardFiles:          regexp.MustCompile(urlPatternShardFiles),
 		regexpShard:               regexp.MustCompile(urlPatternShard),
 		regexpShardReinit:         regexp.MustCompile(urlPatternShardReinit),
 		shards:                    shards,
 		db:                        db,
+		auth:                      auth,
 	}
 }
 
 func (i *indices) Indices() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return i.auth.handleFunc(i.indicesHandler())
+}
+
+func (i *indices) indicesHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 		switch {
 		case i.regexpObjectsSearch.MatchString(path):
@@ -147,7 +182,7 @@ func (i *indices) Indices() http.Handler {
 				return
 			}
 
-			i.postFindDocIDs().ServeHTTP(w, r)
+			i.postFindUUIDs().ServeHTTP(w, r)
 			return
 		case i.regexpObjectsAggregations.MatchString(path):
 			if r.Method != http.MethodPost {
@@ -157,6 +192,18 @@ func (i *indices) Indices() http.Handler {
 
 			i.postAggregateObjects().ServeHTTP(w, r)
 			return
+		case i.regexpObjectsOverwrite.MatchString(path):
+			if r.Method != http.MethodPut {
+				http.Error(w, "405 Method not Allowed", http.StatusMethodNotAllowed)
+			}
+
+			i.putOverwriteObjects().ServeHTTP(w, r)
+		case i.regexObjectsDigest.MatchString(path):
+			if r.Method != http.MethodGet {
+				http.Error(w, "405 Method not Allowed", http.StatusMethodNotAllowed)
+			}
+
+			i.getObjectsDigest().ServeHTTP(w, r)
 		case i.regexpObject.MatchString(path):
 			if r.Method == http.MethodGet {
 				i.getObject().ServeHTTP(w, r)
@@ -198,7 +245,13 @@ func (i *indices) Indices() http.Handler {
 
 			i.postReferences().ServeHTTP(w, r)
 			return
-
+		case i.regexpShardsQueueSize.MatchString(path):
+			if r.Method == http.MethodGet {
+				i.getGetShardQueueSize().ServeHTTP(w, r)
+				return
+			}
+			http.Error(w, "405 Method not Allowed", http.StatusMethodNotAllowed)
+			return
 		case i.regexpShardsStatus.MatchString(path):
 			if r.Method == http.MethodGet {
 				i.getGetShardStatus().ServeHTTP(w, r)
@@ -238,7 +291,7 @@ func (i *indices) Indices() http.Handler {
 			http.NotFound(w, r)
 			return
 		}
-	})
+	}
 }
 
 func (i *indices) postObject() http.Handler {
@@ -554,7 +607,7 @@ func (i *indices) postSearchObjects() http.Handler {
 			return
 		}
 
-		vector, certainty, limit, filters, keywordRanking, sort, additional, err := IndicesPayloads.SearchParams.
+		vector, targetVector, certainty, limit, filters, keywordRanking, sort, cursor, groupBy, additional, err := IndicesPayloads.SearchParams.
 			Unmarshal(reqPayload)
 		if err != nil {
 			http.Error(w, "unmarshal search params from json: "+err.Error(),
@@ -563,7 +616,7 @@ func (i *indices) postSearchObjects() http.Handler {
 		}
 
 		results, dists, err := i.shards.Search(r.Context(), index, shard,
-			vector, certainty, limit, filters, keywordRanking, sort, additional)
+			vector, targetVector, certainty, limit, filters, keywordRanking, sort, cursor, groupBy, additional)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -673,7 +726,7 @@ func (i *indices) postAggregateObjects() http.Handler {
 	})
 }
 
-func (i *indices) postFindDocIDs() http.Handler {
+func (i *indices) postFindUUIDs() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		args := i.regexpObjectsFind.FindStringSubmatch(r.URL.Path)
 		if len(args) != 3 {
@@ -690,14 +743,14 @@ func (i *indices) postFindDocIDs() http.Handler {
 			return
 		}
 
-		ct, ok := IndicesPayloads.FindDocIDsParams.CheckContentTypeHeaderReq(r)
+		ct, ok := IndicesPayloads.FindUUIDsParams.CheckContentTypeHeaderReq(r)
 		if !ok {
 			http.Error(w, errors.Errorf("unexpected content type: %s", ct).Error(),
 				http.StatusUnsupportedMediaType)
 			return
 		}
 
-		filters, err := IndicesPayloads.FindDocIDsParams.
+		filters, err := IndicesPayloads.FindUUIDsParams.
 			Unmarshal(reqPayload)
 		if err != nil {
 			http.Error(w, "unmarshal find doc ids params from json: "+err.Error(),
@@ -705,19 +758,108 @@ func (i *indices) postFindDocIDs() http.Handler {
 			return
 		}
 
-		results, err := i.shards.FindDocIDs(r.Context(), index, shard, filters)
+		results, err := i.shards.FindUUIDs(r.Context(), index, shard, filters)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		resBytes, err := IndicesPayloads.FindDocIDsResults.Marshal(results)
+		resBytes, err := IndicesPayloads.FindUUIDsResults.Marshal(results)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		IndicesPayloads.FindDocIDsResults.SetContentTypeHeader(w)
+		IndicesPayloads.FindUUIDsResults.SetContentTypeHeader(w)
+		w.Write(resBytes)
+	})
+}
+
+func (i *indices) putOverwriteObjects() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		args := i.regexpObjectsOverwrite.FindStringSubmatch(r.URL.Path)
+		if len(args) != 3 {
+			http.Error(w, "invalid URI", http.StatusBadRequest)
+			return
+		}
+
+		index, shard := args[1], args[2]
+
+		defer r.Body.Close()
+		reqPayload, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "read request body: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		ct, ok := IndicesPayloads.VersionedObjectList.CheckContentTypeHeaderReq(r)
+		if !ok {
+			http.Error(w, errors.Errorf("unexpected content type: %s", ct).Error(),
+				http.StatusUnsupportedMediaType)
+			return
+		}
+
+		vobjs, err := IndicesPayloads.VersionedObjectList.Unmarshal(reqPayload)
+		if err != nil {
+			http.Error(w, "unmarshal overwrite objects params from json: "+err.Error(),
+				http.StatusBadRequest)
+			return
+		}
+
+		results, err := i.shards.OverwriteObjects(r.Context(), index, shard, vobjs)
+		if err != nil {
+			http.Error(w, "overwrite objects: "+err.Error(),
+				http.StatusInternalServerError)
+			return
+		}
+
+		resBytes, err := json.Marshal(results)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Write(resBytes)
+	})
+}
+
+func (i *indices) getObjectsDigest() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		args := i.regexObjectsDigest.FindStringSubmatch(r.URL.Path)
+		if len(args) != 3 {
+			http.Error(w, "invalid URI", http.StatusBadRequest)
+			return
+		}
+
+		index, shard := args[1], args[2]
+
+		defer r.Body.Close()
+		reqPayload, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "read request body: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		var ids []strfmt.UUID
+		if err := json.Unmarshal(reqPayload, &ids); err != nil {
+			http.Error(w, "unmarshal digest objects params from json: "+err.Error(),
+				http.StatusBadRequest)
+			return
+		}
+
+		results, err := i.shards.DigestObjects(r.Context(), index, shard, ids)
+		if err != nil {
+			http.Error(w, "digest objects: "+err.Error(),
+				http.StatusInternalServerError)
+			return
+		}
+
+		resBytes, err := json.Marshal(results)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
 		w.Write(resBytes)
 	})
 }
@@ -746,7 +888,7 @@ func (i *indices) deleteObjects() http.Handler {
 			return
 		}
 
-		docIDs, dryRun, err := IndicesPayloads.BatchDeleteParams.
+		uuids, dryRun, err := IndicesPayloads.BatchDeleteParams.
 			Unmarshal(reqPayload)
 		if err != nil {
 			http.Error(w, "unmarshal find doc ids params from json: "+err.Error(),
@@ -754,7 +896,7 @@ func (i *indices) deleteObjects() http.Handler {
 			return
 		}
 
-		results := i.shards.DeleteObjectBatch(r.Context(), index, shard, docIDs, dryRun)
+		results := i.shards.DeleteObjectBatch(r.Context(), index, shard, uuids, dryRun)
 
 		resBytes, err := IndicesPayloads.BatchDeleteResults.Marshal(results)
 		if err != nil {
@@ -764,6 +906,33 @@ func (i *indices) deleteObjects() http.Handler {
 
 		IndicesPayloads.BatchDeleteResults.SetContentTypeHeader(w)
 		w.Write(resBytes)
+	})
+}
+
+func (i *indices) getGetShardQueueSize() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		args := i.regexpShardsQueueSize.FindStringSubmatch(r.URL.Path)
+		if len(args) != 3 {
+			http.Error(w, "invalid URI", http.StatusBadRequest)
+			return
+		}
+
+		index, shard := args[1], args[2]
+
+		defer r.Body.Close()
+
+		size, err := i.shards.GetShardQueueSize(r.Context(), index, shard)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+
+		sizeBytes, err := IndicesPayloads.GetShardQueueSizeResults.Marshal(size)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+
+		IndicesPayloads.GetShardQueueSizeResults.SetContentTypeHeader(w)
+		w.Write(sizeBytes)
 	})
 }
 

@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package hnsw
@@ -17,16 +17,22 @@ import (
 	"io"
 	"math"
 	"math/rand"
+	"strings"
 	"sync"
-	"time"
+	"sync/atomic"
 
 	"github.com/pkg/errors"
-	"github.com/semi-technologies/weaviate/adapters/repos/db/vector/hnsw/distancer"
-	"github.com/semi-technologies/weaviate/adapters/repos/db/vector/hnsw/priorityqueue"
-	"github.com/semi-technologies/weaviate/entities/cyclemanager"
-	"github.com/semi-technologies/weaviate/entities/storobj"
-	ent "github.com/semi-technologies/weaviate/entities/vectorindex/hnsw"
 	"github.com/sirupsen/logrus"
+	"github.com/weaviate/weaviate/adapters/repos/db/lsmkv"
+	"github.com/weaviate/weaviate/adapters/repos/db/priorityqueue"
+	"github.com/weaviate/weaviate/adapters/repos/db/vector/cache"
+	"github.com/weaviate/weaviate/adapters/repos/db/vector/common"
+	"github.com/weaviate/weaviate/adapters/repos/db/vector/compressionhelpers"
+	"github.com/weaviate/weaviate/adapters/repos/db/vector/hnsw/distancer"
+	"github.com/weaviate/weaviate/entities/cyclemanager"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/storobj"
+	ent "github.com/weaviate/weaviate/entities/vectorindex/hnsw"
 )
 
 type hnsw struct {
@@ -46,6 +52,10 @@ type hnsw struct {
 	// is aborted as it makes no sense anymore
 	resetCtx       context.Context
 	resetCtxCancel context.CancelFunc
+
+	// indicates the index is shutting down
+	shutdownCtx       context.Context
+	shutdownCtxCancel context.CancelFunc
 
 	// make sure the very first insert happens just once, otherwise we
 	// accidentally overwrite previous entrypoints on parallel imports on an
@@ -87,10 +97,13 @@ type hnsw struct {
 
 	nodes []*vertex
 
-	vectorForID      VectorForID
-	multiVectorForID MultiVectorForID
+	vectorForID          common.VectorForID[float32]
+	TempVectorForIDThunk common.TempVectorForID
+	multiVectorForID     common.MultiVectorForID
+	trackDimensionsOnce  sync.Once
+	dims                 int32
 
-	cache cache
+	cache cache.Cache[float32]
 
 	commitLog CommitLogger
 
@@ -100,9 +113,9 @@ type hnsw struct {
 	// This process should happen periodically.
 	tombstones map[uint64]struct{}
 
-	// used for cancellation of the tombstone cleanup goroutine
-	cleanupInterval       time.Duration
-	tombstoneCleanupCycle *cyclemanager.CycleManager
+	tombstoneCleanupCallbackCtrl cyclemanager.CycleCallbackCtrl
+	shardCompactionCallbacks     cyclemanager.CycleCallbackGroup
+	shardFlushCallbacks          cyclemanager.CycleCallbackGroup
 
 	// // for distributed spike, can be used to call a insertExternal on a different graph
 	// insertHook func(node, targetLevel int, neighborsAtLevel map[int][]uint32)
@@ -134,18 +147,30 @@ type hnsw struct {
 	// single-threadedness of deletes is not a big problem.
 	//
 	// This lock was introduced as part of
-	// https://github.com/semi-technologies/weaviate/issues/2194
+	// https://github.com/weaviate/weaviate/issues/2194
 	//
 	// See
-	// https://github.com/semi-technologies/weaviate/pull/2191#issuecomment-1242726787
+	// https://github.com/weaviate/weaviate/pull/2191#issuecomment-1242726787
 	// where we ran performance tests to make sure introducing this lock has no
 	// negative impact on performance.
 	deleteVsInsertLock sync.RWMutex
+
+	compressed   atomic.Bool
+	doNotRescore bool
+
+	compressor compressionhelpers.VectorCompressor
+	pqConfig   ent.PQConfig
+
+	compressActionLock *sync.RWMutex
+	className          string
+	shardName          string
+	VectorForIDThunk   common.VectorForID[float32]
+	shardedNodeLocks   *common.ShardedRWLocks
+	store              *lsmkv.Store
 }
 
 type CommitLogger interface {
 	ID() string
-	Start()
 	AddNode(node *vertex) error
 	SetEntryPointWithMaxLayer(id uint64, level int) error
 	AddLinkAtLevel(nodeid uint64, level int, target uint64) error
@@ -161,7 +186,7 @@ type CommitLogger interface {
 	Shutdown(ctx context.Context) error
 	RootPath() string
 	SwitchCommitLogs(bool) error
-	MaintenanceInProgress() bool
+	AddPQ(compressionhelpers.PQData) error
 }
 
 type BufferedLinksLogger interface {
@@ -172,18 +197,15 @@ type BufferedLinksLogger interface {
 
 type MakeCommitLogger func() (CommitLogger, error)
 
-type (
-	VectorForID      func(ctx context.Context, id uint64) ([]float32, error)
-	MultiVectorForID func(ctx context.Context, ids []uint64) ([][]float32, []error)
-)
-
 // New creates a new HNSW index, the commit logger is provided through a thunk
 // (a function which can be deferred). This is because creating a commit logger
 // opens files for writing. However, checking whether a file is present, is a
 // criterium for the index to see if it has to recover from disk or if its a
 // truly new index. So instead the index is initialized, with un-biased disk
 // checks first and only then is the commit logger created
-func New(cfg Config, uc ent.UserConfig) (*hnsw, error) {
+func New(cfg Config, uc ent.UserConfig, tombstoneCallbacks, shardCompactionCallbacks,
+	shardFlushCallbacks cyclemanager.CycleCallbackGroup, store *lsmkv.Store,
+) (*hnsw, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, errors.Wrap(err, "invalid config")
 	}
@@ -199,10 +221,11 @@ func New(cfg Config, uc ent.UserConfig) (*hnsw, error) {
 		normalizeOnRead = true
 	}
 
-	vectorCache := newShardedLockCache(cfg.VectorForIDThunk, uc.VectorCacheMaxObjects,
-		cfg.Logger, normalizeOnRead)
+	vectorCache := cache.NewShardedFloat32LockCache(cfg.VectorForIDThunk, uc.VectorCacheMaxObjects,
+		cfg.Logger, normalizeOnRead, cache.DefaultDeletionInterval)
 
 	resetCtx, resetCtxCancel := context.WithCancel(context.Background())
+	shutdownCtx, shutdownCtxCancel := context.WithCancel(context.Background())
 	index := &hnsw{
 		maximumConnections: uc.MaxConnections,
 
@@ -213,10 +236,10 @@ func New(cfg Config, uc ent.UserConfig) (*hnsw, error) {
 		levelNormalizer:   1 / math.Log(float64(uc.MaxConnections)),
 		efConstruction:    uc.EFConstruction,
 		flatSearchCutoff:  int64(uc.FlatSearchCutoff),
-		nodes:             make([]*vertex, initialSize),
+		nodes:             make([]*vertex, cache.InitialSize),
 		cache:             vectorCache,
-		vectorForID:       vectorCache.get,
-		multiVectorForID:  vectorCache.multiGet,
+		vectorForID:       vectorCache.Get,
+		multiVectorForID:  vectorCache.MultiGet,
 		id:                cfg.ID,
 		rootPath:          cfg.RootPath,
 		tombstones:        map[uint64]struct{}{},
@@ -227,25 +250,53 @@ func New(cfg Config, uc ent.UserConfig) (*hnsw, error) {
 		resetLock:         &sync.Mutex{},
 		resetCtx:          resetCtx,
 		resetCtxCancel:    resetCtxCancel,
+		shutdownCtx:       shutdownCtx,
+		shutdownCtxCancel: shutdownCtxCancel,
 		initialInsertOnce: &sync.Once{},
-		cleanupInterval:   time.Duration(uc.CleanupIntervalSeconds) * time.Second,
 
 		ef:       int64(uc.EF),
 		efMin:    int64(uc.DynamicEFMin),
 		efMax:    int64(uc.DynamicEFMax),
 		efFactor: int64(uc.DynamicEFFactor),
 
-		metrics: NewMetrics(cfg.PrometheusMetrics, cfg.ClassName, cfg.ShardName),
+		metrics:   NewMetrics(cfg.PrometheusMetrics, cfg.ClassName, cfg.ShardName),
+		shardName: cfg.ShardName,
 
-		randFunc: rand.Float64,
+		randFunc:             rand.Float64,
+		compressActionLock:   &sync.RWMutex{},
+		className:            cfg.ClassName,
+		VectorForIDThunk:     cfg.VectorForIDThunk,
+		TempVectorForIDThunk: cfg.TempVectorForIDThunk,
+		pqConfig:             uc.PQ,
+		shardedNodeLocks:     common.NewDefaultShardedRWLocks(),
+
+		shardCompactionCallbacks: shardCompactionCallbacks,
+		shardFlushCallbacks:      shardFlushCallbacks,
+		store:                    store,
 	}
 
-	index.tombstoneCleanupCycle = cyclemanager.New(index.cleanupInterval, index.tombstoneCleanup)
-	index.insertMetrics = newInsertMetrics(index.metrics)
+	if uc.BQ.Enabled {
+		var err error
+		index.compressor, err = compressionhelpers.NewBQCompressor(index.distancerProvider, uc.VectorCacheMaxObjects, cfg.Logger, store)
+		if err != nil {
+			return nil, err
+		}
+		index.compressed.Store(true)
+		index.cache.Drop()
+		index.cache = nil
+	}
 
 	if err := index.init(cfg); err != nil {
 		return nil, errors.Wrapf(err, "init index %q", index.id)
 	}
+
+	// TODO common_cycle_manager move to poststartup?
+	id := strings.Join([]string{
+		"hnsw", "tombstone_cleanup",
+		index.className, index.shardName, index.id,
+	}, "/")
+	index.tombstoneCleanupCallbackCtrl = tombstoneCallbacks.Register(id, index.tombstoneCleanup)
+	index.insertMetrics = newInsertMetrics(index.metrics)
 
 	return index, nil
 }
@@ -350,13 +401,24 @@ func New(cfg Config, uc ent.UserConfig) (*hnsw, error) {
 // }
 
 func (h *hnsw) findBestEntrypointForNode(currentMaxLevel, targetLevel int,
-	entryPointID uint64, nodeVec []float32,
+	entryPointID uint64, nodeVec []float32, distancer compressionhelpers.CompressorDistancer,
 ) (uint64, error) {
 	// in case the new target is lower than the current max, we need to search
 	// each layer for a better candidate and update the candidate
 	for level := currentMaxLevel; level > targetLevel; level-- {
-		eps := priorityqueue.NewMin(1)
-		dist, ok, err := h.distBetweenNodeAndVec(entryPointID, nodeVec)
+		eps := priorityqueue.NewMin[any](1)
+		var dist float32
+		var ok bool
+		var err error
+		if h.compressed.Load() {
+			dist, ok, err = distancer.DistanceToNode(entryPointID)
+			var e storobj.ErrNotFound
+			if errors.As(err, &e) {
+				h.handleDeletedNode(e.DocID)
+			}
+		} else {
+			dist, ok, err = h.distBetweenNodeAndVec(entryPointID, nodeVec)
+		}
 		if err != nil {
 			return 0, errors.Wrapf(err,
 				"calculate distance between insert node and entry point at level %d", level)
@@ -366,7 +428,7 @@ func (h *hnsw) findBestEntrypointForNode(currentMaxLevel, targetLevel int,
 		}
 
 		eps.Insert(entryPointID, dist)
-		res, err := h.searchLayerByVector(nodeVec, eps, 1, level, nil)
+		res, err := h.searchLayerByVectorWithDistancer(nodeVec, eps, 1, level, nil, distancer)
 		if err != nil {
 			return 0,
 				errors.Wrapf(err, "update candidate: search layer at level %d", level)
@@ -396,6 +458,21 @@ func min(a, b int) int {
 }
 
 func (h *hnsw) distBetweenNodes(a, b uint64) (float32, bool, error) {
+	if h.compressed.Load() {
+		dist, err := h.compressor.DistanceBetweenCompressedVectorsFromIDs(context.Background(), a, b)
+		if err != nil {
+			var e storobj.ErrNotFound
+			if errors.As(err, &e) {
+				h.handleDeletedNode(e.DocID)
+				return 0, false, nil
+			} else {
+				return 0, false, err
+			}
+		}
+
+		return dist, true, nil
+	}
+
 	// TODO: introduce single search/transaction context instead of spawning new
 	// ones
 	vecA, err := h.vectorForID(context.Background(), a)
@@ -436,6 +513,21 @@ func (h *hnsw) distBetweenNodes(a, b uint64) (float32, bool, error) {
 }
 
 func (h *hnsw) distBetweenNodeAndVec(node uint64, vecB []float32) (float32, bool, error) {
+	if h.compressed.Load() {
+		dist, err := h.compressor.DistanceBetweenCompressedAndUncompressedVectorsFromID(context.Background(), node, vecB)
+		if err != nil {
+			var e storobj.ErrNotFound
+			if errors.As(err, &e) {
+				h.handleDeletedNode(e.DocID)
+				return 0, false, nil
+			} else {
+				return 0, false, err
+			}
+		}
+
+		return dist, true, nil
+	}
+
 	// TODO: introduce single search/transaction context instead of spawning new
 	// ones
 	vecA, err := h.vectorForID(context.Background(), node)
@@ -494,17 +586,14 @@ func (h *hnsw) Stats() {
 func (h *hnsw) isEmpty() bool {
 	h.RLock()
 	defer h.RUnlock()
+	h.shardedNodeLocks.RLock(h.entryPointID)
+	defer h.shardedNodeLocks.RUnlock(h.entryPointID)
 
-	return h.isEmptyUnsecured()
+	return h.isEmptyUnlocked()
 }
 
-func (h *hnsw) isEmptyUnsecured() bool {
-	for _, node := range h.nodes {
-		if node != nil {
-			return false
-		}
-	}
-	return true
+func (h *hnsw) isEmptyUnlocked() bool {
+	return h.nodes[h.entryPointID] == nil
 }
 
 func (h *hnsw) nodeByID(id uint64) *vertex {
@@ -512,32 +601,33 @@ func (h *hnsw) nodeByID(id uint64) *vertex {
 	defer h.RUnlock()
 
 	if id >= uint64(len(h.nodes)) {
-		// See https://github.com/semi-technologies/weaviate/issues/1838 for details.
+		// See https://github.com/weaviate/weaviate/issues/1838 for details.
 		// This could be after a crash recovery when the object store is "further
 		// ahead" than the hnsw index and we receive a delete request
 		return nil
 	}
+
+	h.shardedNodeLocks.RLock(id)
+	defer h.shardedNodeLocks.RUnlock(id)
 
 	return h.nodes[id]
 }
 
 func (h *hnsw) Drop(ctx context.Context) error {
 	// cancel tombstone cleanup goroutine
-
-	// if the interval is 0 we never started a cleanup cycle, therefore there is
-	// no loop running that could receive our cancel and we would be stuck. Thus,
-	// only cancel if we know it's been started.
-	if h.cleanupInterval != 0 {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-
-		if err := h.tombstoneCleanupCycle.StopAndWait(ctx); err != nil {
-			return errors.Wrap(err, "hnsw drop")
-		}
+	if err := h.tombstoneCleanupCallbackCtrl.Unregister(ctx); err != nil {
+		return errors.Wrap(err, "hnsw drop")
 	}
 
-	// cancel vector cache goroutine
-	h.cache.drop()
+	if h.compressed.Load() {
+		err := h.compressor.Drop()
+		if err != nil {
+			return fmt.Errorf("failed to shutdown compressed store")
+		}
+	} else {
+		// cancel vector cache goroutine
+		h.cache.Drop()
+	}
 
 	// cancel commit logger last, as the tombstone cleanup cycle might still
 	// write while it's still running
@@ -550,15 +640,24 @@ func (h *hnsw) Drop(ctx context.Context) error {
 }
 
 func (h *hnsw) Shutdown(ctx context.Context) error {
-	if err := h.tombstoneCleanupCycle.StopAndWait(ctx); err != nil {
-		return errors.Wrap(err, "hnsw shutdown")
-	}
+	h.shutdownCtxCancel()
 
 	if err := h.commitLog.Shutdown(ctx); err != nil {
 		return errors.Wrap(err, "hnsw shutdown")
 	}
 
-	h.cache.drop()
+	if err := h.tombstoneCleanupCallbackCtrl.Unregister(ctx); err != nil {
+		return errors.Wrap(err, "hnsw shutdown")
+	}
+
+	if h.compressed.Load() {
+		err := h.compressor.Drop()
+		if err != nil {
+			return errors.Wrap(err, "hnsw shutdown")
+		}
+	} else {
+		h.cache.Drop()
+	}
 
 	return nil
 }
@@ -572,4 +671,47 @@ func (h *hnsw) Entrypoint() uint64 {
 	defer h.RUnlock()
 
 	return h.entryPointID
+}
+
+func (h *hnsw) DistanceBetweenVectors(x, y []float32) (float32, bool, error) {
+	return h.distancerProvider.SingleDist(x, y)
+}
+
+func (h *hnsw) ContainsNode(id uint64) bool {
+	h.RLock()
+	defer h.RUnlock()
+	h.shardedNodeLocks.RLock(id)
+	defer h.shardedNodeLocks.RUnlock(id)
+
+	return len(h.nodes) > int(id) && h.nodes[id] != nil
+}
+
+func (h *hnsw) DistancerProvider() distancer.Provider {
+	return h.distancerProvider
+}
+
+func (h *hnsw) ShouldCompress() (bool, int) {
+	return h.pqConfig.Enabled, h.pqConfig.TrainingLimit
+}
+
+func (h *hnsw) ShouldCompressFromConfig(config schema.VectorIndexConfig) (bool, int) {
+	hnswConfig := config.(ent.UserConfig)
+	return hnswConfig.PQ.Enabled, hnswConfig.PQ.TrainingLimit
+}
+
+func (h *hnsw) Compressed() bool {
+	return h.compressed.Load()
+}
+
+func (h *hnsw) AlreadyIndexed() uint64 {
+	return uint64(h.cache.CountVectors())
+}
+
+func (h *hnsw) normalizeVec(vec []float32) []float32 {
+	if h.distancerProvider.Type() == "cosine-dot" {
+		// cosine-dot requires normalized vectors, as the dot product and cosine
+		// similarity are only identical if the vector is normalized
+		return distancer.Normalize(vec)
+	}
+	return vec
 }

@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 //go:build integrationTest
@@ -18,15 +18,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math/rand"
 	"testing"
 	"time"
 
-	"github.com/semi-technologies/weaviate/entities/models"
-	modstgfs "github.com/semi-technologies/weaviate/modules/backup-filesystem"
-	"github.com/semi-technologies/weaviate/usecases/backup"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/entities/models"
+	modstgfs "github.com/weaviate/weaviate/modules/backup-filesystem"
+	"github.com/weaviate/weaviate/usecases/backup"
 )
 
 var backend *fakeBackupBackend
@@ -34,6 +33,7 @@ var backend *fakeBackupBackend
 func TestDistributedBackups(t *testing.T) {
 	var (
 		dirName  = setupDirectory(t)
+		rnd      = getRandomSeed()
 		numObjs  = 100
 		numNodes = 3
 		backupID = "new-backup"
@@ -80,18 +80,18 @@ func TestDistributedBackups(t *testing.T) {
 	t.Run("import data", func(t *testing.T) {
 		t.Run("import first class into random node", func(t *testing.T) {
 			for _, obj := range data {
-				node := nodes[rand.Intn(len(nodes))]
+				node := nodes[rnd.Intn(len(nodes))]
 
-				err := node.repo.PutObject(context.Background(), obj, obj.Vector)
+				err := node.repo.PutObject(context.Background(), obj, obj.Vector, nil, nil)
 				require.Nil(t, err)
 			}
 		})
 
 		t.Run("import second class into random node", func(t *testing.T) {
 			for _, obj := range refData {
-				node := nodes[rand.Intn(len(nodes))]
+				node := nodes[rnd.Intn(len(nodes))]
 
-				err := node.repo.PutObject(context.Background(), obj, obj.Vector)
+				err := node.repo.PutObject(context.Background(), obj, obj.Vector, nil, nil)
 				require.Nil(t, err)
 			}
 		})

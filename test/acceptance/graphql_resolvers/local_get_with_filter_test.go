@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package test
@@ -14,15 +14,18 @@ package test
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"testing"
+	"time"
 
-	graphqlhelper "github.com/semi-technologies/weaviate/test/helper/graphql"
+	graphqlhelper "github.com/weaviate/weaviate/test/helper/graphql"
 
 	"github.com/go-openapi/strfmt"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/test/helper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/test/helper"
 )
 
 func gettingObjectsWithFilters(t *testing.T) {
@@ -49,6 +52,56 @@ func gettingObjectsWithFilters(t *testing.T) {
 		assert.ElementsMatch(t, expected, airports)
 	})
 
+	t.Run("nearText with prop length", func(t *testing.T) {
+		query := `
+		{
+			  Get {
+				City (
+					nearText: {
+						concepts: ["hi"],
+						distance: 0.9
+					},
+					where: {
+						path: "len(name)"
+						operator: GreaterThanEqual
+						valueInt: 0
+					}
+				) {
+				  name
+				}
+			  }
+		}
+		`
+		result := graphqlhelper.AssertGraphQL(t, helper.RootAuth, query)
+		cities := result.Get("Get", "City").AsSlice()
+		assert.Len(t, cities, 5)
+	})
+
+	t.Run("nearText with null filter", func(t *testing.T) {
+		query := `
+		{
+			  Get {
+				City (
+					nearText: {
+						concepts: ["hi"],
+						distance: 0.9
+					},
+					where: {
+						path: "name"
+						operator: IsNull
+						valueBoolean: true
+					}
+				) {
+				  name
+				}
+			  }
+		}
+		`
+		result := graphqlhelper.AssertGraphQL(t, helper.RootAuth, query)
+		cities := result.Get("Get", "City").AsSlice()
+		assert.Len(t, cities, 1)
+	})
+
 	t.Run("with filters applied", func(t *testing.T) {
 		query := `
 		{
@@ -63,7 +116,7 @@ func gettingObjectsWithFilters(t *testing.T) {
 						}
 						{
 							operator: Equal,
-							valueString:"Germany"
+							valueText:"Germany"
 							path:["inCity", "City", "inCountry", "Country", "name"]
 						}
 					]
@@ -92,11 +145,11 @@ func gettingObjectsWithFilters(t *testing.T) {
 					City(where:{
 						operator:Or
 						operands:[{
-							valueString:"Amsterdam",
+							valueText:"Amsterdam",
 							operator:Equal,
 							path:["name"]
 						}, {
-							valueString:"Berlin",
+							valueText:"Berlin",
 							operator:Equal,
 							path:["name"]
 						}]
@@ -131,7 +184,7 @@ func gettingObjectsWithFilters(t *testing.T) {
 			{
 				Get {
 					Airport(where:{
-						valueString:"Amsterdam",
+						valueText:"Amsterdam",
 						operator:Equal,
 						path:["inCity", "City", "name"]
 					}) {
@@ -156,6 +209,49 @@ func gettingObjectsWithFilters(t *testing.T) {
 		}
 
 		assert.Equal(t, expected, airport)
+	})
+
+	t.Run("with uuid filters applied", func(t *testing.T) {
+		query := `
+		{
+			Get {
+				Airport(where:{
+					operator:And
+					operands: [
+						{
+							operator: GreaterThan,
+							valueText: "00000000-0000-0000-0000-000000010000",
+							path:["airportId"]
+						},
+						{
+							operator: LessThan,
+							valueText: "00000000-0000-0000-0000-000000030000",
+							path:["airportId"]
+						},
+						{
+							operator: NotEqual,
+							valueText: "00000000-0000-0000-0000-000000040000",
+							path:["airportId"]
+						}
+					]
+				}){
+					code
+					airportId
+				}
+			}
+		}
+		`
+		result := graphqlhelper.AssertGraphQL(t, helper.RootAuth, query)
+		airports := result.Get("Get", "Airport").AsSlice()
+
+		expected := []interface{}{
+			map[string]interface{}{
+				"code":      "20000",
+				"airportId": "00000000-0000-0000-0000-000000020000",
+			},
+		}
+
+		assert.ElementsMatch(t, expected, airports)
 	})
 
 	t.Run("filtering for ref counts", func(t *testing.T) {
@@ -209,9 +305,9 @@ func gettingObjectsWithFilters(t *testing.T) {
 					ArrayClass(where:{
 						valueInt: 4,
 						operator:Equal,
-						path:["len(strings)"]
+						path:["len(texts)"]
 					}) {
-						strings
+						texts
 					}
 				}
 			}
@@ -226,9 +322,9 @@ func gettingObjectsWithFilters(t *testing.T) {
 					ArrayClass(where:{
 						valueBoolean: true,
 						operator:IsNull,
-						path:["strings"]
+						path:["texts"]
 					}) {
-						strings
+						texts
 					}
 				}
 			}
@@ -245,7 +341,7 @@ func gettingObjectsWithFilters(t *testing.T) {
 			{
 				Get {
 					Person(where:{
-						valueString: "%s"
+						valueText: "%s"
 						operator:Equal,
 						path:["profession"]
 					}) {
@@ -295,7 +391,7 @@ func gettingObjectsWithFilters(t *testing.T) {
 			{
 				Get {
 					Person(where:{
-						valueString: "%s"
+						valueText: "%s"
 						operator:Equal,
 						path:["about"]
 					}) {
@@ -390,7 +486,7 @@ func gettingObjectsWithFilters(t *testing.T) {
 			{
 				Get {
 					Airport(where:{
-						valueString:"4770bb19-20fd-406e-ac64-9dac54c27a0f",
+						valueText:"4770bb19-20fd-406e-ac64-9dac54c27a0f",
 						operator:Equal,
 						path:["id"]
 					}) {
@@ -438,7 +534,14 @@ func gettingObjectsWithFilters(t *testing.T) {
 		targetCreationTime := additional.(map[string]interface{})["creationTimeUnix"].(string)
 		targetUpdateTime := additional.(map[string]interface{})["lastUpdateTimeUnix"].(string)
 
-		t.Run("creationTimeUnix", func(t *testing.T) {
+		creationTimestamp, err := strconv.ParseInt(targetCreationTime, 10, 64)
+		assert.Nil(t, err)
+		creationDate := time.UnixMilli(creationTimestamp).Format(time.RFC3339)
+		updateTimestamp, err := strconv.ParseInt(targetUpdateTime, 10, 64)
+		assert.Nil(t, err)
+		updateDate := time.UnixMilli(updateTimestamp).Format(time.RFC3339)
+
+		t.Run("creationTimeUnix as timestamp", func(t *testing.T) {
 			query := fmt.Sprintf(`
 				{
 					Get {
@@ -446,7 +549,7 @@ func gettingObjectsWithFilters(t *testing.T) {
 							where: {
 								path: ["_creationTimeUnix"]
 								operator: Equal
-								valueString: "%s"
+								valueText: "%s"
 							}
 						)
 						{
@@ -465,7 +568,34 @@ func gettingObjectsWithFilters(t *testing.T) {
 			assert.Equal(t, targetID, resultID)
 		})
 
-		t.Run("lastUpdateTimeUnix", func(t *testing.T) {
+		t.Run("creationTimeUnix as date", func(t *testing.T) {
+			query := fmt.Sprintf(`
+				{
+					Get {
+						Airport(
+							where: {
+								path: ["_creationTimeUnix"]
+								operator: GreaterThanEqual
+								valueDate: "%s"
+							}
+						)
+						{
+							_additional {
+								id
+							}
+						}
+					}
+				}
+			`, creationDate)
+
+			result := graphqlhelper.AssertGraphQL(t, helper.RootAuth, query)
+			airport := result.Get("Get", "Airport").AsSlice()[0]
+			additional := airport.(map[string]interface{})["_additional"]
+			resultID := additional.(map[string]interface{})["id"].(string)
+			assert.Equal(t, targetID, resultID)
+		})
+
+		t.Run("lastUpdateTimeUnix as timestamp", func(t *testing.T) {
 			query := fmt.Sprintf(`
 				{
 					Get {
@@ -473,7 +603,7 @@ func gettingObjectsWithFilters(t *testing.T) {
 							where: {
 								path: ["_lastUpdateTimeUnix"]
 								operator: Equal
-								valueString: "%s"
+								valueText: "%s"
 							}
 						)
 						{
@@ -491,6 +621,33 @@ func gettingObjectsWithFilters(t *testing.T) {
 			resultID := additional.(map[string]interface{})["id"].(string)
 			assert.Equal(t, targetID, resultID)
 		})
+
+		t.Run("lastUpdateTimeUnix as date", func(t *testing.T) {
+			query := fmt.Sprintf(`
+				{
+					Get {
+						Airport(
+							where: {
+								path: ["_lastUpdateTimeUnix"]
+								operator: GreaterThanEqual
+								valueDate: "%s"
+							}
+						)
+						{
+							_additional {
+								id
+							}
+						}
+					}
+				}
+			`, updateDate)
+
+			result := graphqlhelper.AssertGraphQL(t, helper.RootAuth, query)
+			airport := result.Get("Get", "Airport").AsSlice()[0]
+			additional := airport.(map[string]interface{})["_additional"]
+			resultID := additional.(map[string]interface{})["id"].(string)
+			assert.Equal(t, targetID, resultID)
+		})
 	})
 
 	t.Run("with id filter on object with no props", func(t *testing.T) {
@@ -500,7 +657,7 @@ func gettingObjectsWithFilters(t *testing.T) {
 		t.Run("setup test class and obj", func(t *testing.T) {
 			createObjectClass(t, &models.Class{
 				Class: "NoProps", Properties: []*models.Property{
-					{Name: "unused", DataType: []string{"string"}},
+					{Name: "unused", DataType: schema.DataTypeText.PropString(), Tokenization: models.PropertyTokenizationWhitespace},
 				},
 			})
 
@@ -511,7 +668,7 @@ func gettingObjectsWithFilters(t *testing.T) {
 			query := fmt.Sprintf(`
 				{
 					Get {
-						NoProps(where:{operator:Equal path:["_id"] valueString:"%s"})
+						NoProps(where:{operator:Equal path:["_id"] valueText:"%s"})
 						{
 							_additional {id}
 						}

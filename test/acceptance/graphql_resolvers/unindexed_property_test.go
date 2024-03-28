@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package test
@@ -15,26 +15,30 @@ import (
 	"testing"
 
 	"github.com/go-openapi/strfmt"
-	"github.com/semi-technologies/weaviate/client/objects"
-	"github.com/semi-technologies/weaviate/client/schema"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/test/helper"
-	testhelper "github.com/semi-technologies/weaviate/test/helper"
-	graphqlhelper "github.com/semi-technologies/weaviate/test/helper/graphql"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/client/objects"
+	clschema "github.com/weaviate/weaviate/client/schema"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/test/helper"
+	testhelper "github.com/weaviate/weaviate/test/helper"
+	graphqlhelper "github.com/weaviate/weaviate/test/helper/graphql"
 )
 
 func Test_UnindexedProperty(t *testing.T) {
 	className := "NoIndexTestClass"
 
 	defer func() {
-		delParams := schema.NewSchemaObjectsDeleteParams().WithClassName(className)
+		delParams := clschema.NewSchemaObjectsDeleteParams().WithClassName(className)
 		delResp, err := helper.Client(t).Schema.SchemaObjectsDelete(delParams, nil)
 		helper.AssertRequestOk(t, delResp, err, nil)
 	}()
 
 	t.Run("creating a class with two string props", func(t *testing.T) {
+		vFalse := false
+		vTrue := true
+
 		c := &models.Class{
 			Class: className,
 			ModuleConfig: map[string]interface{}{
@@ -44,18 +48,23 @@ func Test_UnindexedProperty(t *testing.T) {
 			},
 			Properties: []*models.Property{
 				{
-					Name:     "name",
-					DataType: []string{"string"},
+					Name:            "name",
+					DataType:        schema.DataTypeText.PropString(),
+					Tokenization:    models.PropertyTokenizationWhitespace,
+					IndexFilterable: &vTrue,
+					IndexSearchable: &vTrue,
 				},
 				{
-					Name:          "hiddenName",
-					DataType:      []string{"string"},
-					IndexInverted: referenceToFalse(),
+					Name:            "hiddenName",
+					DataType:        schema.DataTypeText.PropString(),
+					Tokenization:    models.PropertyTokenizationWhitespace,
+					IndexFilterable: &vFalse,
+					IndexSearchable: &vFalse,
 				},
 			},
 		}
 
-		params := schema.NewSchemaObjectsCreateParams().WithObjectClass(c)
+		params := clschema.NewSchemaObjectsCreateParams().WithObjectClass(c)
 		resp, err := helper.Client(t).Schema.SchemaObjectsCreate(params, nil)
 		helper.AssertRequestOk(t, resp, err, nil)
 	})
@@ -82,7 +91,7 @@ func Test_UnindexedProperty(t *testing.T) {
 			Get {
 				NoIndexTestClass(where:{
 					operator: Equal,
-					valueString: "elephant"
+					valueText: "elephant"
 					path:["name"]
 				}){
 					name
@@ -108,7 +117,7 @@ func Test_UnindexedProperty(t *testing.T) {
 			Get {
 				NoIndexTestClass(where:{
 					operator: Equal,
-					valueString: "zebra"
+					valueText: "zebra"
 					path:["hiddenName"]
 				}){
 					name
@@ -121,11 +130,6 @@ func Test_UnindexedProperty(t *testing.T) {
 		require.Nil(t, err)
 		assert.True(t, len(res.Errors) > 0, "this query should be impossible as the field was not indexed")
 	})
-}
-
-func referenceToFalse() *bool {
-	b := false
-	return &b
 }
 
 func assertGetObjectEventually(t *testing.T, uuid strfmt.UUID) *models.Object {

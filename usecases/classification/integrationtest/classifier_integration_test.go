@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 //go:build integrationTest
@@ -17,42 +17,43 @@ package classification_integration_test
 import (
 	"context"
 	"encoding/json"
-	"math/rand"
 	"testing"
 	"time"
 
 	"github.com/go-openapi/strfmt"
-	"github.com/semi-technologies/weaviate/adapters/repos/db"
-	"github.com/semi-technologies/weaviate/entities/filters"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	testhelper "github.com/semi-technologies/weaviate/test/helper"
-	"github.com/semi-technologies/weaviate/usecases/classification"
-	"github.com/semi-technologies/weaviate/usecases/objects"
-	"github.com/semi-technologies/weaviate/usecases/traverser"
 	"github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/adapters/repos/db"
+	"github.com/weaviate/weaviate/entities/dto"
+	"github.com/weaviate/weaviate/entities/filters"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
+	testhelper "github.com/weaviate/weaviate/test/helper"
+	"github.com/weaviate/weaviate/usecases/classification"
+	"github.com/weaviate/weaviate/usecases/objects"
 )
 
 func Test_Classifier_KNN_SaveConsistency(t *testing.T) {
-	rand.Seed(time.Now().UnixNano())
 	dirName := t.TempDir()
 	logger, _ := test.NewNullLogger()
 	var id strfmt.UUID
 
 	shardState := singleShardState()
-	sg := &fakeSchemaGetter{shardState: shardState}
+	sg := &fakeSchemaGetter{
+		schema:     schema.Schema{Objects: &models.Schema{Classes: nil}},
+		shardState: shardState,
+	}
 
-	vrepo := db.New(logger, db.Config{
-		MemtablesFlushIdleAfter:   60,
+	vrepo, err := db.New(logger, db.Config{
+		MemtablesFlushDirtyAfter:  60,
 		RootPath:                  dirName,
 		QueryMaximumResults:       10000,
 		MaxImportGoroutinesFactor: 1,
 	}, &fakeRemoteClient{}, &fakeNodeResolver{}, &fakeRemoteNodeClient{}, &fakeReplicationClient{}, nil)
-	vrepo.SetSchemaGetter(sg)
-	err := vrepo.WaitForStartup(context.Background())
 	require.Nil(t, err)
+	vrepo.SetSchemaGetter(sg)
+	require.Nil(t, vrepo.WaitForStartup(context.Background()))
 	migrator := db.NewMigrator(vrepo, logger)
 
 	// so we can reuse it for follow up requests, such as checking the status
@@ -76,12 +77,11 @@ func Test_Classifier_KNN_SaveConsistency(t *testing.T) {
 				bt[i] = objects.BatchObject{
 					OriginalIndex: i,
 					UUID:          elem.ID,
-					Vector:        elem.Vector,
 					Object:        elem.Object(),
 				}
 			}
 
-			res, err := vrepo.BatchPutObjects(context.Background(), bt)
+			res, err := vrepo.BatchPutObjects(context.Background(), bt, nil)
 			require.Nil(t, err)
 			for _, elem := range res {
 				require.Nil(t, elem.Err)
@@ -94,11 +94,10 @@ func Test_Classifier_KNN_SaveConsistency(t *testing.T) {
 				bt[i] = objects.BatchObject{
 					OriginalIndex: i,
 					UUID:          elem.ID,
-					Vector:        elem.Vector,
 					Object:        elem.Object(),
 				}
 			}
-			res, err := vrepo.BatchPutObjects(context.Background(), bt)
+			res, err := vrepo.BatchPutObjects(context.Background(), bt, nil)
 			require.Nil(t, err)
 			for _, elem := range res {
 				require.Nil(t, elem.Err)
@@ -129,7 +128,7 @@ func Test_Classifier_KNN_SaveConsistency(t *testing.T) {
 			id = class.ID
 		})
 
-		t.Run("retrieving the same classificiation by id", func(t *testing.T) {
+		t.Run("retrieving the same classification by id", func(t *testing.T) {
 			class, err := classifier.Get(context.Background(), nil, id)
 			require.Nil(t, err)
 			require.NotNil(t, class)
@@ -161,7 +160,7 @@ func Test_Classifier_KNN_SaveConsistency(t *testing.T) {
 					},
 				},
 			}
-			res, err := vrepo.ClassSearch(context.Background(), traverser.GetParams{
+			res, err := vrepo.Search(context.Background(), dto.GetParams{
 				ClassName: "Article",
 				Filters:   &filter,
 				Pagination: &filters.Pagination{
@@ -177,7 +176,6 @@ func Test_Classifier_KNN_SaveConsistency(t *testing.T) {
 
 func Test_Classifier_ZeroShot_SaveConsistency(t *testing.T) {
 	t.Skip()
-	rand.Seed(time.Now().UnixNano())
 	dirName := t.TempDir()
 
 	logger, _ := test.NewNullLogger()
@@ -185,14 +183,14 @@ func Test_Classifier_ZeroShot_SaveConsistency(t *testing.T) {
 
 	sg := &fakeSchemaGetter{shardState: singleShardState()}
 
-	vrepo := db.New(logger, db.Config{
+	vrepo, err := db.New(logger, db.Config{
 		RootPath:                  dirName,
 		QueryMaximumResults:       10000,
 		MaxImportGoroutinesFactor: 1,
 	}, &fakeRemoteClient{}, &fakeNodeResolver{}, &fakeRemoteNodeClient{}, &fakeReplicationClient{}, nil)
-	vrepo.SetSchemaGetter(sg)
-	err := vrepo.WaitForStartup(context.Background())
 	require.Nil(t, err)
+	vrepo.SetSchemaGetter(sg)
+	require.Nil(t, vrepo.WaitForStartup(context.Background()))
 	migrator := db.NewMigrator(vrepo, logger)
 
 	t.Run("preparations", func(t *testing.T) {
@@ -212,12 +210,11 @@ func Test_Classifier_ZeroShot_SaveConsistency(t *testing.T) {
 				bt[i] = objects.BatchObject{
 					OriginalIndex: i,
 					UUID:          elem.ID,
-					Vector:        elem.Vector,
 					Object:        elem.Object(),
 				}
 			}
 
-			res, err := vrepo.BatchPutObjects(context.Background(), bt)
+			res, err := vrepo.BatchPutObjects(context.Background(), bt, nil)
 			require.Nil(t, err)
 			for _, elem := range res {
 				require.Nil(t, elem.Err)
@@ -246,7 +243,7 @@ func Test_Classifier_ZeroShot_SaveConsistency(t *testing.T) {
 			id = class.ID
 		})
 
-		t.Run("retrieving the same classificiation by id", func(t *testing.T) {
+		t.Run("retrieving the same classification by id", func(t *testing.T) {
 			class, err := classifier.Get(context.Background(), nil, id)
 			require.Nil(t, err)
 			require.NotNil(t, class)
@@ -278,7 +275,7 @@ func Test_Classifier_ZeroShot_SaveConsistency(t *testing.T) {
 					},
 				},
 			}
-			res, err := vrepo.ClassSearch(context.Background(), traverser.GetParams{
+			res, err := vrepo.Search(context.Background(), dto.GetParams{
 				ClassName: "Recipes",
 				Filters:   &filter,
 				Pagination: &filters.Pagination{

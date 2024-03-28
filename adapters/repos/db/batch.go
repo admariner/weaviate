@@ -4,20 +4,23 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package db
 
 import (
 	"context"
+	"fmt"
 
+	"github.com/go-openapi/strfmt"
 	"github.com/pkg/errors"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	"github.com/semi-technologies/weaviate/entities/storobj"
-	"github.com/semi-technologies/weaviate/usecases/objects"
+	"github.com/weaviate/weaviate/entities/additional"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/storobj"
+	"github.com/weaviate/weaviate/usecases/objects"
 )
 
 type batchQueue struct {
@@ -25,68 +28,128 @@ type batchQueue struct {
 	originalIndex []int
 }
 
-func (db *DB) BatchPutObjects(ctx context.Context, objects objects.BatchObjects) (objects.BatchObjects, error) {
-	byIndex := map[string]batchQueue{}
-	db.indexLock.RLock()
-	defer db.indexLock.RUnlock()
+func (db *DB) BatchPutObjects(ctx context.Context, objs objects.BatchObjects,
+	repl *additional.ReplicationProperties,
+) (objects.BatchObjects, error) {
+	objectByClass := make(map[string]batchQueue)
+	indexByClass := make(map[string]*Index)
 
-	for _, item := range objects {
-		for _, index := range db.indices {
-			if index.Config.ClassName != schema.ClassName(item.Object.Class) {
-				continue
-			}
-
-			if item.Err != nil {
-				// item has a validation error or another reason to ignore
-				continue
-			}
-
-			queue := byIndex[index.ID()]
-			object := storobj.FromObject(item.Object, item.Vector)
-			queue.objects = append(queue.objects, object)
-			queue.originalIndex = append(queue.originalIndex, item.OriginalIndex)
-			byIndex[index.ID()] = queue
-		}
+	if err := db.memMonitor.CheckAlloc(estimateBatchMemory(objs)); err != nil {
+		return nil, fmt.Errorf("cannot process batch: %w", err)
 	}
 
-	for indexID, queue := range byIndex {
-		errs := db.indices[indexID].putObjectBatch(ctx, queue.objects)
-		for index, err := range errs {
+	for _, item := range objs {
+		if item.Err != nil {
+			// item has a validation error or another reason to ignore
+			continue
+		}
+		queue := objectByClass[item.Object.Class]
+		queue.objects = append(queue.objects, storobj.FromObject(item.Object, item.Object.Vector, item.Object.Vectors))
+		queue.originalIndex = append(queue.originalIndex, item.OriginalIndex)
+		objectByClass[item.Object.Class] = queue
+	}
+
+	// wrapped by func to acquire and safely release indexLock only for duration of loop
+	func() {
+		db.indexLock.RLock()
+		defer db.indexLock.RUnlock()
+
+		for class, queue := range objectByClass {
+			index, ok := db.indices[indexID(schema.ClassName(class))]
+			if !ok {
+				msg := fmt.Sprintf("could not find index for class %v. It might have been deleted in the meantime", class)
+				db.logger.Warn(msg)
+				for _, origIdx := range queue.originalIndex {
+					if origIdx >= len(objs) {
+						db.logger.Errorf(
+							"batch add queue index out of bounds. len(objs) == %d, queue.originalIndex == %d",
+							len(objs), origIdx)
+						break
+					}
+					objs[origIdx].Err = fmt.Errorf(msg)
+				}
+				continue
+			}
+			index.dropIndex.RLock()
+			indexByClass[class] = index
+		}
+	}()
+
+	// safely release remaining locks (in case of panic)
+	defer func() {
+		for _, index := range indexByClass {
+			if index != nil {
+				index.dropIndex.RUnlock()
+			}
+		}
+	}()
+
+	for class, index := range indexByClass {
+		queue := objectByClass[class]
+		errs := index.putObjectBatch(ctx, queue.objects, repl)
+		// remove index from map to skip releasing its lock in defer
+		indexByClass[class] = nil
+		index.dropIndex.RUnlock()
+		for i, err := range errs {
 			if err != nil {
-				objects[queue.originalIndex[index]].Err = err
+				objs[queue.originalIndex[i]].Err = err
 			}
 		}
 	}
 
-	return objects, nil
+	return objs, nil
 }
 
-func (db *DB) AddBatchReferences(ctx context.Context, references objects.BatchReferences) (objects.BatchReferences, error) {
-	byIndex := map[string]objects.BatchReferences{}
-	db.indexLock.RLock()
-	defer db.indexLock.RUnlock()
+func (db *DB) AddBatchReferences(ctx context.Context, references objects.BatchReferences,
+	repl *additional.ReplicationProperties,
+) (objects.BatchReferences, error) {
+	refByClass := make(map[schema.ClassName]objects.BatchReferences)
+	indexByClass := make(map[schema.ClassName]*Index)
+
 	for _, item := range references {
-		for _, index := range db.indices {
-			if item.Err != nil {
-				// item has a validation error or another reason to ignore
-				continue
-			}
-
-			if index.Config.ClassName != item.From.Class {
-				continue
-			}
-
-			queue := byIndex[index.ID()]
-			queue = append(queue, item)
-			byIndex[index.ID()] = queue
+		if item.Err != nil {
+			// item has a validation error or another reason to ignore
+			continue
 		}
+		refByClass[item.From.Class] = append(refByClass[item.From.Class], item)
 	}
 
-	for indexID, queue := range byIndex {
-		errs := db.indices[indexID].addReferencesBatch(ctx, queue)
-		for index, err := range errs {
+	// wrapped by func to acquire and safely release indexLock only for duration of loop
+	func() {
+		db.indexLock.RLock()
+		defer db.indexLock.RUnlock()
+
+		for class, queue := range refByClass {
+			index, ok := db.indices[indexID(class)]
+			if !ok {
+				for _, item := range queue {
+					references[item.OriginalIndex].Err = fmt.Errorf("could not find index for class %v. It might have been deleted in the meantime", class)
+				}
+				continue
+			}
+			index.dropIndex.RLock()
+			indexByClass[class] = index
+		}
+	}()
+
+	// safely release remaining locks (in case of panic)
+	defer func() {
+		for _, index := range indexByClass {
+			if index != nil {
+				index.dropIndex.RUnlock()
+			}
+		}
+	}()
+
+	for class, index := range indexByClass {
+		queue := refByClass[class]
+		errs := index.AddReferencesBatch(ctx, queue, repl)
+		// remove index from map to skip releasing its lock in defer
+		indexByClass[class] = nil
+		index.dropIndex.RUnlock()
+		for i, err := range errs {
 			if err != nil {
-				references[queue[index].OriginalIndex].Err = err
+				references[queue[i].OriginalIndex].Err = err
 			}
 		}
 	}
@@ -94,16 +157,23 @@ func (db *DB) AddBatchReferences(ctx context.Context, references objects.BatchRe
 	return references, nil
 }
 
-func (db *DB) BatchDeleteObjects(ctx context.Context, params objects.BatchDeleteParams) (objects.BatchDeleteResult, error) {
+func (db *DB) BatchDeleteObjects(ctx context.Context, params objects.BatchDeleteParams,
+	repl *additional.ReplicationProperties, tenant string,
+) (objects.BatchDeleteResult, error) {
 	// get index for a given class
-	idx := db.GetIndex(params.ClassName)
+	className := params.ClassName
+	idx := db.GetIndex(className)
+	if idx == nil {
+		return objects.BatchDeleteResult{}, errors.Errorf("cannot find index for class %v", className)
+	}
+
 	// find all DocIDs in all shards that match the filter
-	shardDocIDs, err := idx.findDocIDs(ctx, params.Filters)
+	shardDocIDs, err := idx.findUUIDs(ctx, params.Filters, tenant)
 	if err != nil {
 		return objects.BatchDeleteResult{}, errors.Wrapf(err, "cannot find objects")
 	}
 	// prepare to be deleted list of DocIDs from all shards
-	toDelete := map[string][]uint64{}
+	toDelete := map[string][]strfmt.UUID{}
 	limit := db.config.QueryMaximumResults
 
 	matches := int64(0)
@@ -119,7 +189,7 @@ func (db *DB) BatchDeleteObjects(ctx context.Context, params objects.BatchDelete
 		matches += docIDsLength
 	}
 	// delete the DocIDs in given shards
-	deletedObjects, err := idx.batchDeleteObjects(ctx, toDelete, params.DryRun)
+	deletedObjects, err := idx.batchDeleteObjects(ctx, toDelete, params.DryRun, repl)
 	if err != nil {
 		return objects.BatchDeleteResult{}, errors.Wrapf(err, "cannot delete objects")
 	}
@@ -131,4 +201,22 @@ func (db *DB) BatchDeleteObjects(ctx context.Context, params objects.BatchDelete
 		Objects: deletedObjects,
 	}
 	return result, nil
+}
+
+func estimateBatchMemory(objs objects.BatchObjects) int64 {
+	var sum int64
+	for _, item := range objs {
+		// Note: This is very much oversimplified. It assumes that we always need
+		// the footprint of the full vector and it assumes a fixed overhead of 30B
+		// per vector. In reality this depends on the HNSW settings - and possibly
+		// in the future we might have completely different index types.
+		//
+		// However, in the meantime this should be a fairly reasonable estimate, as
+		// it's not meant to fail exactly on the last available byte, but rather
+		// prevent OOM crashes. Given the fuzziness and async style of the
+		// memtrackinga somewhat decent estimate should be good enough.
+		sum += int64(len(item.Object.Vector)*4 + 30)
+	}
+
+	return sum
 }

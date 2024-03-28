@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package test
@@ -18,17 +18,28 @@ import (
 	"time"
 
 	"github.com/go-openapi/strfmt"
-	"github.com/semi-technologies/weaviate/client/classifications"
-	"github.com/semi-technologies/weaviate/client/objects"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/test/helper"
-	testhelper "github.com/semi-technologies/weaviate/test/helper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/client/classifications"
+	"github.com/weaviate/weaviate/client/objects"
+	"github.com/weaviate/weaviate/client/schema"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/test/helper"
+	testhelper "github.com/weaviate/weaviate/test/helper"
 )
 
 func knnClassification(t *testing.T) {
 	var id strfmt.UUID
+
+	t.Run("ensure class shard for classification is ready", func(t *testing.T) {
+		testhelper.AssertEventuallyEqualWithFrequencyAndTimeout(t, "READY",
+			func() interface{} {
+				shardStatus, err := helper.Client(t).Schema.SchemaObjectsShardsGet(schema.NewSchemaObjectsShardsGetParams().WithClassName("Recipe"), nil)
+				require.Nil(t, err)
+				require.GreaterOrEqual(t, len(shardStatus.Payload), 1)
+				return shardStatus.Payload[0].Status
+			}, 250*time.Millisecond, 15*time.Second)
+	})
 
 	t.Run("start the classification and wait for completion", func(t *testing.T) {
 		res, err := helper.Client(t).Classifications.ClassificationsPost(
@@ -81,7 +92,7 @@ func knnClassification(t *testing.T) {
 		schema, ok := res.Payload.Properties.(map[string]interface{})
 		require.True(t, ok)
 
-		expectedRefTarget := fmt.Sprintf("weaviate://localhost/%s",
+		expectedRefTarget := fmt.Sprintf("weaviate://localhost/RecipeType/%s",
 			recipeTypeSavory)
 		ref := schema["ofType"].([]interface{})[0].(map[string]interface{})
 		assert.Equal(t, ref["beacon"].(string), expectedRefTarget)
@@ -99,7 +110,7 @@ func knnClassification(t *testing.T) {
 		schema, ok := res.Payload.Properties.(map[string]interface{})
 		require.True(t, ok)
 
-		expectedRefTarget := fmt.Sprintf("weaviate://localhost/%s",
+		expectedRefTarget := fmt.Sprintf("weaviate://localhost/RecipeType/%s",
 			recipeTypeSweet)
 		ref := schema["ofType"].([]interface{})[0].(map[string]interface{})
 		assert.Equal(t, ref["beacon"].(string), expectedRefTarget)

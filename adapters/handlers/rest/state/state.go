@@ -4,31 +4,38 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package state
 
 import (
-	"github.com/semi-technologies/weaviate/adapters/handlers/graphql"
-	"github.com/semi-technologies/weaviate/adapters/repos/classifications"
-	"github.com/semi-technologies/weaviate/adapters/repos/db"
-	"github.com/semi-technologies/weaviate/usecases/auth/authentication/anonymous"
-	"github.com/semi-technologies/weaviate/usecases/auth/authentication/oidc"
-	"github.com/semi-technologies/weaviate/usecases/auth/authorization"
-	"github.com/semi-technologies/weaviate/usecases/backup"
-	"github.com/semi-technologies/weaviate/usecases/cluster"
-	"github.com/semi-technologies/weaviate/usecases/config"
-	"github.com/semi-technologies/weaviate/usecases/locks"
-	"github.com/semi-technologies/weaviate/usecases/modules"
-	"github.com/semi-technologies/weaviate/usecases/monitoring"
-	"github.com/semi-technologies/weaviate/usecases/replica"
-	"github.com/semi-technologies/weaviate/usecases/scaler"
-	"github.com/semi-technologies/weaviate/usecases/schema"
-	"github.com/semi-technologies/weaviate/usecases/sharding"
+	"context"
+	"net/http"
+	"sync"
+
 	"github.com/sirupsen/logrus"
+	"github.com/weaviate/weaviate/adapters/handlers/graphql"
+	"github.com/weaviate/weaviate/adapters/repos/classifications"
+	"github.com/weaviate/weaviate/adapters/repos/db"
+	"github.com/weaviate/weaviate/usecases/auth/authentication/anonymous"
+	"github.com/weaviate/weaviate/usecases/auth/authentication/apikey"
+	"github.com/weaviate/weaviate/usecases/auth/authentication/oidc"
+	"github.com/weaviate/weaviate/usecases/auth/authorization"
+	"github.com/weaviate/weaviate/usecases/backup"
+	"github.com/weaviate/weaviate/usecases/cluster"
+	"github.com/weaviate/weaviate/usecases/config"
+	"github.com/weaviate/weaviate/usecases/locks"
+	"github.com/weaviate/weaviate/usecases/modules"
+	"github.com/weaviate/weaviate/usecases/monitoring"
+	"github.com/weaviate/weaviate/usecases/objects"
+	"github.com/weaviate/weaviate/usecases/replica"
+	"github.com/weaviate/weaviate/usecases/scaler"
+	"github.com/weaviate/weaviate/usecases/schema"
+	"github.com/weaviate/weaviate/usecases/sharding"
+	"github.com/weaviate/weaviate/usecases/traverser"
 )
 
 // State is the only source of application-wide state
@@ -37,10 +44,12 @@ import (
 type State struct {
 	OIDC                  *oidc.Client
 	AnonymousAccess       *anonymous.Client
+	APIKey                *apikey.Client
 	Authorizer            authorization.Authorizer
 	ServerConfig          *config.WeaviateConfig
 	Locks                 locks.ConnectorSchemaLock
 	Logger                *logrus.Logger
+	gqlMutex              sync.Mutex
 	GraphQL               graphql.GraphQL
 	Modules               *modules.Provider
 	SchemaManager         *schema.Manager
@@ -49,11 +58,15 @@ type State struct {
 	RemoteIndexIncoming   *sharding.RemoteIndexIncoming
 	RemoteNodeIncoming    *sharding.RemoteNodeIncoming
 	RemoteReplicaIncoming *replica.RemoteReplicaIncoming
+	Traverser             *traverser.Traverser
 
 	ClassificationRepo *classifications.DistributedRepo
 	Metrics            *monitoring.PrometheusMetrics
-	BackupManager      *backup.Manager
+	BackupManager      *backup.Handler
 	DB                 *db.DB
+	BatchManager       *objects.BatchManager
+	ClusterHttpClient  *http.Client
+	ReindexCtxCancel   context.CancelFunc
 }
 
 // GetGraphQL is the safe way to retrieve GraphQL from the state as it can be
@@ -62,5 +75,14 @@ type State struct {
 //
 // type gqlProvider interface { GetGraphQL graphql.GraphQL }
 func (s *State) GetGraphQL() graphql.GraphQL {
-	return s.GraphQL
+	s.gqlMutex.Lock()
+	gql := s.GraphQL
+	s.gqlMutex.Unlock()
+	return gql
+}
+
+func (s *State) SetGraphQL(gql graphql.GraphQL) {
+	s.gqlMutex.Lock()
+	s.GraphQL = gql
+	s.gqlMutex.Unlock()
 }

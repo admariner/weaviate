@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package search
@@ -15,8 +15,8 @@ import (
 	"fmt"
 	"regexp"
 
-	"github.com/semi-technologies/weaviate/entities/additional"
-	"github.com/semi-technologies/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/additional"
+	"github.com/weaviate/weaviate/entities/schema"
 )
 
 type SelectProperty struct {
@@ -24,11 +24,16 @@ type SelectProperty struct {
 
 	IsPrimitive bool `json:"isPrimitive"`
 
+	IsObject bool `json:"isObject"`
+
 	// Include the __typename in all the Refs below.
 	IncludeTypeName bool `json:"includeTypeName"`
 
-	// Not a primitive type? Then select these properties.
+	// Not a primitive nor nested type? Then select these properties.
 	Refs []SelectClass `json:"refs"`
+
+	// Nested type? Then select these properties.
+	Props []SelectProperty `json:"objs"`
 }
 
 type SelectClass struct {
@@ -42,6 +47,17 @@ func (sp SelectProperty) FindSelectClass(className schema.ClassName) *SelectClas
 	for _, selectClass := range sp.Refs {
 		if selectClass.ClassName == string(className) {
 			return &selectClass
+		}
+	}
+
+	return nil
+}
+
+// FindSelectObject by specifying the exact object name
+func (sp SelectProperty) FindSelectProperty(name string) *SelectProperty {
+	for _, selectProp := range sp.Props {
+		if selectProp.Name == name {
+			return &selectProp
 		}
 	}
 
@@ -65,11 +81,19 @@ type SelectProperties []SelectProperty
 
 func (sp SelectProperties) HasRefs() bool {
 	for _, p := range sp {
-		if !p.IsPrimitive {
+		if len(p.Refs) > 0 {
 			return true
 		}
 	}
+	return false
+}
 
+func (sp SelectProperties) HasProps() bool {
+	for _, p := range sp {
+		if len(p.Props) > 0 {
+			return true
+		}
+	}
 	return false
 }
 
@@ -79,7 +103,7 @@ func (sp SelectProperties) ShouldResolve(path []string) (bool, error) {
 			"refProp, className, refProp, className, etc.")
 	}
 
-	// the above gives us the guarantuee that path contains at least two elements
+	// the above gives us the guarantee that path contains at least two elements
 	property := path[0]
 	class := schema.ClassName(path[1])
 

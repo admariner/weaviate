@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package inverted
@@ -15,10 +15,12 @@ import (
 	"bytes"
 	"encoding/binary"
 
-	"github.com/semi-technologies/weaviate/adapters/repos/db/helpers"
-	"github.com/semi-technologies/weaviate/adapters/repos/db/inverted/stopwords"
-	"github.com/semi-technologies/weaviate/entities/models"
+	"github.com/google/uuid"
+	"github.com/weaviate/weaviate/adapters/repos/db/helpers"
+	"github.com/weaviate/weaviate/entities/models"
 )
+
+type IsFallbackToSearchable func() bool
 
 type Countable struct {
 	Data          []byte
@@ -26,101 +28,71 @@ type Countable struct {
 }
 
 type Property struct {
-	Name         string
-	Items        []Countable
-	HasFrequency bool
-	Length       int
+	Name               string
+	Items              []Countable
+	Length             int
+	HasFilterableIndex bool // roaring set index
+	HasSearchableIndex bool // map index (with frequencies)
+}
+
+type NilProperty struct {
+	Name                string
+	AddToPropertyLength bool
+}
+
+func DedupItems(props []Property) []Property {
+	for i := range props {
+		seen := map[string]struct{}{}
+		items := props[i].Items
+
+		var key string
+		// reverse order to keep latest elements
+		for j := len(items) - 1; j >= 0; j-- {
+			key = string(items[j].Data)
+			if _, ok := seen[key]; ok {
+				// remove element already seen
+				items = append(items[:j], items[j+1:]...)
+			}
+			seen[key] = struct{}{}
+		}
+		props[i].Items = items
+	}
+	return props
 }
 
 type Analyzer struct {
-	stopwords stopwords.StopwordDetector
+	isFallbackToSearchable IsFallbackToSearchable
 }
 
-// Text removes non alpha-numeric and splits into lowercased words, then aggregates
-// duplicates
+// Text tokenizes given input according to selected tokenization,
+// then aggregates duplicates
 func (a *Analyzer) Text(tokenization, in string) []Countable {
-	parts := textArrayTokenize(tokenization, []string{in})
-	return a.countParts(parts)
+	return a.TextArray(tokenization, []string{in})
 }
 
-// TextArray removes non alpha-numeric and splits into lowercased words, then aggregates
-// duplicates
-func (a *Analyzer) TextArray(tokenization string, in []string) []Countable {
-	parts := textArrayTokenize(tokenization, in)
-	return a.countParts(parts)
-}
-
-func textArrayTokenize(tokenization string, in []string) []string {
-	var parts []string
-
-	switch tokenization {
-	case models.PropertyTokenizationWord:
-		for _, value := range in {
-			parts = append(parts, helpers.TokenizeText(value)...)
-		}
+// TextArray tokenizes given input according to selected tokenization,
+// then aggregates duplicates
+func (a *Analyzer) TextArray(tokenization string, inArr []string) []Countable {
+	var terms []string
+	for _, in := range inArr {
+		terms = append(terms, helpers.Tokenize(tokenization, in)...)
 	}
 
-	return parts
-}
-
-// String splits only on spaces and does not lowercase, then aggregates
-// duplicates
-func (a *Analyzer) String(tokenization, in string) []Countable {
-	parts := stringArrayTokenize(tokenization, []string{in})
-	return a.countParts(parts)
-}
-
-// StringArray splits only on spaces and does not lowercase, then aggregates
-// duplicates
-func (a *Analyzer) StringArray(tokenization string, in []string) []Countable {
-	parts := stringArrayTokenize(tokenization, in)
-	return a.countParts(parts)
-}
-
-func stringArrayTokenize(tokenization string, in []string) []string {
-	var parts []string
-
-	switch tokenization {
-	case models.PropertyTokenizationField:
-		for _, value := range in {
-			if trimmed := helpers.TrimString(value); trimmed != "" {
-				parts = append(parts, trimmed)
-			}
-		}
-	case models.PropertyTokenizationWord:
-		for _, value := range in {
-			parts = append(parts, helpers.TokenizeString(value)...)
-		}
+	counts := map[string]uint64{}
+	for _, term := range terms {
+		counts[term]++
 	}
 
-	return parts
-}
-
-func (a *Analyzer) countParts(parts []string) []Countable {
-	terms := map[string]uint64{}
-	for _, word := range parts {
-		if a.stopwords.IsStopword(word) {
-			continue
-		}
-
-		count, ok := terms[word]
-		if !ok {
-			terms[word] = 0
-		}
-		terms[word] = count + 1
-	}
-
-	out := make([]Countable, len(terms))
+	countable := make([]Countable, len(counts))
 	i := 0
-	for term, count := range terms {
-		out[i] = Countable{
+	for term, count := range counts {
+		countable[i] = Countable{
 			Data:          []byte(term),
 			TermFrequency: float32(count),
 		}
 		i++
 	}
-
-	return out
+	return countable
 }
 
 // Int requires no analysis, so it's actually just a simple conversion to a
@@ -136,6 +108,28 @@ func (a *Analyzer) Int(in int64) ([]Countable, error) {
 			Data: data,
 		},
 	}, nil
+}
+
+// UUID requires no analysis, so it's just dumping the raw binary representation
+func (a *Analyzer) UUID(in uuid.UUID) ([]Countable, error) {
+	return []Countable{
+		{
+			Data: in[:],
+		},
+	}, nil
+}
+
+// UUID array requires no analysis, so it's just dumping the raw binary
+// representation of each contained element
+func (a *Analyzer) UUIDArray(in []uuid.UUID) ([]Countable, error) {
+	out := make([]Countable, len(in))
+	for i := range in {
+		out[i] = Countable{
+			Data: in[i][:],
+		}
+	}
+
+	return out, nil
 }
 
 // Int array requires no analysis, so it's actually just a simple conversion to a
@@ -189,7 +183,7 @@ func (a *Analyzer) BoolArray(in []bool) ([]Countable, error) {
 	out := make([]Countable, len(in))
 	for i := range in {
 		b := bytes.NewBuffer(nil)
-		err := binary.Write(b, binary.LittleEndian, &in)
+		err := binary.Write(b, binary.LittleEndian, &in[i])
 		if err != nil {
 			return nil, err
 		}
@@ -244,6 +238,9 @@ func (a *Analyzer) Ref(in models.MultipleRef) ([]Countable, error) {
 	return out, nil
 }
 
-func NewAnalyzer(stopwords stopwords.StopwordDetector) *Analyzer {
-	return &Analyzer{stopwords: stopwords}
+func NewAnalyzer(isFallbackToSearchable IsFallbackToSearchable) *Analyzer {
+	if isFallbackToSearchable == nil {
+		isFallbackToSearchable = func() bool { return false }
+	}
+	return &Analyzer{isFallbackToSearchable: isFallbackToSearchable}
 }

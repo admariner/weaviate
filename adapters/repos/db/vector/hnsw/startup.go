@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package hnsw
@@ -18,10 +18,13 @@ import (
 	"os"
 	"time"
 
+	enterrors "github.com/weaviate/weaviate/entities/errors"
+
 	"github.com/pkg/errors"
-	"github.com/semi-technologies/weaviate/adapters/repos/db/vector/hnsw/visited"
-	"github.com/semi-technologies/weaviate/entities/cyclemanager"
-	"github.com/semi-technologies/weaviate/entities/diskio"
+	"github.com/weaviate/weaviate/adapters/repos/db/vector/compressionhelpers"
+	"github.com/weaviate/weaviate/adapters/repos/db/vector/hnsw/visited"
+	"github.com/weaviate/weaviate/entities/cyclemanager"
+	"github.com/weaviate/weaviate/entities/diskio"
 )
 
 func (h *hnsw) init(cfg Config) error {
@@ -113,13 +116,55 @@ func (h *hnsw) restoreFromDisk() error {
 		h.metrics.TrackStartupIndividual(beforeIndividual)
 	}
 
+	h.Lock()
+	h.shardedNodeLocks.LockAll()
 	h.nodes = state.Nodes
+	h.shardedNodeLocks.UnlockAll()
+
 	h.currentMaximumLayer = int(state.Level)
 	h.entryPointID = state.Entrypoint
-	h.tombstones = state.Tombstones
+	h.Unlock()
 
-	// make sure the cache fits the current size
-	h.cache.grow(uint64(len(h.nodes)))
+	h.tombstoneLock.Lock()
+	h.tombstones = state.Tombstones
+	h.tombstoneLock.Unlock()
+
+	if state.Compressed {
+		h.compressed.Store(state.Compressed)
+		h.dims = int32(state.PQData.Dimensions)
+		h.cache.Drop()
+
+		if len(state.PQData.Encoders) > 0 {
+			// 0 means it was created using the default value. The user did not set the value, we calculated for him/her
+			if h.pqConfig.Segments == 0 {
+				h.pqConfig.Segments = int(state.PQData.Dimensions)
+			}
+			h.compressor, err = compressionhelpers.RestoreHNSWPQCompressor(
+				h.pqConfig,
+				h.distancerProvider,
+				int(state.PQData.Dimensions),
+				// ToDo: we need to read this value from somewhere
+				1e12,
+				h.logger,
+				state.PQData.Encoders,
+				h.store,
+			)
+			if err != nil {
+				return errors.Wrap(err, "Restoring compressed data.")
+			}
+		}
+		// make sure the compressed cache fits the current size
+		h.compressor.GrowCache(uint64(len(h.nodes)))
+	} else if !h.compressed.Load() {
+		// make sure the cache fits the current size
+		h.cache.Grow(uint64(len(h.nodes)))
+
+		if len(h.nodes) > 0 {
+			if vec, err := h.vectorForID(context.Background(), h.entryPointID); err == nil {
+				h.dims = int32(len(vec))
+			}
+		}
+	}
 
 	// make sure the visited list pool fits the current size
 	h.pools.visitedLists.Destroy()
@@ -129,11 +174,13 @@ func (h *hnsw) restoreFromDisk() error {
 	return nil
 }
 
-func (h *hnsw) tombstoneCleanup(stopFunc cyclemanager.StopFunc) {
-	if err := h.CleanUpTombstonedNodes(stopFunc); err != nil {
+func (h *hnsw) tombstoneCleanup(shouldAbort cyclemanager.ShouldAbortCallback) bool {
+	executed, err := h.cleanUpTombstonedNodes(shouldAbort)
+	if err != nil {
 		h.logger.WithField("action", "hnsw_tombstone_cleanup").
 			WithError(err).Error("tombstone cleanup errord")
 	}
+	return executed
 }
 
 // PostStartup triggers routines that should happen after startup. The startup
@@ -142,20 +189,31 @@ func (h *hnsw) tombstoneCleanup(stopFunc cyclemanager.StopFunc) {
 // vector cache, however, depend on the shard being ready as they will call
 // getVectorForID.
 func (h *hnsw) PostStartup() {
-	h.tombstoneCleanupCycle.Start()
 	h.prefillCache()
 }
 
 func (h *hnsw) prefillCache() {
-	limit := int(h.cache.copyMaxSize())
+	limit := 0
+	if h.compressed.Load() {
+		limit = int(h.compressor.GetCacheMaxSize())
+	} else {
+		limit = int(h.cache.CopyMaxSize())
+	}
 
-	go func() {
+	f := func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
 		defer cancel()
 
-		err := newVectorCachePrefiller(h.cache, h, h.logger).Prefill(ctx, limit)
+		var err error
+		if h.compressed.Load() {
+			h.compressor.PrefillCache()
+		} else {
+			err = newVectorCachePrefiller(h.cache, h, h.logger).Prefill(ctx, limit)
+		}
+
 		if err != nil {
 			h.logger.WithError(err).Error("prefill vector cache")
 		}
-	}()
+	}
+	enterrors.GoWrapper(f, h.logger)
 }

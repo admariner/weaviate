@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package objects
@@ -14,12 +14,14 @@ package objects
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/go-openapi/strfmt"
 	"github.com/google/uuid"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	"github.com/semi-technologies/weaviate/usecases/objects/validation"
+	"github.com/weaviate/weaviate/entities/additional"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/usecases/objects/validation"
 )
 
 type schemaManager interface {
@@ -31,11 +33,13 @@ type schemaManager interface {
 	) (*models.Class, error)
 	AddClassProperty(ctx context.Context, principal *models.Principal,
 		class string, property *models.Property) error
+	MergeClassObjectProperty(ctx context.Context, principal *models.Principal,
+		class string, property *models.Property) error
 }
 
 // AddObject Class Instance to the connected DB.
-func (m *Manager) AddObject(ctx context.Context, principal *models.Principal,
-	object *models.Object,
+func (m *Manager) AddObject(ctx context.Context, principal *models.Principal, object *models.Object,
+	repl *additional.ReplicationProperties,
 ) (*models.Object, error) {
 	err := m.authorizer.Authorize(principal, "create", "objects")
 	if err != nil {
@@ -51,11 +55,11 @@ func (m *Manager) AddObject(ctx context.Context, principal *models.Principal,
 	m.metrics.AddObjectInc()
 	defer m.metrics.AddObjectDec()
 
-	return m.addObjectToConnectorAndSchema(ctx, principal, object)
+	return m.addObjectToConnectorAndSchema(ctx, principal, object, repl)
 }
 
-func (m *Manager) checkIDOrAssignNew(ctx context.Context, class string,
-	id strfmt.UUID,
+func (m *Manager) checkIDOrAssignNew(ctx context.Context, class string, id strfmt.UUID,
+	repl *additional.ReplicationProperties, tenant string,
 ) (strfmt.UUID, error) {
 	if id == "" {
 		newID, err := generateUUID()
@@ -63,32 +67,46 @@ func (m *Manager) checkIDOrAssignNew(ctx context.Context, class string,
 			return "", NewErrInternal("could not generate id: %v", err)
 		}
 		return newID, nil
+	} else {
+		// IDs are always returned lowercase, but they are written
+		// to disk as uppercase, when provided that way. Here we
+		// ensure they are lowercase on disk as well, so things
+		// like filtering are not affected.
+		// See: https://github.com/weaviate/weaviate/issues/2647
+		id = strfmt.UUID(strings.ToLower(id.String()))
 	}
 
 	// only validate ID uniqueness if explicitly set
-	if ok, err := m.vectorRepo.Exists(ctx, class, id); ok {
+	if ok, err := m.vectorRepo.Exists(ctx, class, id, repl, tenant); ok {
 		return "", NewErrInvalidUserInput("id '%s' already exists", id)
 	} else if err != nil {
-		return "", NewErrInternal(err.Error())
+		switch err.(type) {
+		case ErrInvalidUserInput:
+			return "", err
+		case ErrMultiTenancy:
+			return "", err
+		default:
+			return "", NewErrInternal(err.Error())
+		}
 	}
 	return id, nil
 }
 
 func (m *Manager) addObjectToConnectorAndSchema(ctx context.Context, principal *models.Principal,
-	object *models.Object,
+	object *models.Object, repl *additional.ReplicationProperties,
 ) (*models.Object, error) {
-	id, err := m.checkIDOrAssignNew(ctx, object.Class, object.ID)
+	id, err := m.checkIDOrAssignNew(ctx, object.Class, object.ID, repl, object.Tenant)
 	if err != nil {
 		return nil, err
 	}
 	object.ID = id
 
-	err = m.autoSchemaManager.autoSchema(ctx, principal, object)
+	err = m.autoSchemaManager.autoSchema(ctx, principal, object, true)
 	if err != nil {
 		return nil, NewErrInvalidUserInput("invalid object: %v", err)
 	}
 
-	err = m.validateObject(ctx, principal, object)
+	err = m.validateObjectAndNormalizeNames(ctx, principal, repl, object, nil)
 	if err != nil {
 		return nil, NewErrInvalidUserInput("invalid object: %v", err)
 	}
@@ -103,29 +121,48 @@ func (m *Manager) addObjectToConnectorAndSchema(ctx context.Context, principal *
 	if err != nil {
 		return nil, err
 	}
-	err = m.modulesProvider.UpdateVector(ctx, object, class, nil, m.findObject, m.logger)
+	err = m.modulesProvider.UpdateVector(ctx, object, class, m.findObject, m.logger)
 	if err != nil {
 		return nil, err
 	}
 
-	err = m.vectorRepo.PutObject(ctx, object, object.Vector)
+	err = m.vectorRepo.PutObject(ctx, object, object.Vector, object.Vectors, repl)
 	if err != nil {
-		return nil, fmt.Errorf("put object: %s", err)
+		return nil, fmt.Errorf("put object: %w", err)
 	}
 
 	return object, nil
 }
 
-func (m *Manager) validateObject(ctx context.Context, principal *models.Principal, object *models.Object) error {
-	// Validate schema given in body with the weaviate schema
-	if _, err := uuid.Parse(object.ID.String()); err != nil {
-		return err
-	}
-
-	class, err := m.schemaManager.GetClass(ctx, principal, object.Class)
+func (m *Manager) validateObjectAndNormalizeNames(ctx context.Context,
+	principal *models.Principal, repl *additional.ReplicationProperties,
+	incoming *models.Object, existing *models.Object,
+) error {
+	class, err := m.validateSchema(ctx, principal, incoming)
 	if err != nil {
 		return err
 	}
 
-	return validation.New(m.vectorRepo.Exists, m.config).Object(ctx, object, class)
+	return validation.New(m.vectorRepo.Exists, m.config, repl).
+		Object(ctx, class, incoming, existing)
+}
+
+func (m *Manager) validateSchema(ctx context.Context,
+	principal *models.Principal, obj *models.Object,
+) (*models.Class, error) {
+	// Validate schema given in body with the weaviate schema
+	if _, err := uuid.Parse(obj.ID.String()); err != nil {
+		return nil, err
+	}
+
+	class, err := m.schemaManager.GetClass(ctx, principal, obj.Class)
+	if err != nil {
+		return nil, err
+	}
+
+	if class == nil {
+		return nil, fmt.Errorf("class %q not found in schema", obj.Class)
+	}
+
+	return class, nil
 }

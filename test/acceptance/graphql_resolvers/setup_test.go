@@ -4,28 +4,55 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package test
 
 import (
+	"context"
 	"fmt"
 	"math/rand"
 	"testing"
 	"time"
 
 	"github.com/go-openapi/strfmt"
-	"github.com/semi-technologies/weaviate/entities/models"
-	sch "github.com/semi-technologies/weaviate/entities/schema"
-	"github.com/semi-technologies/weaviate/entities/schema/crossref"
-	"github.com/semi-technologies/weaviate/test/helper"
-	"github.com/semi-technologies/weaviate/test/helper/sample-schema/multishard"
+	"github.com/google/uuid"
+	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/schema/crossref"
+	"github.com/weaviate/weaviate/test/docker"
+	"github.com/weaviate/weaviate/test/helper"
+	"github.com/weaviate/weaviate/test/helper/sample-schema/multishard"
 )
 
-func Test_GraphQL(t *testing.T) {
+func TestGraphQL_AsyncIndexing(t *testing.T) {
+	ctx := context.Background()
+	compose, err := docker.New().
+		WithWeaviate().
+		WithText2VecContextionary().
+		WithBackendFilesystem().
+		WithWeaviateEnv("ASYNC_INDEXING", "true").
+		Start(ctx)
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, compose.Terminate(ctx))
+	}()
+
+	defer helper.SetupClient(fmt.Sprintf("%s:%s", helper.ServerHost, helper.ServerPort))
+	helper.SetupClient(compose.GetWeaviate().URI())
+
+	testGraphQL(t)
+}
+
+func TestGraphQL_SyncIndexing(t *testing.T) {
+	testGraphQL(t)
+}
+
+func testGraphQL(t *testing.T) {
 	// tests with classes that have objects with same uuids
 	t.Run("import test data (near object search class)", addTestDataNearObjectSearch)
 
@@ -49,6 +76,7 @@ func Test_GraphQL(t *testing.T) {
 	t.Run("import test data (date field class)", addDateFieldClass)
 	t.Run("import test data (custom vector class)", addTestDataCVC)
 	t.Run("import test data (class without properties)", addTestDataNoProperties)
+	t.Run("import test data (cursor api)", addTestDataCursorSearch)
 
 	// explore tests
 	t.Run("expected explore failures with invalid conditions", exploreWithExpectedFailures)
@@ -62,7 +90,10 @@ func Test_GraphQL(t *testing.T) {
 	t.Run("getting objects with near fields", gettingObjectsWithNearFields)
 	t.Run("getting objects with near fields with multi shard setup", gettingObjectsWithNearFieldsMultiShard)
 	t.Run("getting objects with sort", gettingObjectsWithSort)
+	t.Run("getting objects with hybrid search", getWithHybridSearch)
 	t.Run("expected get failures with invalid conditions", getsWithExpectedFailures)
+	t.Run("cursor through results", getWithCursorSearch)
+	t.Run("groupBy objects", groupByObjects)
 
 	// aggregate tests
 	t.Run("aggregates noPropsClass without grouping", aggregateNoPropsClassWithoutGroupByTest)
@@ -81,7 +112,10 @@ func Test_GraphQL(t *testing.T) {
 	t.Run("aggregates local meta with where groupBy and nearMedia filters", localMetaWithWhereGroupByNearMediaFilters)
 	t.Run("aggregates local meta with objectLimit and nearMedia filters", localMetaWithObjectLimit)
 	t.Run("aggregates on date fields", aggregatesOnDateFields)
+	t.Run("aggregates with hybrid search", aggregationWithHybridSearch)
 	t.Run("expected aggregate failures with invalid conditions", aggregatesWithExpectedFailures)
+
+	t.Run("metrics count is stable when more classes are added", metricsCount)
 
 	// tear down
 	deleteObjectClass(t, "Person")
@@ -96,6 +130,7 @@ func Test_GraphQL(t *testing.T) {
 	deleteObjectClass(t, arrayClassName)
 	deleteObjectClass(t, duplicatesClassName)
 	deleteObjectClass(t, noPropsClassName)
+	deleteObjectClass(t, "CursorClass")
 
 	// only run after everything else is deleted, this way, we can also run an
 	// all-class Explore since all vectors which are now left have the same
@@ -117,8 +152,9 @@ func addTestSchema(t *testing.T) {
 		},
 		Properties: []*models.Property{
 			{
-				Name:     "name",
-				DataType: []string{"string"},
+				Name:         "name",
+				DataType:     schema.DataTypeText.PropString(),
+				Tokenization: models.PropertyTokenizationWhitespace,
 			},
 		},
 	})
@@ -134,11 +170,12 @@ func addTestSchema(t *testing.T) {
 				"vectorizeClassName": true,
 			},
 		},
-		InvertedIndexConfig: &models.InvertedIndexConfig{IndexNullState: true, IndexTimestamps: true},
+		InvertedIndexConfig: &models.InvertedIndexConfig{IndexNullState: true, IndexPropertyLength: true, IndexTimestamps: true},
 		Properties: []*models.Property{
 			{
-				Name:     "name",
-				DataType: []string{"string"},
+				Name:         "name",
+				DataType:     schema.DataTypeText.PropString(),
+				Tokenization: models.PropertyTokenizationWhitespace,
 				ModuleConfig: map[string]interface{}{
 					"text2vec-contextionary": map[string]interface{}{
 						"skip": false,
@@ -200,8 +237,9 @@ func addTestSchema(t *testing.T) {
 				},
 			},
 			{
-				Name:     "timezones",
-				DataType: []string{"string[]"},
+				Name:         "timezones",
+				DataType:     schema.DataTypeTextArray.PropString(),
+				Tokenization: models.PropertyTokenizationWhitespace,
 				ModuleConfig: map[string]interface{}{
 					"text2vec-contextionary": map[string]interface{}{
 						"skip": true,
@@ -254,8 +292,9 @@ func addTestSchema(t *testing.T) {
 		},
 		Properties: []*models.Property{
 			{
-				Name:     "code",
-				DataType: []string{"string"},
+				Name:         "code",
+				DataType:     schema.DataTypeText.PropString(),
+				Tokenization: models.PropertyTokenizationWhitespace,
 			},
 			{
 				Name:     "phone",
@@ -264,6 +303,10 @@ func addTestSchema(t *testing.T) {
 			{
 				Name:     "inCity",
 				DataType: []string{"City"},
+			},
+			{
+				Name:     "airportId",
+				DataType: []string{"uuid"},
 			},
 		},
 	})
@@ -277,8 +320,9 @@ func addTestSchema(t *testing.T) {
 		},
 		Properties: []*models.Property{
 			{
-				Name:     "name",
-				DataType: []string{"string"},
+				Name:         "name",
+				DataType:     schema.DataTypeText.PropString(),
+				Tokenization: models.PropertyTokenizationWhitespace,
 				ModuleConfig: map[string]interface{}{
 					"text2vec-contextionary": map[string]interface{}{
 						"vectorizePropertyName": false,
@@ -306,8 +350,9 @@ func addTestSchema(t *testing.T) {
 		},
 		Properties: []*models.Property{
 			{
-				Name:     "name",
-				DataType: []string{"string"},
+				Name:         "name",
+				DataType:     schema.DataTypeText.PropString(),
+				Tokenization: models.PropertyTokenizationWhitespace,
 				ModuleConfig: map[string]interface{}{
 					"text2vec-contextionary": map[string]interface{}{
 						"vectorizePropertyName": false,
@@ -325,7 +370,7 @@ func addTestSchema(t *testing.T) {
 			},
 			{
 				Name:         "profession",
-				DataType:     []string{string(sch.DataTypeString)},
+				DataType:     schema.DataTypeText.PropString(),
 				Tokenization: models.PropertyTokenizationField,
 				ModuleConfig: map[string]interface{}{
 					"text2vec-contextionary": map[string]interface{}{
@@ -335,7 +380,7 @@ func addTestSchema(t *testing.T) {
 			},
 			{
 				Name:         "about",
-				DataType:     []string{string(sch.DataTypeStringArray)},
+				DataType:     schema.DataTypeTextArray.PropString(),
 				Tokenization: models.PropertyTokenizationField,
 				ModuleConfig: map[string]interface{}{
 					"text2vec-contextionary": map[string]interface{}{
@@ -356,7 +401,7 @@ func addTestSchema(t *testing.T) {
 		Properties: []*models.Property{
 			{
 				Name:         "name",
-				DataType:     []string{string(sch.DataTypeString)},
+				DataType:     schema.DataTypeText.PropString(),
 				Tokenization: models.PropertyTokenizationField,
 				ModuleConfig: map[string]interface{}{
 					"text2vec-contextionary": map[string]interface{}{
@@ -366,7 +411,7 @@ func addTestSchema(t *testing.T) {
 			},
 			{
 				Name:         "description",
-				DataType:     []string{string(sch.DataTypeText)},
+				DataType:     []string{string(schema.DataTypeText)},
 				Tokenization: models.PropertyTokenizationWord,
 				ModuleConfig: map[string]interface{}{
 					"text2vec-contextionary": map[string]interface{}{
@@ -386,8 +431,9 @@ func addTestSchema(t *testing.T) {
 		},
 		Properties: []*models.Property{
 			{
-				Name:     "contents",
-				DataType: []string{"string"},
+				Name:         "contents",
+				DataType:     schema.DataTypeText.PropString(),
+				Tokenization: models.PropertyTokenizationWhitespace,
 			},
 		},
 	})
@@ -403,16 +449,18 @@ func addTestSchema(t *testing.T) {
 		},
 		Properties: []*models.Property{
 			{
-				Name:     "unique",
-				DataType: []string{"string"},
+				Name:         "unique",
+				DataType:     schema.DataTypeText.PropString(),
+				Tokenization: models.PropertyTokenizationWhitespace,
 			},
 			{
 				Name:     "timestamp",
 				DataType: []string{"date"},
 			},
 			{
-				Name:     "identical",
-				DataType: []string{"string"},
+				Name:         "identical",
+				DataType:     schema.DataTypeText.PropString(),
+				Tokenization: models.PropertyTokenizationWhitespace,
 			},
 		},
 	})
@@ -422,8 +470,9 @@ func addTestSchema(t *testing.T) {
 		Vectorizer: "none",
 		Properties: []*models.Property{
 			{
-				Name:     "name",
-				DataType: []string{"string"},
+				Name:         "name",
+				DataType:     schema.DataTypeText.PropString(),
+				Tokenization: models.PropertyTokenizationWhitespace,
 			},
 		},
 	})
@@ -615,7 +664,8 @@ func addTestDataCityAirport(t *testing.T) {
 		Class: "Airport",
 		ID:    airport1,
 		Properties: map[string]interface{}{
-			"code": "10000",
+			"code":      "10000",
+			"airportId": uuid.MustParse("00000000-0000-0000-0000-000000010000").String(),
 			"phone": map[string]interface{}{
 				"input": "+311234567",
 			},
@@ -630,7 +680,8 @@ func addTestDataCityAirport(t *testing.T) {
 		Class: "Airport",
 		ID:    airport2,
 		Properties: map[string]interface{}{
-			"code": "20000",
+			"code":      "20000",
+			"airportId": uuid.MustParse("00000000-0000-0000-0000-000000020000").String(),
 			"inCity": []interface{}{
 				map[string]interface{}{
 					"beacon": crossref.NewLocalhost("City", rotterdam).String(),
@@ -642,7 +693,8 @@ func addTestDataCityAirport(t *testing.T) {
 		Class: "Airport",
 		ID:    airport3,
 		Properties: map[string]interface{}{
-			"code": "30000",
+			"code":      "30000",
+			"airportId": uuid.MustParse("00000000-0000-0000-0000-000000030000").String(),
 			"inCity": []interface{}{
 				map[string]interface{}{
 					"beacon": crossref.NewLocalhost("City", dusseldorf).String(),
@@ -654,7 +706,8 @@ func addTestDataCityAirport(t *testing.T) {
 		Class: "Airport",
 		ID:    airport4,
 		Properties: map[string]interface{}{
-			"code": "40000",
+			"code":      "40000",
+			"airportId": uuid.MustParse("00000000-0000-0000-0000-000000040000").String(),
 			"inCity": []interface{}{
 				map[string]interface{}{
 					"beacon": crossref.NewLocalhost("City", berlin).String(),
@@ -662,15 +715,6 @@ func addTestDataCityAirport(t *testing.T) {
 			},
 		},
 	})
-
-	// wait for consistency
-	assertGetObjectEventually(t, airport1)
-	assertGetObjectEventually(t, airport2)
-	assertGetObjectEventually(t, airport3)
-	assertGetObjectEventually(t, airport4)
-
-	// give cache some time to become hot
-	time.Sleep(2 * time.Second)
 }
 
 func addTestDataCompanies(t *testing.T) {
@@ -943,8 +987,9 @@ func addTestDataNearObjectSearch(t *testing.T) {
 			},
 			Properties: []*models.Property{
 				{
-					Name:     "name",
-					DataType: []string{"string"},
+					Name:         "name",
+					DataType:     schema.DataTypeText.PropString(),
+					Tokenization: models.PropertyTokenizationWhitespace,
 				},
 			},
 		})
@@ -985,6 +1030,65 @@ func addTestDataNearObjectSearch(t *testing.T) {
 		},
 	})
 	assertGetObjectEventually(t, "aa44bbee-ca5f-4db7-a412-5fc6a2300011")
+}
+
+const (
+	cursorClassID1 = strfmt.UUID("00000000-0000-0000-0000-000000000001")
+	cursorClassID2 = strfmt.UUID("00000000-0000-0000-0000-000000000002")
+	cursorClassID3 = strfmt.UUID("00000000-0000-0000-0000-000000000003")
+	cursorClassID4 = strfmt.UUID("00000000-0000-0000-0000-000000000004")
+	cursorClassID5 = strfmt.UUID("00000000-0000-0000-0000-000000000005")
+	cursorClassID6 = strfmt.UUID("00000000-0000-0000-0000-000000000006")
+	cursorClassID7 = strfmt.UUID("00000000-0000-0000-0000-000000000007")
+)
+
+func addTestDataCursorSearch(t *testing.T) {
+	className := "CursorClass"
+	ids := []strfmt.UUID{
+		cursorClassID1,
+		cursorClassID2,
+		cursorClassID3,
+		cursorClassID4,
+		cursorClassID5,
+		cursorClassID6,
+		cursorClassID7,
+	}
+	names := []string{
+		"Mount Everest",
+		"Amsterdam is a cool city",
+		"Football is a game where people run after ball",
+		"Berlin is Germany's capital city",
+		"London is a cool city",
+		"Wroclaw is a really cool city",
+		"Brisbane is a city in Australia",
+	}
+
+	createObjectClass(t, &models.Class{
+		Class: className,
+		ModuleConfig: map[string]interface{}{
+			"text2vec-contextionary": map[string]interface{}{
+				"vectorizeClassName": true,
+			},
+		},
+		Properties: []*models.Property{
+			{
+				Name:         "name",
+				DataType:     schema.DataTypeText.PropString(),
+				Tokenization: models.PropertyTokenizationWhitespace,
+			},
+		},
+	})
+
+	for i, id := range ids {
+		createObject(t, &models.Object{
+			Class: className,
+			ID:    id,
+			Properties: map[string]interface{}{
+				"name": names[i],
+			},
+		})
+		assertGetObjectEventually(t, id)
+	}
 }
 
 func addDateFieldClass(t *testing.T) {

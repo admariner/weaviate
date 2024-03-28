@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 //go:build integrationTest
@@ -16,18 +16,15 @@ package classifications
 
 import (
 	"context"
-	"math/rand"
 	"testing"
-	"time"
 
-	"github.com/semi-technologies/weaviate/entities/models"
 	"github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/entities/models"
 )
 
 func Test_ClassificationsRepo(t *testing.T) {
-	rand.Seed(time.Now().UnixNano())
 	dirName := t.TempDir()
 
 	logger, _ := test.NewNullLogger()
@@ -50,7 +47,7 @@ func Test_ClassificationsRepo(t *testing.T) {
 		require.Nil(t, err)
 	})
 
-	t.Run("retrieveing stored classifications", func(t *testing.T) {
+	t.Run("retrieving stored classifications", func(t *testing.T) {
 		expectedOne := exampleOne()
 		expectedTwo := exampleTwo()
 

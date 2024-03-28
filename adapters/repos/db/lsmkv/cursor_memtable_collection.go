@@ -4,14 +4,18 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package lsmkv
 
-import "bytes"
+import (
+	"bytes"
+
+	"github.com/weaviate/weaviate/entities/lsmkv"
+)
 
 type memtableCursorCollection struct {
 	data    []*binarySearchNodeMulti
@@ -20,7 +24,7 @@ type memtableCursorCollection struct {
 	unlock  func()
 }
 
-func (l *Memtable) newCollectionCursor() innerCursorCollection {
+func (m *Memtable) newCollectionCursor() innerCursorCollection {
 	// This cursor is a really primitive approach, it actually requires
 	// flattening the entire memtable - even if the cursor were to point to the
 	// very last element. However, given that the memtable will on average be
@@ -28,15 +32,15 @@ func (l *Memtable) newCollectionCursor() innerCursorCollection {
 	// get away with the full-flattening and a linear search. Let's not optimize
 	// prematurely.
 
-	l.RLock()
-	defer l.RUnlock()
+	m.RLock()
+	defer m.RUnlock()
 
-	data := l.keyMulti.flattenInOrder()
+	data := m.keyMulti.flattenInOrder()
 
 	return &memtableCursorCollection{
 		data:   data,
-		lock:   l.RLock,
-		unlock: l.RUnlock,
+		lock:   m.RLock,
+		unlock: m.RUnlock,
 	}
 }
 
@@ -45,7 +49,7 @@ func (c *memtableCursorCollection) first() ([]byte, []value, error) {
 	defer c.unlock()
 
 	if len(c.data) == 0 {
-		return nil, nil, NotFound
+		return nil, nil, lsmkv.NotFound
 	}
 
 	c.current = 0
@@ -61,7 +65,7 @@ func (c *memtableCursorCollection) seek(key []byte) ([]byte, []value, error) {
 
 	pos := c.posLargerThanEqual(key)
 	if pos == -1 {
-		return nil, nil, NotFound
+		return nil, nil, lsmkv.NotFound
 	}
 
 	c.current = pos
@@ -86,7 +90,7 @@ func (c *memtableCursorCollection) next() ([]byte, []value, error) {
 
 	c.current++
 	if c.current >= len(c.data) {
-		return nil, nil, NotFound
+		return nil, nil, lsmkv.NotFound
 	}
 
 	// there is no key-level tombstone, only individual values can have

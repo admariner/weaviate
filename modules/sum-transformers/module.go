@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package modsum
@@ -18,13 +18,13 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
-	"github.com/semi-technologies/weaviate/entities/modulecapabilities"
-	"github.com/semi-technologies/weaviate/entities/moduletools"
-	sumadditional "github.com/semi-technologies/weaviate/modules/sum-transformers/additional"
-	sumadditionalsummary "github.com/semi-technologies/weaviate/modules/sum-transformers/additional/summary"
-	"github.com/semi-technologies/weaviate/modules/sum-transformers/client"
-	"github.com/semi-technologies/weaviate/modules/sum-transformers/ent"
 	"github.com/sirupsen/logrus"
+	"github.com/weaviate/weaviate/entities/modulecapabilities"
+	"github.com/weaviate/weaviate/entities/moduletools"
+	sumadditional "github.com/weaviate/weaviate/modules/sum-transformers/additional"
+	sumadditionalsummary "github.com/weaviate/weaviate/modules/sum-transformers/additional/summary"
+	"github.com/weaviate/weaviate/modules/sum-transformers/client"
+	"github.com/weaviate/weaviate/modules/sum-transformers/ent"
 )
 
 func New() *SUMModule {
@@ -46,19 +46,19 @@ func (m *SUMModule) Name() string {
 }
 
 func (m *SUMModule) Type() modulecapabilities.ModuleType {
-	return modulecapabilities.Text2Text
+	return modulecapabilities.Text2TextSummarize
 }
 
 func (m *SUMModule) Init(ctx context.Context,
 	params moduletools.ModuleInitParams,
 ) error {
-	if err := m.initAdditional(ctx, params.GetLogger()); err != nil {
+	if err := m.initAdditional(ctx, params.GetConfig().ModuleHttpClientTimeout, params.GetLogger()); err != nil {
 		return errors.Wrap(err, "init additional")
 	}
 	return nil
 }
 
-func (m *SUMModule) initAdditional(ctx context.Context,
+func (m *SUMModule) initAdditional(ctx context.Context, timeout time.Duration,
 	logger logrus.FieldLogger,
 ) error {
 	uri := os.Getenv("SUM_INFERENCE_API")
@@ -66,7 +66,7 @@ func (m *SUMModule) initAdditional(ctx context.Context,
 		return errors.Errorf("required variable SUM_INFERENCE_API is not set")
 	}
 
-	client := client.New(uri, logger)
+	client := client.New(uri, timeout, logger)
 	if err := client.WaitForStartup(ctx, 1*time.Second); err != nil {
 		return errors.Wrap(err, "init remote sum module")
 	}

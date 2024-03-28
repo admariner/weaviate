@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package hnsw
@@ -15,9 +15,12 @@ import (
 	"bufio"
 	"encoding/binary"
 	"io"
+	"math"
 
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
+	"github.com/weaviate/weaviate/adapters/repos/db/vector/cache"
+	"github.com/weaviate/weaviate/adapters/repos/db/vector/compressionhelpers"
 )
 
 type Deserializer struct {
@@ -32,6 +35,8 @@ type DeserializationResult struct {
 	Level             uint16
 	Tombstones        map[uint64]struct{}
 	EntrypointChanged bool
+	PQData            compressionhelpers.PQData
+	Compressed        bool
 
 	// If there is no entry for the links at a level to be replaced, we must
 	// assume that all links were appended and prior state must exist
@@ -39,7 +44,7 @@ type DeserializationResult struct {
 	// flag, so that future appends aren't always appended and we run into a
 	// situation where reading multiple condensed logs in succession leads to too
 	// many connections as discovered in
-	// https://github.com/semi-technologies/weaviate/issues/1868
+	// https://github.com/weaviate/weaviate/issues/1868
 	LinksReplaced map[uint64]map[uint16]struct{}
 }
 
@@ -57,37 +62,37 @@ func NewDeserializer(logger logrus.FieldLogger) *Deserializer {
 	return &Deserializer{logger: logger}
 }
 
-func (c *Deserializer) resetResusableBuffer(size int) {
-	if size <= cap(c.reusableBuffer) {
-		c.reusableBuffer = c.reusableBuffer[:size]
+func (d *Deserializer) resetResusableBuffer(size int) {
+	if size <= cap(d.reusableBuffer) {
+		d.reusableBuffer = d.reusableBuffer[:size]
 	} else {
-		c.reusableBuffer = make([]byte, size, size*2)
+		d.reusableBuffer = make([]byte, size, size*2)
 	}
 }
 
-func (c *Deserializer) resetReusableConnectionsSlice(size int) {
-	if size <= cap(c.reusableConnectionsSlice) {
-		c.reusableConnectionsSlice = c.reusableConnectionsSlice[:size]
+func (d *Deserializer) resetReusableConnectionsSlice(size int) {
+	if size <= cap(d.reusableConnectionsSlice) {
+		d.reusableConnectionsSlice = d.reusableConnectionsSlice[:size]
 	} else {
-		c.reusableConnectionsSlice = make([]uint64, size, size*2)
+		d.reusableConnectionsSlice = make([]uint64, size, size*2)
 	}
 }
 
-func (c *Deserializer) Do(fd *bufio.Reader,
+func (d *Deserializer) Do(fd *bufio.Reader,
 	initialState *DeserializationResult, keepLinkReplaceInformation bool,
 ) (*DeserializationResult, int, error) {
 	validLength := 0
 	out := initialState
 	if out == nil {
 		out = &DeserializationResult{
-			Nodes:         make([]*vertex, initialSize),
+			Nodes:         make([]*vertex, cache.InitialSize),
 			Tombstones:    make(map[uint64]struct{}),
 			LinksReplaced: make(map[uint64]map[uint16]struct{}),
 		}
 	}
 
 	for {
-		ct, err := c.ReadCommitType(fd)
+		ct, err := d.ReadCommitType(fd)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				break
@@ -100,42 +105,45 @@ func (c *Deserializer) Do(fd *bufio.Reader,
 
 		switch ct {
 		case AddNode:
-			err = c.ReadNode(fd, out)
+			err = d.ReadNode(fd, out)
 			readThisRound = 10
 		case SetEntryPointMaxLevel:
 			var entrypoint uint64
 			var level uint16
-			entrypoint, level, err = c.ReadEP(fd)
+			entrypoint, level, err = d.ReadEP(fd)
 			out.Entrypoint = entrypoint
 			out.Level = level
 			out.EntrypointChanged = true
 			readThisRound = 10
 		case AddLinkAtLevel:
-			err = c.ReadLink(fd, out)
+			err = d.ReadLink(fd, out)
 			readThisRound = 18
 		case AddLinksAtLevel:
-			readThisRound, err = c.ReadAddLinks(fd, out)
+			readThisRound, err = d.ReadAddLinks(fd, out)
 		case ReplaceLinksAtLevel:
-			readThisRound, err = c.ReadLinks(fd, out, keepLinkReplaceInformation)
+			readThisRound, err = d.ReadLinks(fd, out, keepLinkReplaceInformation)
 		case AddTombstone:
-			err = c.ReadAddTombstone(fd, out.Tombstones)
+			err = d.ReadAddTombstone(fd, out.Tombstones)
 			readThisRound = 8
 		case RemoveTombstone:
-			err = c.ReadRemoveTombstone(fd, out.Tombstones)
+			err = d.ReadRemoveTombstone(fd, out.Tombstones)
 			readThisRound = 8
 		case ClearLinks:
-			err = c.ReadClearLinks(fd, out, keepLinkReplaceInformation)
+			err = d.ReadClearLinks(fd, out, keepLinkReplaceInformation)
 			readThisRound = 8
 		case ClearLinksAtLevel:
-			err = c.ReadClearLinksAtLevel(fd, out, keepLinkReplaceInformation)
+			err = d.ReadClearLinksAtLevel(fd, out, keepLinkReplaceInformation)
 			readThisRound = 10
 		case DeleteNode:
-			err = c.ReadDeleteNode(fd, out)
+			err = d.ReadDeleteNode(fd, out)
 			readThisRound = 8
 		case ResetIndex:
 			out.Entrypoint = 0
 			out.Level = 0
-			out.Nodes = make([]*vertex, initialSize)
+			out.Nodes = make([]*vertex, cache.InitialSize)
+		case AddPQ:
+			err = d.ReadPQ(fd, out)
+			readThisRound = 9
 		default:
 			err = errors.Errorf("unrecognized commit type %d", ct)
 		}
@@ -150,18 +158,18 @@ func (c *Deserializer) Do(fd *bufio.Reader,
 	return out, validLength, nil
 }
 
-func (c *Deserializer) ReadNode(r io.Reader, res *DeserializationResult) error {
-	id, err := c.readUint64(r)
+func (d *Deserializer) ReadNode(r io.Reader, res *DeserializationResult) error {
+	id, err := d.readUint64(r)
 	if err != nil {
 		return err
 	}
 
-	level, err := c.readUint16(r)
+	level, err := d.readUint16(r)
 	if err != nil {
 		return err
 	}
 
-	newNodes, changed, err := growIndexToAccomodateNode(res.Nodes, id, c.logger)
+	newNodes, changed, err := growIndexToAccomodateNode(res.Nodes, id, d.logger)
 	if err != nil {
 		return err
 	}
@@ -179,13 +187,13 @@ func (c *Deserializer) ReadNode(r io.Reader, res *DeserializationResult) error {
 	return nil
 }
 
-func (c *Deserializer) ReadEP(r io.Reader) (uint64, uint16, error) {
-	id, err := c.readUint64(r)
+func (d *Deserializer) ReadEP(r io.Reader) (uint64, uint16, error) {
+	id, err := d.readUint64(r)
 	if err != nil {
 		return 0, 0, err
 	}
 
-	level, err := c.readUint16(r)
+	level, err := d.readUint16(r)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -193,23 +201,23 @@ func (c *Deserializer) ReadEP(r io.Reader) (uint64, uint16, error) {
 	return id, level, nil
 }
 
-func (c *Deserializer) ReadLink(r io.Reader, res *DeserializationResult) error {
-	source, err := c.readUint64(r)
+func (d *Deserializer) ReadLink(r io.Reader, res *DeserializationResult) error {
+	source, err := d.readUint64(r)
 	if err != nil {
 		return err
 	}
 
-	level, err := c.readUint16(r)
+	level, err := d.readUint16(r)
 	if err != nil {
 		return err
 	}
 
-	target, err := c.readUint64(r)
+	target, err := d.readUint64(r)
 	if err != nil {
 		return err
 	}
 
-	newNodes, changed, err := growIndexToAccomodateNode(res.Nodes, source, c.logger)
+	newNodes, changed, err := growIndexToAccomodateNode(res.Nodes, source, d.logger)
 	if err != nil {
 		return err
 	}
@@ -228,25 +236,25 @@ func (c *Deserializer) ReadLink(r io.Reader, res *DeserializationResult) error {
 	return nil
 }
 
-func (c *Deserializer) ReadLinks(r io.Reader, res *DeserializationResult,
+func (d *Deserializer) ReadLinks(r io.Reader, res *DeserializationResult,
 	keepReplaceInfo bool,
 ) (int, error) {
-	c.resetResusableBuffer(12)
-	_, err := io.ReadFull(r, c.reusableBuffer)
+	d.resetResusableBuffer(12)
+	_, err := io.ReadFull(r, d.reusableBuffer)
 	if err != nil {
 		return 0, err
 	}
 
-	source := binary.LittleEndian.Uint64(c.reusableBuffer[0:8])
-	level := binary.LittleEndian.Uint16(c.reusableBuffer[8:10])
-	length := binary.LittleEndian.Uint16(c.reusableBuffer[10:12])
+	source := binary.LittleEndian.Uint64(d.reusableBuffer[0:8])
+	level := binary.LittleEndian.Uint16(d.reusableBuffer[8:10])
+	length := binary.LittleEndian.Uint16(d.reusableBuffer[10:12])
 
-	targets, err := c.readUint64Slice(r, int(length))
+	targets, err := d.readUint64Slice(r, int(length))
 	if err != nil {
 		return 0, err
 	}
 
-	newNodes, changed, err := growIndexToAccomodateNode(res.Nodes, source, c.logger)
+	newNodes, changed, err := growIndexToAccomodateNode(res.Nodes, source, d.logger)
 	if err != nil {
 		return 0, err
 	}
@@ -277,25 +285,25 @@ func (c *Deserializer) ReadLinks(r io.Reader, res *DeserializationResult,
 	return 12 + int(length)*8, nil
 }
 
-func (c *Deserializer) ReadAddLinks(r io.Reader,
+func (d *Deserializer) ReadAddLinks(r io.Reader,
 	res *DeserializationResult,
 ) (int, error) {
-	c.resetResusableBuffer(12)
-	_, err := io.ReadFull(r, c.reusableBuffer)
+	d.resetResusableBuffer(12)
+	_, err := io.ReadFull(r, d.reusableBuffer)
 	if err != nil {
 		return 0, err
 	}
 
-	source := binary.LittleEndian.Uint64(c.reusableBuffer[0:8])
-	level := binary.LittleEndian.Uint16(c.reusableBuffer[8:10])
-	length := binary.LittleEndian.Uint16(c.reusableBuffer[10:12])
+	source := binary.LittleEndian.Uint64(d.reusableBuffer[0:8])
+	level := binary.LittleEndian.Uint16(d.reusableBuffer[8:10])
+	length := binary.LittleEndian.Uint16(d.reusableBuffer[10:12])
 
-	targets, err := c.readUint64Slice(r, int(length))
+	targets, err := d.readUint64Slice(r, int(length))
 	if err != nil {
 		return 0, err
 	}
 
-	newNodes, changed, err := growIndexToAccomodateNode(res.Nodes, source, c.logger)
+	newNodes, changed, err := growIndexToAccomodateNode(res.Nodes, source, d.logger)
 	if err != nil {
 		return 0, err
 	}
@@ -316,8 +324,8 @@ func (c *Deserializer) ReadAddLinks(r io.Reader,
 	return 12 + int(length)*8, nil
 }
 
-func (c *Deserializer) ReadAddTombstone(r io.Reader, tombstones map[uint64]struct{}) error {
-	id, err := c.readUint64(r)
+func (d *Deserializer) ReadAddTombstone(r io.Reader, tombstones map[uint64]struct{}) error {
+	id, err := d.readUint64(r)
 	if err != nil {
 		return err
 	}
@@ -327,8 +335,8 @@ func (c *Deserializer) ReadAddTombstone(r io.Reader, tombstones map[uint64]struc
 	return nil
 }
 
-func (c *Deserializer) ReadRemoveTombstone(r io.Reader, tombstones map[uint64]struct{}) error {
-	id, err := c.readUint64(r)
+func (d *Deserializer) ReadRemoveTombstone(r io.Reader, tombstones map[uint64]struct{}) error {
+	id, err := d.readUint64(r)
 	if err != nil {
 		return err
 	}
@@ -338,17 +346,21 @@ func (c *Deserializer) ReadRemoveTombstone(r io.Reader, tombstones map[uint64]st
 	return nil
 }
 
-func (c *Deserializer) ReadClearLinks(r io.Reader, res *DeserializationResult,
+func (d *Deserializer) ReadClearLinks(r io.Reader, res *DeserializationResult,
 	keepReplaceInfo bool,
 ) error {
-	id, err := c.readUint64(r)
+	id, err := d.readUint64(r)
 	if err != nil {
 		return err
 	}
 
-	if int(id) >= len(res.Nodes) {
-		// node is out of bounds, so it can't exist, nothing to do here
-		return nil
+	newNodes, changed, err := growIndexToAccomodateNode(res.Nodes, id, d.logger)
+	if err != nil {
+		return err
+	}
+
+	if changed {
+		res.Nodes = newNodes
 	}
 
 	if res.Nodes[id] == nil {
@@ -360,22 +372,26 @@ func (c *Deserializer) ReadClearLinks(r io.Reader, res *DeserializationResult,
 	return nil
 }
 
-func (c *Deserializer) ReadClearLinksAtLevel(r io.Reader, res *DeserializationResult,
+func (d *Deserializer) ReadClearLinksAtLevel(r io.Reader, res *DeserializationResult,
 	keepReplaceInfo bool,
 ) error {
-	id, err := c.readUint64(r)
+	id, err := d.readUint64(r)
 	if err != nil {
 		return err
 	}
 
-	level, err := c.readUint16(r)
+	level, err := d.readUint16(r)
 	if err != nil {
 		return err
 	}
 
-	if int(id) >= len(res.Nodes) {
-		// node is out of bounds, so it can't exist, nothing to do here
-		return nil
+	newNodes, changed, err := growIndexToAccomodateNode(res.Nodes, id, d.logger)
+	if err != nil {
+		return err
+	}
+
+	if changed {
+		res.Nodes = newNodes
 	}
 
 	if keepReplaceInfo {
@@ -426,69 +442,225 @@ func (c *Deserializer) ReadClearLinksAtLevel(r io.Reader, res *DeserializationRe
 	return nil
 }
 
-func (c *Deserializer) ReadDeleteNode(r io.Reader, res *DeserializationResult) error {
-	id, err := c.readUint64(r)
+func (d *Deserializer) ReadDeleteNode(r io.Reader, res *DeserializationResult) error {
+	id, err := d.readUint64(r)
 	if err != nil {
 		return err
 	}
 
-	if int(id) >= len(res.Nodes) {
-		// node is out of bounds, so it can't exist, nothing to do here
-		return nil
+	newNodes, changed, err := growIndexToAccomodateNode(res.Nodes, id, d.logger)
+	if err != nil {
+		return err
+	}
+
+	if changed {
+		res.Nodes = newNodes
 	}
 
 	res.Nodes[id] = nil
 	return nil
 }
 
-func (c *Deserializer) readUint64(r io.Reader) (uint64, error) {
+func (d *Deserializer) ReadTileEncoder(r io.Reader, res *DeserializationResult, i uint16) (compressionhelpers.PQEncoder, error) {
+	bins, err := d.readFloat64(r)
+	if err != nil {
+		return nil, err
+	}
+	mean, err := d.readFloat64(r)
+	if err != nil {
+		return nil, err
+	}
+	stdDev, err := d.readFloat64(r)
+	if err != nil {
+		return nil, err
+	}
+	size, err := d.readFloat64(r)
+	if err != nil {
+		return nil, err
+	}
+	s1, err := d.readFloat64(r)
+	if err != nil {
+		return nil, err
+	}
+	s2, err := d.readFloat64(r)
+	if err != nil {
+		return nil, err
+	}
+	segment, err := d.readUint16(r)
+	if err != nil {
+		return nil, err
+	}
+	encDistribution, err := d.readByte(r)
+	if err != nil {
+		return nil, err
+	}
+	return compressionhelpers.RestoreTileEncoder(bins, mean, stdDev, size, s1, s2, segment, encDistribution), nil
+}
+
+func (d *Deserializer) ReadKMeansEncoder(r io.Reader, res *DeserializationResult, i uint16) (compressionhelpers.PQEncoder, error) {
+	ds := int(res.PQData.Dimensions / res.PQData.M)
+	centers := make([][]float32, 0, res.PQData.Ks)
+	for k := uint16(0); k < res.PQData.Ks; k++ {
+		center := make([]float32, 0, ds)
+		for i := 0; i < ds; i++ {
+			c, err := d.readFloat32(r)
+			if err != nil {
+				return nil, err
+			}
+			center = append(center, c)
+		}
+		centers = append(centers, center)
+	}
+	kms := compressionhelpers.NewKMeansWithCenters(
+		int(res.PQData.Ks),
+		ds,
+		int(i),
+		centers,
+	)
+	return kms, nil
+}
+
+func (d *Deserializer) ReadPQ(r io.Reader, res *DeserializationResult) error {
+	dims, err := d.readUint16(r)
+	if err != nil {
+		return err
+	}
+	enc, err := d.readByte(r)
+	if err != nil {
+		return err
+	}
+	ks, err := d.readUint16(r)
+	if err != nil {
+		return err
+	}
+	m, err := d.readUint16(r)
+	if err != nil {
+		return err
+	}
+	dist, err := d.readByte(r)
+	if err != nil {
+		return err
+	}
+	useBitsEncoding, err := d.readByte(r)
+	if err != nil {
+		return err
+	}
+	encoder := compressionhelpers.Encoder(enc)
+	res.PQData = compressionhelpers.PQData{
+		Dimensions:          dims,
+		EncoderType:         encoder,
+		Ks:                  ks,
+		M:                   m,
+		EncoderDistribution: byte(dist),
+		UseBitsEncoding:     useBitsEncoding != 0,
+	}
+	var encoderReader func(io.Reader, *DeserializationResult, uint16) (compressionhelpers.PQEncoder, error)
+	switch encoder {
+	case compressionhelpers.UseTileEncoder:
+		encoderReader = d.ReadTileEncoder
+	case compressionhelpers.UseKMeansEncoder:
+		encoderReader = d.ReadKMeansEncoder
+	default:
+		return errors.New("Unsuported encoder type")
+	}
+	for i := uint16(0); i < m; i++ {
+		encoder, err := encoderReader(r, res, i)
+		if err != nil {
+			return err
+		}
+		res.PQData.Encoders = append(res.PQData.Encoders, encoder)
+	}
+	res.Compressed = true
+
+	return nil
+}
+
+func (d *Deserializer) readUint64(r io.Reader) (uint64, error) {
 	var value uint64
-	c.resetResusableBuffer(8)
-	_, err := io.ReadFull(r, c.reusableBuffer)
+	d.resetResusableBuffer(8)
+	_, err := io.ReadFull(r, d.reusableBuffer)
 	if err != nil {
 		return 0, errors.Wrap(err, "failed to read uint64")
 	}
 
-	value = binary.LittleEndian.Uint64(c.reusableBuffer)
+	value = binary.LittleEndian.Uint64(d.reusableBuffer)
 
 	return value, nil
 }
 
-func (c *Deserializer) readUint16(r io.Reader) (uint16, error) {
+func (d *Deserializer) readFloat64(r io.Reader) (float64, error) {
+	var value float64
+	d.resetResusableBuffer(8)
+	_, err := io.ReadFull(r, d.reusableBuffer)
+	if err != nil {
+		return 0, errors.Wrap(err, "failed to read float64")
+	}
+
+	bits := binary.LittleEndian.Uint64(d.reusableBuffer)
+	value = math.Float64frombits(bits)
+
+	return value, nil
+}
+
+func (d *Deserializer) readFloat32(r io.Reader) (float32, error) {
+	var value float32
+	d.resetResusableBuffer(4)
+	_, err := io.ReadFull(r, d.reusableBuffer)
+	if err != nil {
+		return 0, errors.Wrap(err, "failed to read float32")
+	}
+
+	bits := binary.LittleEndian.Uint32(d.reusableBuffer)
+	value = math.Float32frombits(bits)
+
+	return value, nil
+}
+
+func (d *Deserializer) readUint16(r io.Reader) (uint16, error) {
 	var value uint16
-	c.resetResusableBuffer(2)
-	_, err := io.ReadFull(r, c.reusableBuffer)
+	d.resetResusableBuffer(2)
+	_, err := io.ReadFull(r, d.reusableBuffer)
 	if err != nil {
 		return 0, errors.Wrap(err, "failed to read uint16")
 	}
 
-	value = binary.LittleEndian.Uint16(c.reusableBuffer)
+	value = binary.LittleEndian.Uint16(d.reusableBuffer)
 
 	return value, nil
 }
 
-func (c *Deserializer) ReadCommitType(r io.Reader) (HnswCommitType, error) {
-	c.resetResusableBuffer(1)
-	if _, err := io.ReadFull(r, c.reusableBuffer); err != nil {
+func (d *Deserializer) readByte(r io.Reader) (byte, error) {
+	d.resetResusableBuffer(1)
+	_, err := io.ReadFull(r, d.reusableBuffer)
+	if err != nil {
+		return 0, errors.Wrap(err, "failed to read byte")
+	}
+
+	return d.reusableBuffer[0], nil
+}
+
+func (d *Deserializer) ReadCommitType(r io.Reader) (HnswCommitType, error) {
+	d.resetResusableBuffer(1)
+	if _, err := io.ReadFull(r, d.reusableBuffer); err != nil {
 		return 0, errors.Wrap(err, "failed to read commit type")
 	}
 
-	return HnswCommitType(c.reusableBuffer[0]), nil
+	return HnswCommitType(d.reusableBuffer[0]), nil
 }
 
-func (c *Deserializer) readUint64Slice(r io.Reader, length int) ([]uint64, error) {
-	c.resetResusableBuffer(length * 8)
-	c.resetReusableConnectionsSlice(length)
-	_, err := io.ReadFull(r, c.reusableBuffer)
+func (d *Deserializer) readUint64Slice(r io.Reader, length int) ([]uint64, error) {
+	d.resetResusableBuffer(length * 8)
+	d.resetReusableConnectionsSlice(length)
+	_, err := io.ReadFull(r, d.reusableBuffer)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to read uint64 slice")
 	}
 
-	for i := range c.reusableConnectionsSlice {
-		c.reusableConnectionsSlice[i] = binary.LittleEndian.Uint64(c.reusableBuffer[i*8 : (i+1)*8])
+	for i := range d.reusableConnectionsSlice {
+		d.reusableConnectionsSlice[i] = binary.LittleEndian.Uint64(d.reusableBuffer[i*8 : (i+1)*8])
 	}
 
-	return c.reusableConnectionsSlice, nil
+	return d.reusableConnectionsSlice, nil
 }
 
 // If the connections array is to small to contain the current target-levelit

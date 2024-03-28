@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package rest
@@ -20,11 +20,12 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/cors"
-	"github.com/semi-technologies/weaviate/adapters/handlers/rest/state"
-	"github.com/semi-technologies/weaviate/adapters/handlers/rest/swagger_middleware"
-	"github.com/semi-technologies/weaviate/usecases/modules"
-	"github.com/semi-technologies/weaviate/usecases/monitoring"
 	"github.com/sirupsen/logrus"
+	"github.com/weaviate/weaviate/adapters/handlers/rest/state"
+	"github.com/weaviate/weaviate/adapters/handlers/rest/swagger_middleware"
+	"github.com/weaviate/weaviate/usecases/config"
+	"github.com/weaviate/weaviate/usecases/modules"
+	"github.com/weaviate/weaviate/usecases/monitoring"
 )
 
 // The middleware configuration is for the handler executors. These do not apply to the swagger.json document.
@@ -35,7 +36,7 @@ import (
 func makeSetupMiddlewares(appState *state.State) func(http.Handler) http.Handler {
 	return func(handler http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.String() == "/v1/.well-known/openid-configuration" {
+			if r.URL.String() == "/v1/.well-known/openid-configuration" || r.URL.String() == "/v1" {
 				handler.ServeHTTP(w, r)
 				return
 			}
@@ -87,7 +88,9 @@ func makeSetupGlobalMiddleware(appState *state.State) func(http.Handler) http.Ha
 	return func(handler http.Handler) http.Handler {
 		handleCORS := cors.New(cors.Options{
 			OptionsPassthrough: true,
-			AllowedMethods:     []string{"POST", "PUT", "DELETE", "GET", "PATCH"},
+			AllowedMethods:     strings.Split(appState.ServerConfig.Config.CORS.AllowMethods, ","),
+			AllowedHeaders:     strings.Split(appState.ServerConfig.Config.CORS.AllowHeaders, ","),
+			AllowedOrigins:     strings.Split(appState.ServerConfig.Config.CORS.AllowOrigin, ","),
 		}).Handler
 		handler = handleCORS(handler)
 		handler = swagger_middleware.AddMiddleware([]byte(SwaggerJSON), handler)
@@ -95,12 +98,13 @@ func makeSetupGlobalMiddleware(appState *state.State) func(http.Handler) http.Ha
 		if appState.ServerConfig.Config.Monitoring.Enabled {
 			handler = makeAddMonitoring(appState.Metrics)(handler)
 		}
-		handler = addPreflight(handler)
-		handler = addLiveAndReadyness(handler)
+		handler = addPreflight(handler, appState.ServerConfig.Config.CORS)
+		handler = addLiveAndReadyness(appState, handler)
 		handler = addHandleRoot(handler)
 		handler = makeAddModuleHandlers(appState.Modules)(handler)
 		handler = addInjectHeadersIntoContext(handler)
-		handler = makeCatchPanics(appState.Logger)(handler)
+		handler = makeCatchPanics(appState.Logger,
+			newPanicsRequestsTotal(appState.Metrics, appState.Logger))(handler)
 
 		return handler
 	}
@@ -139,12 +143,13 @@ func makeAddMonitoring(metrics *monitoring.PrometheusMetrics) func(http.Handler)
 	}
 }
 
-func addPreflight(next http.Handler) http.Handler {
+func addPreflight(next http.Handler, cfg config.CORS) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", cfg.AllowOrigin)
+		w.Header().Set("Access-Control-Allow-Methods", cfg.AllowMethods)
+		w.Header().Set("Access-Control-Allow-Headers", cfg.AllowHeaders)
+
 		if r.Method == "OPTIONS" {
-			w.Header().Set("Access-Control-Allow-Origin", "*")
-			w.Header().Set("Access-Control-Allow-Methods", "*")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Batch")
 			return
 		}
 
@@ -171,7 +176,7 @@ func addInjectHeadersIntoContext(next http.Handler) http.Handler {
 	})
 }
 
-func addLiveAndReadyness(next http.Handler) http.Handler {
+func addLiveAndReadyness(state *state.State, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.String() == "/v1/.well-known/live" {
 			w.WriteHeader(http.StatusOK)
@@ -179,7 +184,11 @@ func addLiveAndReadyness(next http.Handler) http.Handler {
 		}
 
 		if r.URL.String() == "/v1/.well-known/ready" {
-			w.WriteHeader(http.StatusOK)
+			code := http.StatusServiceUnavailable
+			if state.DB.StartupComplete() && state.Cluster.ClusterHealthScore() == 0 {
+				code = http.StatusOK
+			}
+			w.WriteHeader(code)
 			return
 		}
 

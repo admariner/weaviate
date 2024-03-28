@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package refcache
@@ -17,23 +17,38 @@ import (
 	"sync"
 
 	"github.com/pkg/errors"
-	"github.com/semi-technologies/weaviate/entities/additional"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/multi"
-	"github.com/semi-technologies/weaviate/entities/schema/crossref"
-	"github.com/semi-technologies/weaviate/entities/search"
 	"github.com/sirupsen/logrus"
+	"github.com/weaviate/weaviate/entities/additional"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/multi"
+	"github.com/weaviate/weaviate/entities/schema/crossref"
+	"github.com/weaviate/weaviate/entities/search"
 )
 
 type repo interface {
-	MultiGet(ctx context.Context, query []multi.Identifier, additional additional.Properties) ([]search.Result, error)
+	MultiGet(ctx context.Context, query []multi.Identifier,
+		additional additional.Properties, tenant string) ([]search.Result, error)
 }
 
-func NewCacher(repo repo, logger logrus.FieldLogger) *Cacher {
+func NewCacher(repo repo, logger logrus.FieldLogger, tenant string) *Cacher {
+	return &Cacher{
+		logger:    logger,
+		repo:      repo,
+		store:     map[multi.Identifier]search.Result{},
+		withGroup: false,
+		tenant:    tenant,
+	}
+}
+
+func NewCacherWithGroup(repo repo, logger logrus.FieldLogger, tenant string) *Cacher {
 	return &Cacher{
 		logger: logger,
 		repo:   repo,
 		store:  map[multi.Identifier]search.Result{},
+		// for groupBy feature
+		withGroup:                true,
+		getGroupSelectProperties: getGroupSelectProperties,
+		tenant:                   tenant,
 	}
 }
 
@@ -50,6 +65,10 @@ type Cacher struct {
 	repo       repo
 	store      map[multi.Identifier]search.Result
 	additional additional.Properties // meta is immutable for the lifetime of the request cacher, so we can safely store it
+	// for groupBy feature
+	withGroup                bool
+	getGroupSelectProperties func(properties search.SelectProperties) search.SelectProperties
+	tenant                   string
 }
 
 func (c *Cacher) Get(si multi.Identifier) (search.Result, bool) {
@@ -122,30 +141,56 @@ func (c *Cacher) findJobsFromResponse(objects []search.Result, properties search
 			return fmt.Errorf("object schema is present, but not a map: %T", obj)
 		}
 
-		for key, value := range schemaMap {
-			selectProp := propertiesReplaced.FindProperty(key)
-			skip, unresolved := c.skipProperty(key, value, selectProp)
-			if skip {
-				continue
-			}
+		if err := c.parseSchemaMap(schemaMap, propertiesReplaced); err != nil {
+			return err
+		}
 
-			for _, selectPropRef := range selectProp.Refs {
-				innerProperties := selectPropRef.RefProperties
-
-				for _, item := range unresolved {
-					ref, err := c.extractAndParseBeacon(item)
-					if err != nil {
-						return err
-					}
-					c.addJob(multi.Identifier{
-						ID:        ref.TargetID.String(),
-						ClassName: selectPropRef.ClassName,
-					}, innerProperties)
-				}
+		if c.withGroup {
+			if err := c.parseAdditionalGroup(obj, properties); err != nil {
+				return err
 			}
 		}
 	}
 
+	return nil
+}
+
+func (c *Cacher) parseAdditionalGroup(obj search.Result, properties search.SelectProperties) error {
+	if obj.AdditionalProperties != nil && obj.AdditionalProperties["group"] != nil {
+		if group, ok := obj.AdditionalProperties["group"].(*additional.Group); ok {
+			for _, hitMap := range group.Hits {
+				if err := c.parseSchemaMap(hitMap, c.getGroupSelectProperties(properties)); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func (c *Cacher) parseSchemaMap(schemaMap map[string]interface{}, propertiesReplaced search.SelectProperties) error {
+	for key, value := range schemaMap {
+		selectProp := propertiesReplaced.FindProperty(key)
+		skip, unresolved := c.skipProperty(key, value, selectProp)
+		if skip {
+			continue
+		}
+
+		for _, selectPropRef := range selectProp.Refs {
+			innerProperties := selectPropRef.RefProperties
+
+			for _, item := range unresolved {
+				ref, err := c.extractAndParseBeacon(item)
+				if err != nil {
+					return err
+				}
+				c.addJob(multi.Identifier{
+					ID:        ref.TargetID.String(),
+					ClassName: selectPropRef.ClassName,
+				}, innerProperties)
+			}
+		}
+	}
 	return nil
 }
 
@@ -236,14 +281,7 @@ func (c *Cacher) completeJobs() []cacherJob {
 	return out[:n]
 }
 
-// alters the list, removes duplicates. Ignores complete jobs, as a job could
-// already marked as complete, but not yet stored since the completion is the
-// exit condition for the recursion. However, the storage can only happen once
-// the schema was parsed. If the schema contains more refs to an item that is
-// already in the joblist we are in a catch-22. To resolve that, we allow
-// duplicates with already complete jobs since retrieving the required item
-// again (with different SelectProperties) comes at minimal cost and is the
-// only way out of that deadlock situation.
+// alters the list, removes duplicates.
 func (c *Cacher) dedupJobList() {
 	incompleteJobs := c.incompleteJobs()
 	before := len(incompleteJobs)
@@ -251,6 +289,7 @@ func (c *Cacher) dedupJobList() {
 		// nothing to do
 		return
 	}
+
 	c.logger.
 		WithFields(logrus.Fields{
 			"action": "request_cacher_dedup_joblist_start",
@@ -259,6 +298,11 @@ func (c *Cacher) dedupJobList() {
 		Debug("starting job list deduplication")
 	deduped := make([]cacherJob, len(incompleteJobs))
 	found := map[multi.Identifier]struct{}{}
+
+	// don't look up refs that are already completed - this can for example happen with cyclic refs
+	for _, job := range c.completeJobs() {
+		found[job.si] = struct{}{}
+	}
 
 	n := 0
 	for _, job := range incompleteJobs {
@@ -290,7 +334,7 @@ func (c *Cacher) fetchJobs(ctx context.Context) error {
 	}
 
 	query := jobListToMultiGetQuery(jobs)
-	res, err := c.repo.MultiGet(ctx, query, c.additional)
+	res, err := c.repo.MultiGet(ctx, query, c.additional, c.tenant)
 	if err != nil {
 		return errors.Wrap(err, "fetch job list")
 	}

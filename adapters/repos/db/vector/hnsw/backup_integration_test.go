@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 //go:build integrationTest
@@ -22,31 +22,53 @@ import (
 	"testing"
 	"time"
 
-	"github.com/semi-technologies/weaviate/adapters/repos/db/vector/hnsw/distancer"
-	enthnsw "github.com/semi-technologies/weaviate/entities/vectorindex/hnsw"
-	"github.com/sirupsen/logrus"
+	"github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/adapters/repos/db/vector/hnsw/distancer"
+	"github.com/weaviate/weaviate/entities/cyclemanager"
+	enthnsw "github.com/weaviate/weaviate/entities/vectorindex/hnsw"
 )
 
 func TestBackup_Integration(t *testing.T) {
 	ctx := context.Background()
+	logger, _ := test.NewNullLogger()
 
+	dirName := t.TempDir()
 	indexID := "backup-integration-test"
 
-	dirName := makeTestDir(t)
+	parentCommitLoggerCallbacks := cyclemanager.NewCallbackGroup("parentCommitLogger", logger, 1)
+	parentCommitLoggerCycle := cyclemanager.NewManager(
+		cyclemanager.HnswCommitLoggerCycleTicker(),
+		parentCommitLoggerCallbacks.CycleCallback, logger)
+	parentCommitLoggerCycle.Start()
+	defer parentCommitLoggerCycle.StopAndWait(ctx)
+	commitLoggerCallbacks := cyclemanager.NewCallbackGroup("childCommitLogger", logger, 1)
+	commitLoggerCallbacksCtrl := parentCommitLoggerCallbacks.Register("commitLogger", commitLoggerCallbacks.CycleCallback)
+
+	parentTombstoneCleanupCallbacks := cyclemanager.NewCallbackGroup("parentTombstoneCleanup", logger, 1)
+	parentTombstoneCleanupCycle := cyclemanager.NewManager(
+		cyclemanager.NewFixedTicker(enthnsw.DefaultCleanupIntervalSeconds*time.Second),
+		parentTombstoneCleanupCallbacks.CycleCallback, logger)
+	parentTombstoneCleanupCycle.Start()
+	defer parentTombstoneCleanupCycle.StopAndWait(ctx)
+	tombstoneCleanupCallbacks := cyclemanager.NewCallbackGroup("childTombstoneCleanup", logger, 1)
+	tombstoneCleanupCallbacksCtrl := parentTombstoneCleanupCallbacks.Register("tombstoneCleanup", tombstoneCleanupCallbacks.CycleCallback)
+
+	combinedCtrl := cyclemanager.NewCombinedCallbackCtrl(2, logger, commitLoggerCallbacksCtrl, tombstoneCleanupCallbacksCtrl)
 
 	idx, err := New(Config{
-		RootPath: dirName,
-		ID:       indexID,
-		MakeCommitLoggerThunk: func() (CommitLogger, error) {
-			return NewCommitLogger(dirName, indexID, 500*time.Millisecond,
-				logrus.New())
-		},
+		RootPath:         dirName,
+		ID:               indexID,
+		Logger:           logger,
 		DistanceProvider: distancer.NewCosineDistanceProvider(),
 		VectorForIDThunk: testVectorForID,
-	}, enthnsw.NewDefaultUserConfig())
+		MakeCommitLoggerThunk: func() (CommitLogger, error) {
+			return NewCommitLogger(dirName, indexID, logger, commitLoggerCallbacks)
+		},
+	}, enthnsw.NewDefaultUserConfig(), tombstoneCleanupCallbacks, cyclemanager.NewCallbackGroupNoop(), cyclemanager.NewCallbackGroupNoop(), nil)
 	require.Nil(t, err)
+	idx.PostStartup()
 
 	t.Run("insert vector into index", func(t *testing.T) {
 		for i := 0; i < 10; i++ {
@@ -62,7 +84,7 @@ func TestBackup_Integration(t *testing.T) {
 	time.Sleep(time.Second)
 
 	t.Run("pause maintenance", func(t *testing.T) {
-		err = idx.PauseMaintenance(ctx)
+		err = combinedCtrl.Deactivate(ctx)
 		require.Nil(t, err)
 	})
 
@@ -72,7 +94,7 @@ func TestBackup_Integration(t *testing.T) {
 	})
 
 	t.Run("list files", func(t *testing.T) {
-		files, err := idx.ListFiles(ctx)
+		files, err := idx.ListFiles(ctx, dirName)
 		require.Nil(t, err)
 
 		// by this point there should be two files in the commitlog directory.
@@ -108,10 +130,13 @@ func TestBackup_Integration(t *testing.T) {
 	})
 
 	t.Run("resume maintenance", func(t *testing.T) {
-		err = idx.ResumeMaintenance(ctx)
+		err = combinedCtrl.Activate()
 		require.Nil(t, err)
 	})
 
 	err = idx.Shutdown(ctx)
+	require.Nil(t, err)
+
+	err = combinedCtrl.Unregister(ctx)
 	require.Nil(t, err)
 }

@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package vectorizer
@@ -24,7 +24,7 @@ func CombineVectorsWithWeights(vectors [][]float32, weights []float32) []float32
 		}
 	}
 	sums := make([]float32, maxVectorLength)
-	dividers := make([]float32, maxVectorLength)
+	dividers := make([]int32, maxVectorLength)
 	for indx, vector := range vectors {
 		for i := 0; i < len(vector); i++ {
 			if weights != nil {
@@ -36,10 +36,9 @@ func CombineVectorsWithWeights(vectors [][]float32, weights []float32) []float32
 			dividers[i]++
 		}
 	}
-	combinedVector := make([]float32, len(sums))
 	for i := 0; i < len(sums); i++ {
-		combinedVector[i] = sums[i] / dividers[i]
+		sums[i] /= float32(dividers[i])
 	}
 
-	return combinedVector
+	return sums
 }

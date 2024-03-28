@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package clients
@@ -21,9 +21,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/semi-technologies/weaviate/usecases/cluster"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/usecases/cluster"
 )
 
 func TestOpenTransactionNoReturnPayload(t *testing.T) {
@@ -187,7 +187,7 @@ func TestOpenTransactionUnhappyPaths(t *testing.T) {
 			shutdownPrematurely: true,
 			handler: func(w http.ResponseWriter, r *http.Request) {
 			},
-			expectedErrContains: "connection refused",
+			expectedErrContains: "refused",
 		},
 		{
 			name: "tx id mismatch",
@@ -301,7 +301,7 @@ func TestAbortTransactionUnhappyPaths(t *testing.T) {
 			shutdownPrematurely: true,
 			handler: func(w http.ResponseWriter, r *http.Request) {
 			},
-			expectedErrContains: "connection refused",
+			expectedErrContains: "refused",
 		},
 	}
 
@@ -399,7 +399,7 @@ func TestCommitTransactionUnhappyPaths(t *testing.T) {
 			shutdownPrematurely: true,
 			handler: func(w http.ResponseWriter, r *http.Request) {
 			},
-			expectedErrContains: "connection refused",
+			expectedErrContains: "refused",
 		},
 	}
 

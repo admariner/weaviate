@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package test
@@ -15,8 +15,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/semi-technologies/weaviate/entities/models"
-	graphqlhelper "github.com/semi-technologies/weaviate/test/helper/graphql"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
+	graphqlhelper "github.com/weaviate/weaviate/test/helper/graphql"
 )
 
 const notExistingObjectId = "cfa3b21e-ca5f-4db7-a412-ffffffffffff"
@@ -63,13 +64,8 @@ func arrayClassSchema() *models.Class {
 		InvertedIndexConfig: &models.InvertedIndexConfig{IndexPropertyLength: true, IndexNullState: true},
 		Properties: []*models.Property{
 			{
-				Name:         "strings",
-				DataType:     []string{"string[]"},
-				Tokenization: models.PropertyTokenizationWord,
-			},
-			{
 				Name:         "texts",
-				DataType:     []string{"text[]"},
+				DataType:     schema.DataTypeTextArray.PropString(),
 				Tokenization: models.PropertyTokenizationWord,
 			},
 			{
@@ -83,10 +79,6 @@ func arrayClassSchema() *models.Class {
 			{
 				Name:     "booleans",
 				DataType: []string{"boolean[]"},
-			},
-			{
-				Name:     "datesAsStrings",
-				DataType: []string{"date[]"},
 			},
 			{
 				Name:     "dates",
@@ -113,22 +105,15 @@ func objectArrayClass4el() *models.Object {
 		Class: arrayClassName,
 		ID:    objectArrayClassID1_4el,
 		Properties: map[string]interface{}{
-			"strings":  []string{"Astr", "Bstr", "Cstr", "Dstr"},
-			"texts":    []string{"Atxt", "Btxt", "Ctxt", "Dtxt"},
+			"texts":    []string{"Alpha", "Bravo", "Charlie", "Delta"},
 			"numbers":  []float64{1.0, 2.0, 3.0, 4.0},
 			"ints":     []int{101, 102, 103, 104},
 			"booleans": []bool{true, true, true, false},
-			"datesAsStrings": []string{
+			"dates": []string{
 				"2021-06-01T22:18:59.640162Z",
 				"2022-06-02T22:18:59.640162Z",
 				"2023-06-03T22:18:59.640162Z",
 				"2024-06-04T22:18:59.640162Z",
-			},
-			"dates": []time.Time{
-				time.Date(2001, 6, 1, 12, 0, 0, 0, time.UTC),
-				time.Date(2002, 6, 2, 12, 0, 0, 0, time.UTC),
-				time.Date(2003, 6, 3, 12, 0, 0, 0, time.UTC),
-				time.Date(2004, 6, 4, 12, 0, 0, 0, time.UTC),
 			},
 		},
 	}
@@ -139,20 +124,14 @@ func objectArrayClass3el() *models.Object {
 		Class: arrayClassName,
 		ID:    objectArrayClassID2_3el,
 		Properties: map[string]interface{}{
-			"strings":  []string{"Astr", "Bstr", "Cstr"},
-			"texts":    []string{"Atxt", "Btxt", "Ctxt"},
+			"texts":    []string{"Alpha", "Bravo", "Charlie"},
 			"numbers":  []float64{1.0, 2.0, 3.0},
 			"ints":     []int{101, 102, 103},
 			"booleans": []bool{true, true, false},
-			"datesAsStrings": []string{
+			"dates": []string{
 				"2021-06-01T22:18:59.640162Z",
 				"2022-06-02T22:18:59.640162Z",
 				"2023-06-03T22:18:59.640162Z",
-			},
-			"dates": []time.Time{
-				time.Date(2001, 6, 1, 12, 0, 0, 0, time.UTC),
-				time.Date(2002, 6, 2, 12, 0, 0, 0, time.UTC),
-				time.Date(2003, 6, 3, 12, 0, 0, 0, time.UTC),
 			},
 		},
 	}
@@ -163,18 +142,13 @@ func objectArrayClass2el() *models.Object {
 		Class: arrayClassName,
 		ID:    objectArrayClassID3_2el,
 		Properties: map[string]interface{}{
-			"strings":  []string{"Astr", "Bstr"},
-			"texts":    []string{"Atxt", "Btxt"},
+			"texts":    []string{"Alpha", "Bravo"},
 			"numbers":  []float64{1.0, 2.0},
 			"ints":     []int{101, 102},
 			"booleans": []bool{true, false},
-			"datesAsStrings": []string{
+			"dates": []string{
 				"2021-06-01T22:18:59.640162Z",
 				"2022-06-02T22:18:59.640162Z",
-			},
-			"dates": []time.Time{
-				time.Date(2001, 6, 1, 12, 0, 0, 0, time.UTC),
-				time.Date(2002, 6, 2, 12, 0, 0, 0, time.UTC),
 			},
 		},
 	}
@@ -185,16 +159,12 @@ func objectArrayClass1el() *models.Object {
 		Class: arrayClassName,
 		ID:    objectArrayClassID4_1el,
 		Properties: map[string]interface{}{
-			"strings":  []string{"Astr"},
-			"texts":    []string{"Atxt"},
+			"texts":    []string{"Alpha"},
 			"numbers":  []float64{1.0},
 			"ints":     []int{101},
 			"booleans": []bool{false},
-			"datesAsStrings": []string{
+			"dates": []string{
 				"2021-06-01T22:18:59.640162Z",
-			},
-			"dates": []time.Time{
-				time.Date(2001, 6, 1, 12, 0, 0, 0, time.UTC),
 			},
 		},
 	}
@@ -205,13 +175,11 @@ func objectArrayClass0el() *models.Object {
 		Class: arrayClassName,
 		ID:    objectArrayClassID5_0el,
 		Properties: map[string]interface{}{
-			"strings":        []string{},
-			"texts":          []string{},
-			"numbers":        []float64{},
-			"ints":           []int{},
-			"booleans":       []bool{},
-			"datesAsStrings": []string{},
-			"dates":          []time.Time{},
+			"texts":    []string{},
+			"numbers":  []float64{},
+			"ints":     []int{},
+			"booleans": []bool{},
+			"dates":    []time.Time{},
 		},
 	}
 }
@@ -221,13 +189,11 @@ func objectArrayClassNils() *models.Object {
 		Class: arrayClassName,
 		ID:    objectArrayClassID6_nils,
 		Properties: map[string]interface{}{
-			"strings":        nil,
-			"texts":          nil,
-			"numbers":        nil,
-			"ints":           nil,
-			"booleans":       nil,
-			"datesAsStrings": nil,
-			"dates":          nil,
+			"texts":    nil,
+			"numbers":  nil,
+			"ints":     nil,
+			"booleans": nil,
+			"dates":    nil,
 		},
 	}
 }
@@ -256,14 +222,6 @@ func aggregateArrayClassQuery(filters, groupBy string) string {
 						percentageTrue
 						percentageFalse
 					}
-					strings{
-						count
-						type
-						topOccurrences {
-							value
-							occurs
-						}
-					}
 					texts{
 						count
 						type
@@ -291,9 +249,6 @@ func aggregateArrayClassQuery(filters, groupBy string) string {
 						median
 						mode
 						sum
-					}
-					datesAsStrings{
-						count
 					}
 					dates{
 						count
@@ -494,13 +449,8 @@ func duplicatesClassSchema() *models.Class {
 		},
 		Properties: []*models.Property{
 			{
-				Name:         "strings",
-				DataType:     []string{"string[]"},
-				Tokenization: models.PropertyTokenizationWord,
-			},
-			{
 				Name:         "texts",
-				DataType:     []string{"text[]"},
+				DataType:     schema.DataTypeTextArray.PropString(),
 				Tokenization: models.PropertyTokenizationWord,
 			},
 			{
@@ -516,7 +466,7 @@ func duplicatesClassSchema() *models.Class {
 				DataType: []string{"boolean[]"},
 			},
 			{
-				Name:     "datesAsStrings",
+				Name:     "dates",
 				DataType: []string{"date[]"},
 			},
 		},
@@ -536,12 +486,11 @@ func objectDuplicatesClass4el() *models.Object {
 		Class: duplicatesClassName,
 		ID:    objectDuplicatesClassID1_4el,
 		Properties: map[string]interface{}{
-			"strings":  []string{"Astr", "Astr", "Astr", "Bstr"},
-			"texts":    []string{"Atxt", "Atxt", "Atxt", "Btxt"},
+			"texts":    []string{"Alpha", "Alpha", "Alpha", "Bravo"},
 			"numbers":  []float64{1.0, 1.0, 1.0, 2.0},
 			"ints":     []int{101, 101, 101, 102},
 			"booleans": []bool{true, true, true, false},
-			"datesAsStrings": []string{
+			"dates": []string{
 				"2021-06-01T22:18:59.640162Z",
 				"2021-06-01T22:18:59.640162Z",
 				"2021-06-01T22:18:59.640162Z",
@@ -556,12 +505,11 @@ func objectDuplicatesClass3el() *models.Object {
 		Class: duplicatesClassName,
 		ID:    objectDuplicatesClassID2_3el,
 		Properties: map[string]interface{}{
-			"strings":  []string{"Astr", "Astr", "Bstr"},
-			"texts":    []string{"Atxt", "Atxt", "Btxt"},
+			"texts":    []string{"Alpha", "Alpha", "Bravo"},
 			"numbers":  []float64{1.0, 1.0, 2.0},
 			"ints":     []int{101, 101, 102},
 			"booleans": []bool{true, true, false},
-			"datesAsStrings": []string{
+			"dates": []string{
 				"2021-06-01T22:18:59.640162Z",
 				"2021-06-01T22:18:59.640162Z",
 				"2022-06-02T22:18:59.640162Z",
@@ -575,12 +523,11 @@ func objectDuplicatesClass2el() *models.Object {
 		Class: duplicatesClassName,
 		ID:    objectDuplicatesClassID3_2el,
 		Properties: map[string]interface{}{
-			"strings":  []string{"Astr", "Bstr"},
-			"texts":    []string{"Atxt", "Btxt"},
+			"texts":    []string{"Alpha", "Bravo"},
 			"numbers":  []float64{1.0, 2.0},
 			"ints":     []int{101, 102},
 			"booleans": []bool{true, false},
-			"datesAsStrings": []string{
+			"dates": []string{
 				"2021-06-01T22:18:59.640162Z",
 				"2022-06-02T22:18:59.640162Z",
 			},
@@ -604,14 +551,6 @@ func aggregateDuplicatesClassQuery(filters, groupBy string) string {
 						totalFalse
 						percentageTrue
 						percentageFalse
-					}
-					strings{
-						count
-						type
-						topOccurrences {
-							value
-							occurs
-						}
 					}
 					texts{
 						count
@@ -641,7 +580,7 @@ func aggregateDuplicatesClassQuery(filters, groupBy string) string {
 						mode
 						sum
 					}
-					datesAsStrings{
+					dates{
 						count
 					}
 					%s
@@ -690,7 +629,7 @@ func (tc *aggregateArrayClassTestCases) WithWhereFilter_AllResults(groupedAssert
 			where: {
 				operator: Like
 				path: ["id"]
-				valueString: "*"
+				valueText: "*"
 			}`,
 		groupedAssertions: groupedAssertions,
 	}
@@ -703,7 +642,7 @@ func (tc *aggregateArrayClassTestCases) WithWhereFilter_ResultsWithData(groupedA
 			where: {
 				operator: Like
 				path: ["id"]
-				valueString: "%s"
+				valueText: "%s"
 			}`, objectArrayClassID1_4el[:35]+"?"),
 		groupedAssertions: groupedAssertions,
 	}
@@ -716,7 +655,7 @@ func (tc *aggregateArrayClassTestCases) WithWhereFilter_ResultsWithoutData(group
 			where: {
 				operator: Like
 				path: ["id"]
-				valueString: "%s"
+				valueText: "%s"
 			}`, objectArrayClassID5_0el[:35]+"?"),
 		groupedAssertions: groupedAssertions,
 	}
@@ -729,7 +668,7 @@ func (tc *aggregateArrayClassTestCases) WithWhereFilter_NoResults(groupedAsserti
 			where: {
 				operator: Like
 				path: ["id"]
-				valueString: "%s"
+				valueText: "%s"
 			}`, notExistingObjectId),
 		groupedAssertions: groupedAssertions,
 	}
@@ -741,7 +680,7 @@ func (tc *aggregateArrayClassTestCases) WithNearObjectFilter_AllResults(groupedA
 		filters: fmt.Sprintf(`
 			nearObject: {
 				id: "%s"
-				certainty: 0.1
+				certainty: 0.7
 			}`, objectArrayClassID1_4el),
 		groupedAssertions: groupedAssertions,
 	}
@@ -753,7 +692,7 @@ func (tc *aggregateArrayClassTestCases) WithNearObjectFilter_ResultsWithData(gro
 		filters: fmt.Sprintf(`
 			nearObject: {
 				id: "%s"
-				certainty: 0.98
+				certainty: 0.97
 			}`, objectArrayClassID1_4el),
 		groupedAssertions: groupedAssertions,
 	}
@@ -778,11 +717,11 @@ func (tc *aggregateArrayClassTestCases) WithWhereAndNearObjectFilters_AllResults
 			where: {
 				operator: Like
 				path: ["id"]
-				valueString: "*"
+				valueText: "*"
 			}
 			nearObject: {
 				id: "%s"
-				certainty: 0.1
+				certainty: 0.7
 			}`, objectArrayClassID1_4el),
 		groupedAssertions: groupedAssertions,
 	}
@@ -795,11 +734,11 @@ func (tc *aggregateArrayClassTestCases) WithWhereAndNearObjectFilters_ResultsWit
 			where: {
 				operator: Like
 				path: ["id"]
-				valueString: "%s"
+				valueText: "%s"
 			}
 			nearObject: {
 				id: "%s"
-				certainty: 0.98
+				certainty: 0.97
 			}`, objectArrayClassID1_4el[:35]+"?", objectArrayClassID1_4el),
 		groupedAssertions: groupedAssertions,
 	}
@@ -812,7 +751,7 @@ func (tc *aggregateArrayClassTestCases) WithWhereAndNearObjectFilters_ResultsWit
 			where: {
 				operator: Like
 				path: ["id"]
-				valueString: "%s"
+				valueText: "%s"
 			}
 			nearObject: {
 				id: "%s"
@@ -829,11 +768,11 @@ func (tc *aggregateArrayClassTestCases) WithWhereAndNearObjectFilters_NoResults(
 			where: {
 				operator: Like
 				path: ["id"]
-				valueString: "%s"
+				valueText: "%s"
 			}
 			nearObject: {
 				id: "%s"
-				certainty: 0.1
+				certainty: 0.8
 			}`, notExistingObjectId, objectArrayClassID1_4el),
 		groupedAssertions: groupedAssertions,
 	}
@@ -855,7 +794,7 @@ func (tc *aggregateNoPropsClassTestCases) WithWhereFilter_AllResults(groupedAsse
 			where: {
 				operator: Like
 				path: ["id"]
-				valueString: "*"
+				valueText: "*"
 			}`,
 		groupedAssertions: groupedAssertions,
 	}
@@ -868,7 +807,7 @@ func (tc *aggregateNoPropsClassTestCases) WithWhereFilter_SomeResults(groupedAss
 			where: {
 				operator: Like
 				path: ["id"]
-				valueString: "%s"
+				valueText: "%s"
 			}`, objectNoPropsClassID1[:35]+"?"),
 		groupedAssertions: groupedAssertions,
 	}
@@ -881,7 +820,7 @@ func (tc *aggregateNoPropsClassTestCases) WithWhereFilter_NoResults(groupedAsser
 			where: {
 				operator: Like
 				path: ["id"]
-				valueString: "%s"
+				valueText: "%s"
 			}`, notExistingObjectId),
 		groupedAssertions: groupedAssertions,
 	}
@@ -906,7 +845,7 @@ func (tc *aggregateNoPropsClassTestCases) WithWhereAndNearObjectFilters_AllResul
 			where: {
 				operator: Like
 				path: ["id"]
-				valueString: "*"
+				valueText: "*"
 			}
 			nearObject: {
 				id: "%s"
@@ -923,7 +862,7 @@ func (tc *aggregateNoPropsClassTestCases) WithWhereAndNearObjectFilters_SomeResu
 			where: {
 				operator: Like
 				path: ["id"]
-				valueString: "%s"
+				valueText: "%s"
 			}
 			nearObject: {
 				id: "%s"
@@ -940,7 +879,7 @@ func (tc *aggregateNoPropsClassTestCases) WithWhereAndNearObjectFilters_NoResult
 			where: {
 				operator: Like
 				path: ["id"]
-				valueString: "%s"
+				valueText: "%s"
 			}
 			nearObject: {
 				id: "%s"
@@ -966,7 +905,7 @@ func (tc *aggregateCityTestCases) WithWhereFilter_AllResults(groupedAssertions m
 			where: {
 				operator: Like
 				path: ["id"]
-				valueString: "*"
+				valueText: "*"
 			}`,
 		groupedAssertions: groupedAssertions,
 	}
@@ -992,7 +931,7 @@ func (tc *aggregateCityTestCases) WithWhereFilter_ResultsWithoutData(groupedAsse
 			where: {
 				operator: Like
 				path: ["id"]
-				valueString: "%s"
+				valueText: "%s"
 			}`, nullisland),
 		groupedAssertions: groupedAssertions,
 	}
@@ -1005,7 +944,7 @@ func (tc *aggregateCityTestCases) WithWhereFilter_NoResults(groupedAssertions ma
 			where: {
 				operator: Like
 				path: ["id"]
-				valueString: "%s"
+				valueText: "%s"
 			}`, notExistingObjectId),
 		groupedAssertions: groupedAssertions,
 	}
@@ -1054,7 +993,7 @@ func (tc *aggregateCityTestCases) WithWhereAndNearObjectFilters_AllResults(group
 			where: {
 				operator: Like
 				path: ["id"]
-				valueString: "*"
+				valueText: "*"
 			}
 			nearObject: {
 				id: "%s"
@@ -1088,7 +1027,7 @@ func (tc *aggregateCityTestCases) WithWhereAndNearObjectFilters_ResultsWithoutDa
 			where: {
 				operator: Like
 				path: ["id"]
-				valueString: "%s"
+				valueText: "%s"
 			}
 			nearObject: {
 				id: "%s"
@@ -1105,7 +1044,7 @@ func (tc *aggregateCityTestCases) WithWhereAndNearObjectFilters_NoResults(groupe
 			where: {
 				operator: Like
 				path: ["id"]
-				valueString: "%s"
+				valueText: "%s"
 			}
 			nearObject: {
 				id: "%s"
@@ -1131,7 +1070,7 @@ func (tc *aggregateDuplicatesClassTestCases) WithWhereFilter_AllResults(groupedA
 			where: {
 				operator: Like
 				path: ["id"]
-				valueString: "*"
+				valueText: "*"
 			}`,
 		groupedAssertions: groupedAssertions,
 	}
@@ -1144,7 +1083,7 @@ func (tc *aggregateDuplicatesClassTestCases) WithWhereFilter_SomeResults(grouped
 			where: {
 				operator: Like
 				path: ["id"]
-				valueString: "%s"
+				valueText: "%s"
 			}`, objectDuplicatesClassID1_4el),
 		groupedAssertions: groupedAssertions,
 	}
@@ -1157,7 +1096,7 @@ func (tc *aggregateDuplicatesClassTestCases) WithWhereFilter_NoResults(groupedAs
 			where: {
 				operator: Like
 				path: ["id"]
-				valueString: "%s"
+				valueText: "%s"
 			}`, notExistingObjectId),
 		groupedAssertions: groupedAssertions,
 	}

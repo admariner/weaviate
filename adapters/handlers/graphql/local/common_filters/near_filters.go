@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package common_filters
@@ -14,8 +14,8 @@ package common_filters
 import (
 	"fmt"
 
-	"github.com/semi-technologies/weaviate/adapters/handlers/graphql/descriptions"
 	"github.com/tailor-inc/graphql"
+	"github.com/weaviate/weaviate/adapters/handlers/graphql/descriptions"
 )
 
 func NearVectorArgument(argumentPrefix, className string) *graphql.ArgumentConfig {
@@ -25,13 +25,13 @@ func NearVectorArgument(argumentPrefix, className string) *graphql.ArgumentConfi
 		Type: graphql.NewInputObject(
 			graphql.InputObjectConfig{
 				Name:   fmt.Sprintf("%sNearVectorInpObj", prefix),
-				Fields: nearVectorFields(prefix),
+				Fields: NearVectorFields(prefix),
 			},
 		),
 	}
 }
 
-func nearVectorFields(prefix string) graphql.InputObjectConfigFieldMap {
+func NearVectorFields(prefix string) graphql.InputObjectConfigFieldMap {
 	return graphql.InputObjectConfigFieldMap{
 		"vector": &graphql.InputObjectFieldConfig{
 			Description: descriptions.Vector,
@@ -44,6 +44,10 @@ func nearVectorFields(prefix string) graphql.InputObjectConfigFieldMap {
 		"distance": &graphql.InputObjectFieldConfig{
 			Description: descriptions.Distance,
 			Type:        graphql.Float,
+		},
+		"targetVectors": &graphql.InputObjectFieldConfig{
+			Description: "Target vectors",
+			Type:        graphql.NewList(graphql.String),
 		},
 	}
 }
@@ -77,6 +81,10 @@ func nearObjectFields(prefix string) graphql.InputObjectConfigFieldMap {
 		"distance": &graphql.InputObjectFieldConfig{
 			Description: descriptions.Distance,
 			Type:        graphql.Float,
+		},
+		"targetVectors": &graphql.InputObjectFieldConfig{
+			Description: "Target vectors",
+			Type:        graphql.NewList(graphql.String),
 		},
 	}
 }

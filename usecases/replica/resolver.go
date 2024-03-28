@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package replica
@@ -17,6 +17,7 @@ import (
 	"github.com/pkg/errors"
 )
 
+// ConsistencyLevel is an enum of all possible consistency level
 type ConsistencyLevel string
 
 const (
@@ -25,6 +26,7 @@ const (
 	All    ConsistencyLevel = "ALL"
 )
 
+// cLevel returns min number of replicas to fulfill the consistency level
 func cLevel(l ConsistencyLevel, n int) int {
 	switch l {
 	case All:
@@ -43,48 +45,77 @@ var (
 
 // resolver finds replicas and resolves theirs names
 type resolver struct {
-	schema shardingState
+	Schema shardingState
 	nodeResolver
-	class string
+	Class    string
+	NodeName string
 }
 
 // State returns replicas state
-func (r *resolver) State(shardName string) (res rState, err error) {
-	shard, ok := r.schema.ShardingState(r.class).Physical[shardName]
-	if !ok {
-		return res, fmt.Errorf("sharding state not found")
+func (r *resolver) State(shardName string, cl ConsistencyLevel, directCandidate string) (res rState, err error) {
+	res.CLevel = cl
+	m, err := r.Schema.ResolveParentNodes(r.Class, shardName)
+	if err != nil {
+		return res, err
 	}
-	if len(shard.BelongsToNodes) == 0 {
-		return res, errNoReplicaFound
-	}
-	res.Hosts = make([]string, 0, len(shard.BelongsToNodes))
-	for _, node := range shard.BelongsToNodes {
-		host, ok := r.NodeHostname(node)
-		if ok && host != "" {
-			res.Hosts = append(res.Hosts, host)
-		} else {
-			res.nodes = append(res.nodes, node)
+	res.NodeMap = m
+	// count number of valid addr
+	n := 0
+	for name, addr := range m {
+		if name != "" && addr != "" {
+			n++
 		}
 	}
-	return res, nil
+	res.Hosts = make([]string, 0, n)
+
+	// We must hold the data if candidate is specified hence it must exist
+	// if specified the direct candidate is always at index 0
+	if directCandidate == "" {
+		directCandidate = r.NodeName
+	}
+	// This node should be the first to respond in case if the shard is locally available
+	if addr := m[directCandidate]; addr != "" {
+		res.Hosts = append(res.Hosts, addr)
+	}
+	for name, addr := range m {
+		if name != "" && addr != "" && name != directCandidate {
+			res.Hosts = append(res.Hosts, addr)
+		}
+	}
+
+	if res.Len() == 0 {
+		return res, errNoReplicaFound
+	}
+
+	res.Level, err = res.ConsistencyLevel(cl)
+	return res, err
 }
 
 // rState replicas state
 type rState struct {
-	Hosts []string // successfully resolved names
-	nodes []string // names which could not be resolved
+	CLevel  ConsistencyLevel
+	Level   int
+	Hosts   []string // successfully resolved names
+	NodeMap map[string]string
 }
 
-// Len returns the number of replica
-func (r rState) Len() int {
-	return len(r.Hosts) + len(r.nodes)
+// Len returns the number of replicas
+func (r *rState) Len() int {
+	return len(r.NodeMap)
 }
 
-// ConsistencyLevel returns consistency level when it is satisfied
-func (r rState) ConsistencyLevel(l ConsistencyLevel) (int, error) {
+// ConsistencyLevel returns consistency level if it is satisfied
+func (r *rState) ConsistencyLevel(l ConsistencyLevel) (int, error) {
 	level := cLevel(l, r.Len())
 	if n := len(r.Hosts); level > n {
-		return 0, fmt.Errorf("consistency level (%d) > available replicas(%d): %w :%v", level, n, errUnresolvedName, r.nodes)
+		nodes := []string{}
+		for k, addr := range r.NodeMap {
+			if addr == "" {
+				nodes = append(nodes, k)
+			}
+		}
+		return 0, fmt.Errorf("consistency level (%d) > available replicas(%d): %w :%v",
+			level, n, errUnresolvedName, nodes)
 	}
 	return level, nil
 }

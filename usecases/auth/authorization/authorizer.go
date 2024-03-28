@@ -4,17 +4,17 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package authorization
 
 import (
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/usecases/auth/authorization/adminlist"
-	"github.com/semi-technologies/weaviate/usecases/config"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/usecases/auth/authorization/adminlist"
+	"github.com/weaviate/weaviate/usecases/config"
 )
 
 // Authorizer always makes a yes/no decision on a specific resource. Which
@@ -33,8 +33,8 @@ func New(cfg config.Config) Authorizer {
 	return &DummyAuthorizer{}
 }
 
-// DummyAuthorizer is a pluggable Authorizor which can be used if no specific
-// authorizor is configured. It will allow every authz decision, i.e. it is
+// DummyAuthorizer is a pluggable Authorizer which can be used if no specific
+// authorizer is configured. It will allow every auth decision, i.e. it is
 // effectively the same as "no authorization at all"
 type DummyAuthorizer struct{}
 

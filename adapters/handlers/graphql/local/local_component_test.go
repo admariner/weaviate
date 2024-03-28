@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package local
@@ -16,14 +16,14 @@ import (
 	"runtime/debug"
 	"testing"
 
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	"github.com/semi-technologies/weaviate/usecases/config"
-	"github.com/semi-technologies/weaviate/usecases/modules"
 	logrus "github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tailor-inc/graphql"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/usecases/config"
+	"github.com/weaviate/weaviate/usecases/modules"
 )
 
 // These tests are component tests for the local package including all its
@@ -31,9 +31,9 @@ import (
 // graphql tree can be built under certain circumstances. This helps us to
 // catch errors on edge cases like empty schemas, classes with empty
 // properties, empty peer lists, peers with empty schemas, etc. However, we
-// don't get any guaruantuee of whether the individual queries resolve
+// don't get any guarantee of whether the individual queries resolve
 // correctly. For those cases we have unit tests in die individual subpackages
-// (i.e. get, getmeta, aggreagate, etc.).  Additionally we have (a few) e2e
+// (i.e. get, getmeta, aggregate, etc.).  Additionally we have (a few) e2e
 // tests.
 
 func TestBuild_GraphQLNetwork(t *testing.T) {
@@ -48,8 +48,9 @@ func TestBuild_GraphQLNetwork(t *testing.T) {
 							Class: "BestLocalAction",
 							Properties: []*models.Property{
 								{
-									DataType: []string{"string"},
-									Name:     "myStringProp",
+									DataType:     schema.DataTypeText.PropString(),
+									Name:         "myStringProp",
+									Tokenization: models.PropertyTokenizationWhitespace,
 								},
 							},
 						},
@@ -68,8 +69,9 @@ func TestBuild_GraphQLNetwork(t *testing.T) {
 							Class: "BestLocalThing",
 							Properties: []*models.Property{
 								{
-									DataType: []string{"string"},
-									Name:     "myStringProp",
+									DataType:     schema.DataTypeText.PropString(),
+									Name:         "myStringProp",
+									Tokenization: models.PropertyTokenizationWhitespace,
 								},
 							},
 						},
@@ -78,8 +80,8 @@ func TestBuild_GraphQLNetwork(t *testing.T) {
 			},
 		},
 
-		// This tests asserts that a class without any properties doesn't lead to
-		// errors.
+		// // This tests asserts that a class without any properties doesn't lead to
+		// // errors.
 		testCase{
 			name: "with things without properties locally",
 			localSchema: schema.Schema{
@@ -152,8 +154,9 @@ func TestBuild_RefProps(t *testing.T) {
 								Class: "ThisClassAlsoExists",
 								Properties: []*models.Property{
 									{
-										DataType: []string{"string"},
-										Name:     "stringProp",
+										DataType:     schema.DataTypeText.PropString(),
+										Name:         "stringProp",
+										Tokenization: models.PropertyTokenizationWhitespace,
 									},
 								},
 							},
@@ -275,8 +278,9 @@ func validSchema() schema.Schema {
 					Class: "BestLocalThing",
 					Properties: []*models.Property{
 						{
-							DataType: []string{"string"},
-							Name:     "myStringProp",
+							DataType:     schema.DataTypeText.PropString(),
+							Name:         "myStringProp",
+							Tokenization: models.PropertyTokenizationWhitespace,
 						},
 					},
 				},

@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package common_filters
@@ -14,13 +14,13 @@ package common_filters
 import (
 	"testing"
 
-	test_helper "github.com/semi-technologies/weaviate/adapters/handlers/graphql/test/helper"
-	"github.com/semi-technologies/weaviate/entities/filters"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	"github.com/semi-technologies/weaviate/entities/searchparams"
 	"github.com/tailor-inc/graphql/gqlerrors"
 	"github.com/tailor-inc/graphql/language/location"
+	test_helper "github.com/weaviate/weaviate/adapters/handlers/graphql/test/helper"
+	"github.com/weaviate/weaviate/entities/filters"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/searchparams"
 )
 
 // Basic test on filter
@@ -57,28 +57,55 @@ func TestExtractFilterToplevelField(t *testing.T) {
 func TestExtractFilterLike(t *testing.T) {
 	t.Parallel()
 
-	resolver := newMockResolver(t, mockParams{reportFilter: true})
-	expectedParams := &filters.LocalFilter{Root: &filters.Clause{
-		Operator: filters.OperatorLike,
-		On: &filters.Path{
-			Class:    schema.AssertValidClassName("SomeAction"),
-			Property: schema.AssertValidPropertyName("name"),
-		},
-		Value: &filters.Value{
-			Value: "Schn*el",
-			Type:  schema.DataTypeString,
-		},
-	}}
+	t.Run("extracts with valueText", func(t *testing.T) {
+		resolver := newMockResolver(t, mockParams{reportFilter: true})
+		expectedParams := &filters.LocalFilter{Root: &filters.Clause{
+			Operator: filters.OperatorLike,
+			On: &filters.Path{
+				Class:    schema.AssertValidClassName("SomeAction"),
+				Property: schema.AssertValidPropertyName("name"),
+			},
+			Value: &filters.Value{
+				Value: "Schn*el",
+				Type:  schema.DataTypeText,
+			},
+		}}
 
-	resolver.On("ReportFilters", expectedParams).
-		Return(test_helper.EmptyList(), nil).Once()
+		resolver.On("ReportFilters", expectedParams).
+			Return(test_helper.EmptyList(), nil).Once()
 
-	query := `{ SomeAction(where: {
-			path: ["name"],
-			operator: Like,
-			valueString: "Schn*el",
-		}) }`
-	resolver.AssertResolve(t, query)
+		query := `{ SomeAction(where: {
+				path: ["name"],
+				operator: Like,
+				valueText: "Schn*el",
+			}) }`
+		resolver.AssertResolve(t, query)
+	})
+
+	t.Run("[deprecated string] extracts with valueString", func(t *testing.T) {
+		resolver := newMockResolver(t, mockParams{reportFilter: true})
+		expectedParams := &filters.LocalFilter{Root: &filters.Clause{
+			Operator: filters.OperatorLike,
+			On: &filters.Path{
+				Class:    schema.AssertValidClassName("SomeAction"),
+				Property: schema.AssertValidPropertyName("name"),
+			},
+			Value: &filters.Value{
+				Value: "Schn*el",
+				Type:  schema.DataTypeString,
+			},
+		}}
+
+		resolver.On("ReportFilters", expectedParams).
+			Return(test_helper.EmptyList(), nil).Once()
+
+		query := `{ SomeAction(where: {
+				path: ["name"],
+				operator: Like,
+				valueString: "Schn*el",
+			}) }`
+		resolver.AssertResolve(t, query)
+	})
 }
 
 func TestExtractFilterLike_ValueText(t *testing.T) {

@@ -4,14 +4,14 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package deepcopy
 
-import "github.com/semi-technologies/weaviate/entities/models"
+import "github.com/weaviate/weaviate/entities/models"
 
 func Schema(s *models.Schema) *models.Schema {
 	classes := make([]*models.Class, len(s.Classes))
@@ -54,20 +54,23 @@ func Class(c *models.Class) *models.Class {
 }
 
 func Prop(p *models.Property) *models.Property {
-	var indexInverted *bool = nil
-	if p.IndexInverted != nil {
-		b := *(p.IndexInverted)
-		indexInverted = &b
-	}
-
 	return &models.Property{
-		DataType:      p.DataType,
-		Description:   p.Description,
-		ModuleConfig:  p.ModuleConfig,
-		Name:          p.Name,
-		Tokenization:  p.Tokenization,
-		IndexInverted: indexInverted,
+		DataType:        p.DataType,
+		Description:     p.Description,
+		ModuleConfig:    p.ModuleConfig,
+		Name:            p.Name,
+		Tokenization:    p.Tokenization,
+		IndexFilterable: ptrBoolCopy(p.IndexFilterable),
+		IndexSearchable: ptrBoolCopy(p.IndexSearchable),
 	}
+}
+
+func ptrBoolCopy(ptrBool *bool) *bool {
+	if ptrBool != nil {
+		b := *ptrBool
+		return &b
+	}
+	return nil
 }
 
 func InvertedIndexConfig(i *models.InvertedIndexConfig) *models.InvertedIndexConfig {

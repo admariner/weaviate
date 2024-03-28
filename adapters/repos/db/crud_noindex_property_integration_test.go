@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 //go:build integrationTest
@@ -16,27 +16,25 @@ package db
 
 import (
 	"context"
-	"math/rand"
 	"testing"
-	"time"
 
 	"github.com/go-openapi/strfmt"
-	"github.com/semi-technologies/weaviate/entities/additional"
-	"github.com/semi-technologies/weaviate/entities/filters"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	"github.com/semi-technologies/weaviate/entities/search"
-	enthnsw "github.com/semi-technologies/weaviate/entities/vectorindex/hnsw"
-	"github.com/semi-technologies/weaviate/usecases/traverser"
 	"github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/entities/additional"
+	"github.com/weaviate/weaviate/entities/dto"
+	"github.com/weaviate/weaviate/entities/filters"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/search"
+	enthnsw "github.com/weaviate/weaviate/entities/vectorindex/hnsw"
 )
 
 func TestCRUD_NoIndexProp(t *testing.T) {
-	rand.Seed(time.Now().UnixNano())
 	dirName := t.TempDir()
 
+	vFalse := false
 	logger, _ := test.NewNullLogger()
 	thingclass := &models.Class{
 		Class:               "ThingClassWithNoIndexProps",
@@ -44,25 +42,29 @@ func TestCRUD_NoIndexProp(t *testing.T) {
 		InvertedIndexConfig: invertedConfig(),
 		Properties: []*models.Property{{
 			Name:         "stringProp",
-			DataType:     []string{string(schema.DataTypeString)},
-			Tokenization: "word",
+			DataType:     schema.DataTypeText.PropString(),
+			Tokenization: models.PropertyTokenizationWhitespace,
 		}, {
-			Name:          "hiddenStringProp",
-			DataType:      []string{string(schema.DataTypeString)},
-			Tokenization:  "word",
-			IndexInverted: ptBool(false),
+			Name:            "hiddenStringProp",
+			DataType:        schema.DataTypeText.PropString(),
+			Tokenization:    models.PropertyTokenizationWhitespace,
+			IndexFilterable: &vFalse,
+			IndexSearchable: &vFalse,
 		}},
 	}
-	schemaGetter := &fakeSchemaGetter{shardState: singleShardState()}
-	repo := New(logger, Config{
+	schemaGetter := &fakeSchemaGetter{
+		schema:     schema.Schema{Objects: &models.Schema{Classes: nil}},
+		shardState: singleShardState(),
+	}
+	repo, err := New(logger, Config{
 		RootPath:                  dirName,
 		QueryMaximumResults:       10000,
 		MaxImportGoroutinesFactor: 1,
-		MemtablesFlushIdleAfter:   60,
+		MemtablesFlushDirtyAfter:  60,
 	}, &fakeRemoteClient{}, &fakeNodeResolver{}, &fakeRemoteNodeClient{}, &fakeReplicationClient{}, nil)
-	repo.SetSchemaGetter(schemaGetter)
-	err := repo.WaitForStartup(testCtx())
 	require.Nil(t, err)
+	repo.SetSchemaGetter(schemaGetter)
+	require.Nil(t, repo.WaitForStartup(testCtx()))
 	defer repo.Shutdown(context.Background())
 
 	migrator := NewMigrator(repo, logger)
@@ -93,14 +95,13 @@ func TestCRUD_NoIndexProp(t *testing.T) {
 			},
 		}
 		vector := []float32{1, 3, 5, 0.4}
-		err := repo.PutObject(context.Background(), thing, vector)
+		err := repo.PutObject(context.Background(), thing, vector, nil, nil)
 
 		assert.Nil(t, err)
 	})
 
 	t.Run("all props are present when getting by id", func(t *testing.T) {
-		res, err := repo.ObjectByID(context.Background(), thingID,
-			search.SelectProperties{}, additional.Properties{})
+		res, err := repo.ObjectByID(context.Background(), thingID, search.SelectProperties{}, additional.Properties{}, "")
 		expectedSchema := map[string]interface{}{
 			"stringProp":       "some value",
 			"hiddenStringProp": "some hidden value",
@@ -114,7 +115,7 @@ func TestCRUD_NoIndexProp(t *testing.T) {
 	// Same as above, but with Object()
 	t.Run("all props are present when getting by id and class", func(t *testing.T) {
 		res, err := repo.Object(context.Background(), "ThingClassWithNoIndexProps", thingID,
-			search.SelectProperties{}, additional.Properties{}, nil)
+			search.SelectProperties{}, additional.Properties{}, nil, "")
 		expectedSchema := map[string]interface{}{
 			"stringProp":       "some value",
 			"hiddenStringProp": "some hidden value",
@@ -126,35 +127,31 @@ func TestCRUD_NoIndexProp(t *testing.T) {
 	})
 
 	t.Run("class search on the noindex prop errors", func(t *testing.T) {
-		_, err := repo.ClassSearch(context.Background(), traverser.GetParams{
+		_, err := repo.Search(context.Background(), dto.GetParams{
 			ClassName: "ThingClassWithNoIndexProps",
 			Pagination: &filters.Pagination{
 				Limit: 10,
 			},
-			Filters: buildFilter("hiddenStringProp", "hidden", eq, dtString),
+			Filters: buildFilter("hiddenStringProp", "hidden", eq, schema.DataTypeText),
 		})
 
 		require.NotNil(t, err)
-		assert.Contains(t, err.Error(),
-			"bucket for prop hiddenStringProp not found - is it indexed?")
+		assert.Contains(t, err.Error(), "Filtering by property 'hiddenStringProp' requires inverted index. "+
+			"Is `indexFilterable` option of property 'hiddenStringProp' enabled? "+
+			"Set it to `true` or leave empty")
 	})
 
 	t.Run("class search on timestamp prop with no timestamp indexing error", func(t *testing.T) {
-		_, err := repo.ClassSearch(context.Background(), traverser.GetParams{
+		_, err := repo.Search(context.Background(), dto.GetParams{
 			ClassName: "ThingClassWithNoIndexProps",
 			Pagination: &filters.Pagination{
 				Limit: 10,
 			},
-			Filters: buildFilter("_creationTimeUnix", "1234567891011", eq, dtString),
+			Filters: buildFilter("_creationTimeUnix", "1234567891011", eq, schema.DataTypeText),
 		})
 
 		require.NotNil(t, err)
 		assert.Contains(t, err.Error(),
-			"timestamps must be indexed to be filterable! "+
-				"add `indexTimestamps: true` to the invertedIndexConfig")
+			"Timestamps must be indexed to be filterable! Add `IndexTimestamps: true` to the InvertedIndexConfig in")
 	})
-}
-
-func ptBool(in bool) *bool {
-	return &in
 }

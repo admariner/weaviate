@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 // Package common_filters provides the filters for the graphql endpoint for Weaviate
@@ -15,8 +15,8 @@ package common_filters
 import (
 	"fmt"
 
-	"github.com/semi-technologies/weaviate/adapters/handlers/graphql/descriptions"
 	"github.com/tailor-inc/graphql"
+	"github.com/weaviate/weaviate/adapters/handlers/graphql/descriptions"
 )
 
 // The filters common to Local->Get and Local->Meta queries.
@@ -38,6 +38,8 @@ func BuildNew(path string) graphql.InputObjectConfigFieldMap {
 					"LessThanEqual":    &graphql.EnumValueConfig{},
 					"WithinGeoRange":   &graphql.EnumValueConfig{},
 					"IsNull":           &graphql.EnumValueConfig{},
+					"ContainsAny":      &graphql.EnumValueConfig{},
+					"ContainsAll":      &graphql.EnumValueConfig{},
 				},
 				Description: descriptions.WhereOperatorEnum,
 			}),
@@ -48,27 +50,27 @@ func BuildNew(path string) graphql.InputObjectConfigFieldMap {
 			Description: descriptions.WherePath,
 		},
 		"valueInt": &graphql.InputObjectFieldConfig{
-			Type:        graphql.Int,
+			Type:        newValueIntType(path),
 			Description: descriptions.WhereValueInt,
 		},
 		"valueNumber": &graphql.InputObjectFieldConfig{
-			Type:        graphql.Float,
+			Type:        newValueNumberType(path),
 			Description: descriptions.WhereValueNumber,
 		},
 		"valueBoolean": &graphql.InputObjectFieldConfig{
-			Type:        graphql.Boolean,
+			Type:        newValueBooleanType(path),
 			Description: descriptions.WhereValueBoolean,
 		},
 		"valueString": &graphql.InputObjectFieldConfig{
-			Type:        graphql.String,
+			Type:        newValueStringType(path),
 			Description: descriptions.WhereValueString,
 		},
 		"valueText": &graphql.InputObjectFieldConfig{
-			Type:        graphql.String,
+			Type:        newValueTextType(path),
 			Description: descriptions.WhereValueText,
 		},
 		"valueDate": &graphql.InputObjectFieldConfig{
-			Type:        graphql.String,
+			Type:        newValueDateType(path),
 			Description: descriptions.WhereValueString,
 		},
 		"valueGeoRange": &graphql.InputObjectFieldConfig{

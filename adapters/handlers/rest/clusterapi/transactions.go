@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package clusterapi
@@ -19,12 +19,12 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
-	"github.com/semi-technologies/weaviate/usecases/cluster"
-	schemauc "github.com/semi-technologies/weaviate/usecases/schema"
+	"github.com/weaviate/weaviate/usecases/cluster"
+	ucs "github.com/weaviate/weaviate/usecases/schema"
 )
 
 type txManager interface {
-	IncomingBeginTransaction(ctx context.Context, tx *cluster.Transaction) error
+	IncomingBeginTransaction(ctx context.Context, tx *cluster.Transaction) ([]byte, error)
 	IncomingCommitTransaction(ctx context.Context, tx *cluster.Transaction) error
 	IncomingAbortTransaction(ctx context.Context, tx *cluster.Transaction)
 }
@@ -38,10 +38,15 @@ type txPayload struct {
 
 type txHandler struct {
 	manager txManager
+	auth    auth
 }
 
 func (h *txHandler) Transactions() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return h.auth.handleFunc(h.transactionsHandler())
+}
+
+func (h *txHandler) transactionsHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 		switch {
 		case path == "":
@@ -70,7 +75,7 @@ func (h *txHandler) Transactions() http.Handler {
 			h.incomingAbortTransaction().ServeHTTP(w, r)
 			return
 		}
-	})
+	}
 }
 
 func (h *txHandler) incomingTransaction() http.Handler {
@@ -99,21 +104,22 @@ func (h *txHandler) incomingTransaction() http.Handler {
 			return
 		}
 
-		txPayload, err := schemauc.UnmarshalTransaction(payload.Type, payload.Payload)
+		txPayload, err := ucs.UnmarshalTransaction(payload.Type, payload.Payload)
 		if err != nil {
 			http.Error(w, errors.Wrap(err, "decode tx payload").Error(),
 				http.StatusInternalServerError)
 			return
 		}
-
+		txType := payload.Type
 		tx := &cluster.Transaction{
 			ID:       payload.ID,
-			Type:     payload.Type,
+			Type:     txType,
 			Payload:  txPayload,
 			Deadline: time.UnixMilli(payload.DeadlineMilli),
 		}
 
-		if err := h.manager.IncomingBeginTransaction(r.Context(), tx); err != nil {
+		data, err := h.manager.IncomingBeginTransaction(r.Context(), tx)
+		if err != nil {
 			status := http.StatusInternalServerError
 			if errors.Is(err, cluster.ErrConcurrentTransaction) {
 				status = http.StatusConflict
@@ -122,15 +128,17 @@ func (h *txHandler) incomingTransaction() http.Handler {
 			http.Error(w, errors.Wrap(err, "open transaction").Error(), status)
 			return
 		}
+		if txType != ucs.ReadSchema {
+			w.WriteHeader(http.StatusCreated)
+			return
+		}
 
-		resBody, err := json.Marshal(tx)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(err.Error()))
 		}
-
 		w.WriteHeader(http.StatusCreated)
-		w.Write(resBody)
+		w.Write(data)
 	})
 }
 

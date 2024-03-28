@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package inverted
@@ -39,8 +39,9 @@ func parseLikeRegexp(in []byte) (*likeRegexp, error) {
 }
 
 func transformLikeStringToRegexp(in []byte) string {
-	in = bytes.ReplaceAll(in, []byte("?"), []byte("."))
-	in = bytes.ReplaceAll(in, []byte("*"), []byte(".*"))
+	in = []byte(regexp.QuoteMeta(string(in)))
+	in = bytes.ReplaceAll(in, []byte("\\?"), []byte("."))
+	in = bytes.ReplaceAll(in, []byte("\\*"), []byte(".*"))
 	return "^" + string(in) + "$"
 }
 

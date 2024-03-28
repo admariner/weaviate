@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package test
@@ -17,9 +17,10 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/semi-technologies/weaviate/test/helper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/entities/vectorindex/hnsw"
+	"github.com/weaviate/weaviate/test/helper"
 )
 
 func testGetSchemaWithoutClient(t *testing.T) {
@@ -49,6 +50,20 @@ func testGetSchemaWithoutClient(t *testing.T) {
 					"dynamicEfMax":           float64(500),
 					"dynamicEfFactor":        float64(8),
 					"distance":               "cosine",
+					"bq": map[string]interface{}{
+						"enabled": false,
+					},
+					"pq": map[string]interface{}{
+						"bitCompression": false,
+						"centroids":      float64(256),
+						"enabled":        false,
+						"encoder": map[string]interface{}{
+							"distribution": "log-normal",
+							"type":         hnsw.PQEncoderTypeKMeans,
+						},
+						"segments":      float64(0),
+						"trainingLimit": float64(100000),
+					},
 				},
 				"shardingConfig": map[string]interface{}{
 					"actualCount":         float64(1),
@@ -81,6 +96,7 @@ func testGetSchemaWithoutClient(t *testing.T) {
 						"vectorizeClassName": true,
 					},
 				},
+				"multiTenancyConfig": map[string]interface{}{"enabled": false},
 			},
 		},
 	}

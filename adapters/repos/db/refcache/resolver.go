@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package refcache
@@ -16,15 +16,18 @@ import (
 	"fmt"
 
 	"github.com/pkg/errors"
-	"github.com/semi-technologies/weaviate/entities/additional"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/multi"
-	"github.com/semi-technologies/weaviate/entities/schema/crossref"
-	"github.com/semi-technologies/weaviate/entities/search"
+	"github.com/weaviate/weaviate/entities/additional"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/multi"
+	"github.com/weaviate/weaviate/entities/schema/crossref"
+	"github.com/weaviate/weaviate/entities/search"
 )
 
 type Resolver struct {
 	cacher cacher
+	// for groupBy feature
+	withGroup                bool
+	getGroupSelectProperties func(properties search.SelectProperties) search.SelectProperties
 }
 
 type cacher interface {
@@ -34,6 +37,15 @@ type cacher interface {
 
 func NewResolver(cacher cacher) *Resolver {
 	return &Resolver{cacher: cacher}
+}
+
+func NewResolverWithGroup(cacher cacher) *Resolver {
+	return &Resolver{
+		cacher: cacher,
+		// for groupBy feature
+		withGroup:                true,
+		getGroupSelectProperties: getGroupSelectProperties,
+	}
 }
 
 func (r *Resolver) Do(ctx context.Context, objects []search.Result,
@@ -79,7 +91,33 @@ func (r *Resolver) parseObject(object search.Result, properties search.SelectPro
 	}
 
 	object.Schema = schema
+
+	if r.withGroup {
+		additionalProperties, err := r.parseAdditionalGroup(object.AdditionalProperties, properties)
+		if err != nil {
+			return object, err
+		}
+		object.AdditionalProperties = additionalProperties
+	}
 	return object, nil
+}
+
+func (r *Resolver) parseAdditionalGroup(
+	additionalProperties models.AdditionalProperties,
+	properties search.SelectProperties,
+) (models.AdditionalProperties, error) {
+	if additionalProperties != nil && additionalProperties["group"] != nil {
+		if group, ok := additionalProperties["group"].(*additional.Group); ok {
+			for j, hit := range group.Hits {
+				schema, err := r.parseSchema(hit, r.getGroupSelectProperties(properties))
+				if err != nil {
+					return additionalProperties, fmt.Errorf("resolve group hit: %w", err)
+				}
+				group.Hits[j] = schema
+			}
+		}
+	}
+	return additionalProperties, nil
 }
 
 func (r *Resolver) parseSchema(schema map[string]interface{},
@@ -167,7 +205,7 @@ func (r *Resolver) resolveRef(item *models.SingleRef, desiredClass string,
 	res, ok := r.cacher.Get(si)
 	if !ok {
 		// silently ignore, could have been deleted in the meantime, or we're
-		// asking for a non-matching selectProperty, for eaxmple if we ask for
+		// asking for a non-matching selectProperty, for example if we ask for
 		// Article { published { ... on { Magazine { name } ... on { Journal { name } }
 		// we don't know at resolve time if this ID will point to a Magazine or a
 		// Journal, so we will get a few empty responses when trying both for any
@@ -188,6 +226,13 @@ func (r *Resolver) resolveRef(item *models.SingleRef, desiredClass string,
 
 	if additionalProperties.Vector {
 		nested["vector"] = res.Vector
+	}
+	if len(additionalProperties.Vectors) > 0 {
+		vectors := make(map[string][]float32)
+		for _, targetVector := range additionalProperties.Vectors {
+			vectors[targetVector] = res.Vectors[targetVector]
+		}
+		nested["vectors"] = vectors
 	}
 	if additionalProperties.CreationTimeUnix {
 		nested["creationTimeUnix"] = res.Created

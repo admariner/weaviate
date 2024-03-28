@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package db
@@ -15,28 +15,27 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"fmt"
 	"time"
 
 	"github.com/go-openapi/strfmt"
 	"github.com/google/uuid"
 	"github.com/pkg/errors"
-	"github.com/semi-technologies/weaviate/adapters/repos/db/helpers"
-	"github.com/semi-technologies/weaviate/adapters/repos/db/inverted"
-	"github.com/semi-technologies/weaviate/adapters/repos/db/sorter"
-	"github.com/semi-technologies/weaviate/entities/additional"
-	"github.com/semi-technologies/weaviate/entities/filters"
-	"github.com/semi-technologies/weaviate/entities/multi"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	"github.com/semi-technologies/weaviate/entities/search"
-	"github.com/semi-technologies/weaviate/entities/searchparams"
-	"github.com/semi-technologies/weaviate/entities/storobj"
 	"github.com/sirupsen/logrus"
+	"github.com/weaviate/weaviate/adapters/repos/db/helpers"
+	"github.com/weaviate/weaviate/adapters/repos/db/inverted"
+	"github.com/weaviate/weaviate/adapters/repos/db/sorter"
+	"github.com/weaviate/weaviate/adapters/repos/db/vector/common"
+	"github.com/weaviate/weaviate/entities/additional"
+	"github.com/weaviate/weaviate/entities/filters"
+	"github.com/weaviate/weaviate/entities/multi"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/search"
+	"github.com/weaviate/weaviate/entities/searchparams"
+	"github.com/weaviate/weaviate/entities/storobj"
 )
 
-func (s *Shard) objectByID(ctx context.Context, id strfmt.UUID,
-	props search.SelectProperties,
-	additional additional.Properties,
-) (*storobj.Object, error) {
+func (s *Shard) ObjectByID(ctx context.Context, id strfmt.UUID, props search.SelectProperties, additional additional.Properties) (*storobj.Object, error) {
 	idBytes, err := uuid.MustParse(id.String()).MarshalBinary()
 	if err != nil {
 		return nil, err
@@ -59,9 +58,7 @@ func (s *Shard) objectByID(ctx context.Context, id strfmt.UUID,
 	return obj, nil
 }
 
-func (s *Shard) multiObjectByID(ctx context.Context,
-	query []multi.Identifier,
-) ([]*storobj.Object, error) {
+func (s *Shard) MultiObjectByID(ctx context.Context, query []multi.Identifier) ([]*storobj.Object, error) {
 	objects := make([]*storobj.Object, len(query))
 
 	ids := make([][]byte, len(query))
@@ -100,7 +97,7 @@ func (s *Shard) multiObjectByID(ctx context.Context,
 // on the LSMKV which only checks the bloom filters, which at least in the case
 // of a true negative would be considerably faster. For a (false) positive,
 // we'd still need to check, though.
-func (s *Shard) exists(ctx context.Context, id strfmt.UUID) (bool, error) {
+func (s *Shard) Exists(ctx context.Context, id strfmt.UUID) (bool, error) {
 	idBytes, err := uuid.MustParse(id.String()).MarshalBinary()
 	if err != nil {
 		return false, err
@@ -118,9 +115,7 @@ func (s *Shard) exists(ctx context.Context, id strfmt.UUID) (bool, error) {
 	return true, nil
 }
 
-func (s *Shard) objectByIndexID(ctx context.Context,
-	indexID uint64, acceptDeleted bool,
-) (*storobj.Object, error) {
+func (s *Shard) objectByIndexID(ctx context.Context, indexID uint64, acceptDeleted bool) (*storobj.Object, error) {
 	keyBuf := make([]byte, 8)
 	binary.LittleEndian.PutUint64(keyBuf, indexID)
 
@@ -145,10 +140,14 @@ func (s *Shard) objectByIndexID(ctx context.Context,
 
 func (s *Shard) vectorByIndexID(ctx context.Context, indexID uint64) ([]float32, error) {
 	keyBuf := make([]byte, 8)
-	binary.LittleEndian.PutUint64(keyBuf, indexID)
+	return s.readVectorByIndexIDIntoSlice(ctx, indexID, &common.VectorSlice{Buff8: keyBuf})
+}
 
-	bytes, err := s.store.Bucket(helpers.ObjectsBucketLSM).
-		GetBySecondary(0, keyBuf)
+func (s *Shard) readVectorByIndexIDIntoSlice(ctx context.Context, indexID uint64, container *common.VectorSlice) ([]float32, error) {
+	binary.LittleEndian.PutUint64(container.Buff8, indexID)
+
+	bytes, newBuff, err := s.store.Bucket(helpers.ObjectsBucketLSM).
+		GetBySecondaryIntoMemory(0, container.Buff8, container.Buff)
 	if err != nil {
 		return nil, err
 	}
@@ -158,51 +157,82 @@ func (s *Shard) vectorByIndexID(ctx context.Context, indexID uint64) ([]float32,
 			"no object for doc id, it could have been deleted")
 	}
 
-	return storobj.VectorFromBinary(bytes)
+	container.Buff = newBuff
+	return storobj.VectorFromBinary(bytes, container.Slice)
 }
 
-func (s *Shard) objectSearch(ctx context.Context, limit int,
-	filters *filters.LocalFilter, keywordRanking *searchparams.KeywordRanking,
-	sort []filters.Sort, additional additional.Properties,
+func (s *Shard) ObjectSearch(ctx context.Context, limit int, filters *filters.LocalFilter,
+	keywordRanking *searchparams.KeywordRanking, sort []filters.Sort, cursor *filters.Cursor,
+	additional additional.Properties,
 ) ([]*storobj.Object, []float32, error) {
 	if keywordRanking != nil {
 		if v := s.versioner.Version(); v < 2 {
-			return nil, nil, errors.Errorf("shard was built with an older version of " +
-				"Weaviate which does not yet support BM25 search")
+			return nil, nil, errors.Errorf(
+				"shard was built with an older version of " +
+					"Weaviate which does not yet support BM25 search")
 		}
 
+		var bm25objs []*storobj.Object
+		var bm25count []float32
+		var err error
+		var objs helpers.AllowList
+		var filterDocIds helpers.AllowList
+
+		if filters != nil {
+			objs, err = inverted.NewSearcher(s.index.logger, s.store,
+				s.index.getSchema.GetSchemaSkipAuth(), s.propertyIndices,
+				s.index.classSearcher, s.index.stopwords, s.versioner.Version(),
+				s.isFallbackToSearchable, s.tenant(), s.index.Config.QueryNestedRefLimit,
+				s.bitmapFactory).
+				DocIDs(ctx, filters, additional, s.index.Config.ClassName)
+			if err != nil {
+				return nil, nil, err
+			}
+
+			filterDocIds = objs
+		}
+
+		className := s.index.Config.ClassName
 		bm25Config := s.index.getInvertedIndexConfig().BM25
-
-		searcher := inverted.NewBM25Searcher(bm25Config, s.store,
-			s.index.getSchema.GetSchemaSkipAuth(), s.invertedRowCache,
-			s.propertyIndices, s.index.classSearcher, s.deletedDocIDs, s.propLengths,
-			s.index.logger, s.versioner.Version())
-		if keywordRanking != nil && keywordRanking.Type == "bm25" {
-			className := s.index.Config.ClassName
-			return searcher.BM25F(ctx, className, limit, keywordRanking, filters, sort, additional, func(index uint64) *storobj.Object {
-				v, _ := s.objectByIndexID(ctx, index, false)
-				return v
-			})
-		} else {
-			return searcher.Objects(ctx, limit, keywordRanking, filters, sort, additional, s.index.Config.ClassName)
+		logger := s.index.logger.WithFields(logrus.Fields{"class": s.index.Config.ClassName, "shard": s.name})
+		bm25searcher := inverted.NewBM25Searcher(bm25Config, s.store,
+			s.index.getSchema.GetSchemaSkipAuth(), s.propertyIndices, s.index.classSearcher,
+			s.GetPropertyLengthTracker(), logger, s.versioner.Version())
+		bm25objs, bm25count, err = bm25searcher.BM25F(ctx, filterDocIds, className, limit, *keywordRanking)
+		if err != nil {
+			return nil, nil, err
 		}
+
+		return bm25objs, bm25count, nil
 	}
 
 	if filters == nil {
-		objs, err := s.objectList(ctx, limit, sort, additional, s.index.Config.ClassName)
+		objs, err := s.ObjectList(ctx, limit, sort,
+			cursor, additional, s.index.Config.ClassName)
 		return objs, nil, err
 	}
-	objs, err := inverted.NewSearcher(s.store, s.index.getSchema.GetSchemaSkipAuth(),
-		s.invertedRowCache, s.propertyIndices, s.index.classSearcher,
-		s.deletedDocIDs, s.index.stopwords, s.versioner.Version()).
+	objs, err := inverted.NewSearcher(s.index.logger, s.store, s.index.getSchema.GetSchemaSkipAuth(),
+		s.propertyIndices, s.index.classSearcher, s.index.stopwords, s.versioner.Version(),
+		s.isFallbackToSearchable, s.tenant(), s.index.Config.QueryNestedRefLimit, s.bitmapFactory).
 		Objects(ctx, limit, filters, sort, additional, s.index.Config.ClassName)
 	return objs, nil, err
 }
 
-func (s *Shard) objectVectorSearch(ctx context.Context,
-	searchVector []float32, targetDist float32, limit int, filters *filters.LocalFilter,
-	sort []filters.Sort, additional additional.Properties,
-) ([]*storobj.Object, []float32, error) {
+func (s *Shard) getIndexQueue(targetVector string) (*IndexQueue, error) {
+	if s.hasTargetVectors() {
+		if targetVector == "" {
+			return nil, fmt.Errorf("index queue: missing target vector")
+		}
+		queue, ok := s.queues[targetVector]
+		if !ok {
+			return nil, fmt.Errorf("index queue for target vector: %s doesn't exist", targetVector)
+		}
+		return queue, nil
+	}
+	return s.queue, nil
+}
+
+func (s *Shard) ObjectVectorSearch(ctx context.Context, searchVector []float32, targetVector string, targetDist float32, limit int, filters *filters.LocalFilter, sort []filters.Sort, groupBy *searchparams.GroupBy, additional additional.Properties) ([]*storobj.Object, []float32, error) {
 	var (
 		ids       []uint64
 		dists     []float32
@@ -210,39 +240,46 @@ func (s *Shard) objectVectorSearch(ctx context.Context,
 		allowList helpers.AllowList
 	)
 
-	beforeAll := time.Now()
-
 	if filters != nil {
+		beforeFilter := time.Now()
 		list, err := s.buildAllowList(ctx, filters, additional)
 		if err != nil {
 			return nil, nil, err
 		}
 		allowList = list
+		s.metrics.FilteredVectorFilter(time.Since(beforeFilter))
 	}
 
+	queue, err := s.getIndexQueue(targetVector)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	beforeVector := time.Now()
 	if limit < 0 {
-		ids, dists, err = s.vectorIndex.SearchByVectorDistance(
+		ids, dists, err = queue.SearchByVectorDistance(
 			searchVector, targetDist, s.index.Config.QueryMaximumResults, allowList)
 		if err != nil {
 			return nil, nil, errors.Wrap(err, "vector search by distance")
 		}
 	} else {
-		ids, dists, err = s.vectorIndex.SearchByVector(searchVector, limit, allowList)
+		ids, dists, err = queue.SearchByVector(searchVector, limit, allowList)
 		if err != nil {
 			return nil, nil, errors.Wrap(err, "vector search")
 		}
 	}
-
-	invertedTook := time.Since(beforeAll)
-	beforeVector := time.Now()
-
 	if len(ids) == 0 {
 		return nil, nil, nil
 	}
 
-	hnswTook := time.Since(beforeVector)
+	if filters != nil {
+		s.metrics.FilteredVectorVector(time.Since(beforeVector))
+	}
 
-	var sortTook uint64
+	if groupBy != nil {
+		return s.groupResults(ctx, ids, dists, groupBy, additional)
+	}
+
 	if len(sort) > 0 {
 		beforeSort := time.Now()
 		ids, dists, err = s.sortDocIDsAndDists(ctx, limit, sort,
@@ -250,7 +287,9 @@ func (s *Shard) objectVectorSearch(ctx context.Context,
 		if err != nil {
 			return nil, nil, errors.Wrap(err, "vector search sort")
 		}
-		sortTook = uint64(time.Since(beforeSort))
+		if filters != nil {
+			s.metrics.FilteredVectorSort(time.Since(beforeSort))
+		}
 	}
 
 	beforeObjects := time.Now()
@@ -260,23 +299,15 @@ func (s *Shard) objectVectorSearch(ctx context.Context,
 	if err != nil {
 		return nil, nil, err
 	}
-	objectsTook := time.Since(beforeObjects)
 
-	s.index.logger.WithField("action", "filtered_vector_search").
-		WithFields(logrus.Fields{
-			"inverted_took":         uint64(invertedTook),
-			"hnsw_took":             uint64(hnswTook),
-			"retrieve_objects_took": uint64(objectsTook),
-			"sort_took":             uint64(sortTook),
-		}).Trace("completed filtered vector search")
+	if filters != nil {
+		s.metrics.FilteredVectorObjects(time.Since(beforeObjects))
+	}
 
 	return objs, dists, nil
 }
 
-func (s *Shard) objectList(ctx context.Context, limit int,
-	sort []filters.Sort, additional additional.Properties,
-	className schema.ClassName,
-) ([]*storobj.Object, error) {
+func (s *Shard) ObjectList(ctx context.Context, limit int, sort []filters.Sort, cursor *filters.Cursor, additional additional.Properties, className schema.ClassName) ([]*storobj.Object, error) {
 	if len(sort) > 0 {
 		docIDs, err := s.sortedObjectList(ctx, limit, sort, className)
 		if err != nil {
@@ -286,21 +317,39 @@ func (s *Shard) objectList(ctx context.Context, limit int,
 		return storobj.ObjectsByDocID(bucket, docIDs, additional)
 	}
 
-	return s.allObjectList(ctx, limit, additional, className)
+	if cursor == nil {
+		cursor = &filters.Cursor{After: "", Limit: limit}
+	}
+	return s.cursorObjectList(ctx, cursor, additional, className)
 }
 
-func (s *Shard) allObjectList(ctx context.Context, limit int,
+func (s *Shard) cursorObjectList(ctx context.Context, c *filters.Cursor,
 	additional additional.Properties,
 	className schema.ClassName,
 ) ([]*storobj.Object, error) {
-	out := make([]*storobj.Object, limit)
-
-	i := 0
 	cursor := s.store.Bucket(helpers.ObjectsBucketLSM).Cursor()
 	defer cursor.Close()
 
-	for k, v := cursor.First(); k != nil && i < limit; k, v = cursor.Next() {
-		obj, err := storobj.FromBinary(v)
+	var key, val []byte
+	if c.After == "" {
+		key, val = cursor.First()
+	} else {
+		uuidBytes, err := uuid.MustParse(c.After).MarshalBinary()
+		if err != nil {
+			return nil, errors.Wrap(err, "after argument is not a valid uuid")
+		}
+		key, val = cursor.Seek(uuidBytes)
+		if bytes.Equal(key, uuidBytes) {
+			// move cursor by one if it's the same ID
+			key, val = cursor.Next()
+		}
+	}
+
+	i := 0
+	out := make([]*storobj.Object, c.Limit)
+
+	for ; key != nil && i < c.Limit; key, val = cursor.Next() {
+		obj, err := storobj.FromBinary(val)
 		if err != nil {
 			return nil, errors.Wrapf(err, "unmarhsal item %d", i)
 		}
@@ -312,9 +361,7 @@ func (s *Shard) allObjectList(ctx context.Context, limit int,
 	return out[:i], nil
 }
 
-func (s *Shard) sortedObjectList(ctx context.Context, limit int, sort []filters.Sort,
-	className schema.ClassName,
-) ([]uint64, error) {
+func (s *Shard) sortedObjectList(ctx context.Context, limit int, sort []filters.Sort, className schema.ClassName) ([]uint64, error) {
 	lsmSorter, err := sorter.NewLSMSorter(s.store, s.index.getSchema.GetSchemaSkipAuth(), className)
 	if err != nil {
 		return nil, errors.Wrap(err, "sort object list")
@@ -326,9 +373,7 @@ func (s *Shard) sortedObjectList(ctx context.Context, limit int, sort []filters.
 	return docIDs, nil
 }
 
-func (s *Shard) sortDocIDsAndDists(ctx context.Context, limit int, sort []filters.Sort,
-	className schema.ClassName, docIDs []uint64, dists []float32,
-) ([]uint64, []float32, error) {
+func (s *Shard) sortDocIDsAndDists(ctx context.Context, limit int, sort []filters.Sort, className schema.ClassName, docIDs []uint64, dists []float32) ([]uint64, []float32, error) {
 	lsmSorter, err := sorter.NewLSMSorter(s.store, s.index.getSchema.GetSchemaSkipAuth(), className)
 	if err != nil {
 		return nil, nil, errors.Wrap(err, "sort objects with distances")
@@ -340,12 +385,10 @@ func (s *Shard) sortDocIDsAndDists(ctx context.Context, limit int, sort []filter
 	return sortedDocIDs, sortedDists, nil
 }
 
-func (s *Shard) buildAllowList(ctx context.Context, filters *filters.LocalFilter,
-	addl additional.Properties,
-) (helpers.AllowList, error) {
-	list, err := inverted.NewSearcher(s.store, s.index.getSchema.GetSchemaSkipAuth(),
-		s.invertedRowCache, s.propertyIndices, s.index.classSearcher,
-		s.deletedDocIDs, s.index.stopwords, s.versioner.Version()).
+func (s *Shard) buildAllowList(ctx context.Context, filters *filters.LocalFilter, addl additional.Properties) (helpers.AllowList, error) {
+	list, err := inverted.NewSearcher(s.index.logger, s.store, s.index.getSchema.GetSchemaSkipAuth(),
+		s.propertyIndices, s.index.classSearcher, s.index.stopwords, s.versioner.Version(),
+		s.isFallbackToSearchable, s.tenant(), s.index.Config.QueryNestedRefLimit, s.bitmapFactory).
 		DocIDs(ctx, filters, addl, s.index.Config.ClassName)
 	if err != nil {
 		return nil, errors.Wrap(err, "build inverted filter allow list")
@@ -384,7 +427,7 @@ func (s *Shard) batchDeleteObject(ctx context.Context, id strfmt.UUID) error {
 
 	var docID uint64
 	bucket := s.store.Bucket(helpers.ObjectsBucketLSM)
-	existing, err := bucket.Get([]byte(idBytes))
+	existing, err := bucket.Get(idBytes)
 	if err != nil {
 		return errors.Wrap(err, "unexpected error on previous lookup")
 	}
@@ -411,13 +454,27 @@ func (s *Shard) batchDeleteObject(ctx context.Context, id strfmt.UUID) error {
 		return errors.Wrap(err, "delete object from bucket")
 	}
 
-	// in-mem
-	// TODO: do we still need this?
-	s.deletedDocIDs.Add(docID)
-
-	if err := s.vectorIndex.Delete(docID); err != nil {
-		return errors.Wrap(err, "delete from vector index")
+	if s.hasTargetVectors() {
+		for targetVector, queue := range s.queues {
+			if err = queue.Delete(docID); err != nil {
+				return fmt.Errorf("delete from vector index queue of vector %q: %w", targetVector, err)
+			}
+		}
+	} else {
+		if err = s.queue.Delete(docID); err != nil {
+			return errors.Wrap(err, "delete from vector index queue")
+		}
 	}
 
 	return nil
+}
+
+func (s *Shard) WasDeleted(ctx context.Context, id strfmt.UUID) (bool, error) {
+	idBytes, err := uuid.MustParse(id.String()).MarshalBinary()
+	if err != nil {
+		return false, err
+	}
+
+	bucket := s.store.Bucket(helpers.ObjectsBucketLSM)
+	return bucket.WasDeleted(idBytes)
 }

@@ -4,29 +4,41 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package hnsw
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"runtime"
+	"runtime/debug"
+	"strconv"
 	"sync"
 	"time"
 
+	enterrors "github.com/weaviate/weaviate/entities/errors"
+
 	"github.com/pkg/errors"
-	"github.com/semi-technologies/weaviate/adapters/repos/db/helpers"
-	"github.com/semi-technologies/weaviate/entities/cyclemanager"
-	"github.com/semi-technologies/weaviate/entities/storobj"
+	"github.com/weaviate/weaviate/adapters/repos/db/helpers"
+	"github.com/weaviate/weaviate/adapters/repos/db/vector/cache"
+	"github.com/weaviate/weaviate/adapters/repos/db/vector/compressionhelpers"
+	"github.com/weaviate/weaviate/entities/cyclemanager"
+	"github.com/weaviate/weaviate/entities/storobj"
 )
 
 type breakCleanUpTombstonedNodesFunc func() bool
 
 // Delete attaches a tombstone to an item so it can be periodically cleaned up
 // later and the edges reassigned
-func (h *hnsw) Delete(id uint64) error {
+func (h *hnsw) Delete(ids ...uint64) error {
+	h.compressActionLock.RLock()
+	defer h.compressActionLock.RUnlock()
+
 	h.deleteVsInsertLock.Lock()
 	defer h.deleteVsInsertLock.Unlock()
 
@@ -36,72 +48,98 @@ func (h *hnsw) Delete(id uint64) error {
 	before := time.Now()
 	defer h.metrics.TrackDelete(before, "total")
 
-	h.metrics.DeleteVector()
-	if err := h.addTombstone(id); err != nil {
+	if err := h.addTombstone(ids...); err != nil {
 		return err
 	}
 
-	h.cache.delete(context.TODO(), id)
+	for _, id := range ids {
+		h.metrics.DeleteVector()
 
-	// Adding a tombstone might not be enough in some cases, if the tombstoned
-	// entry was the entrypoint this might lead to issues for following inserts:
-	// On a nearly empty graph the entrypoint might be the only viable element to
-	// connect to, however, because the entrypoint itself is tombstones
-	// connections to it are impossible. So, unless we find a new entrypoint,
-	// subsequent inserts might end up isolated (without edges) in the graph.
-	// This is especially true if the tombstoned entrypoint is the only node in
-	// the graph. In this case we must reset the graph, so it acts like an empty
-	// one. Otherwise we'd insert the next id and have only one possible node to
-	// connect it to (the entrypoint). With that one being tombstoned, the new
-	// node would be guaranteed to have zero edges
+		// Adding a tombstone might not be enough in some cases, if the tombstoned
+		// entry was the entrypoint this might lead to issues for following inserts:
+		// On a nearly empty graph the entrypoint might be the only viable element to
+		// connect to, however, because the entrypoint itself is tombstones
+		// connections to it are impossible. So, unless we find a new entrypoint,
+		// subsequent inserts might end up isolated (without edges) in the graph.
+		// This is especially true if the tombstoned entrypoint is the only node in
+		// the graph. In this case we must reset the graph, so it acts like an empty
+		// one. Otherwise we'd insert the next id and have only one possible node to
+		// connect it to (the entrypoint). With that one being tombstoned, the new
+		// node would be guaranteed to have zero edges
 
-	node := h.nodeByID(id)
-	if node == nil {
-		// node was already deleted/cleaned up
-		return nil
-	}
+		node := h.nodeByID(id)
+		if node == nil {
+			// node was already deleted/cleaned up
+			continue
+		}
 
-	if h.getEntrypoint() == id {
-		beforeDeleteEP := time.Now()
-		defer h.metrics.TrackDelete(beforeDeleteEP, "delete_entrypoint")
+		if h.getEntrypoint() == id {
+			beforeDeleteEP := time.Now()
+			defer h.metrics.TrackDelete(beforeDeleteEP, "delete_entrypoint")
 
-		denyList := h.tombstonesAsDenyList()
-		if onlyNode, err := h.resetIfOnlyNode(node, denyList); err != nil {
-			return errors.Wrap(err, "reset index")
-		} else if !onlyNode {
-			if err := h.deleteEntrypoint(node, denyList); err != nil {
-				return errors.Wrap(err, "delete entrypoint")
+			denyList := h.tombstonesAsDenyList()
+			if onlyNode, err := h.resetIfOnlyNode(node, denyList); err != nil {
+				return errors.Wrap(err, "reset index")
+			} else if !onlyNode {
+				if err := h.deleteEntrypoint(node, denyList); err != nil {
+					return errors.Wrap(err, "delete entrypoint")
+				}
 			}
 		}
 	}
+
 	return nil
 }
 
 func (h *hnsw) resetIfEmpty() (empty bool, err error) {
 	h.resetLock.Lock()
+	defer h.resetLock.Unlock()
 	h.Lock()
 	defer h.Unlock()
-	defer h.resetLock.Unlock()
 
-	if h.isEmptyUnsecured() {
-		return true, h.resetUnsecured()
+	empty = func() bool {
+		h.shardedNodeLocks.RLock(h.entryPointID)
+		defer h.shardedNodeLocks.RUnlock(h.entryPointID)
+
+		return h.isEmptyUnlocked()
+	}()
+	// It can happen that between calls of isEmptyUnlocked and resetUnlocked
+	// values of h.nodes will change (due to locks being RUnlocked and Locked again)
+	// This is acceptable in order to avoid long Locking of all striped locks
+	if empty {
+		h.shardedNodeLocks.LockAll()
+		defer h.shardedNodeLocks.UnlockAll()
+
+		return true, h.resetUnlocked()
 	}
 	return false, nil
 }
 
 func (h *hnsw) resetIfOnlyNode(needle *vertex, denyList helpers.AllowList) (onlyNode bool, err error) {
 	h.resetLock.Lock()
+	defer h.resetLock.Unlock()
 	h.Lock()
 	defer h.Unlock()
-	defer h.resetLock.Unlock()
 
-	if h.isOnlyNodeUnsecured(needle, denyList) {
-		return true, h.resetUnsecured()
+	onlyNode = func() bool {
+		h.shardedNodeLocks.RLockAll()
+		defer h.shardedNodeLocks.RUnlockAll()
+
+		return h.isOnlyNodeUnlocked(needle, denyList)
+	}()
+	// It can happen that between calls of isOnlyNodeUnlocked and resetUnlocked
+	// values of h.nodes will change (due to locks being RUnlocked and Locked again)
+	// This is acceptable in order to avoid long Locking of all striped locks
+	if onlyNode {
+		h.shardedNodeLocks.LockAll()
+		defer h.shardedNodeLocks.UnlockAll()
+
+		return true, h.resetUnlocked()
 	}
 	return false, nil
 }
 
-func (h *hnsw) resetUnsecured() error {
+func (h *hnsw) resetUnlocked() error {
 	h.resetCtxCancel()
 	resetCtx, resetCtxCancel := context.WithCancel(context.Background())
 	h.resetCtx = resetCtx
@@ -110,13 +148,13 @@ func (h *hnsw) resetUnsecured() error {
 	h.entryPointID = 0
 	h.currentMaximumLayer = 0
 	h.initialInsertOnce = &sync.Once{}
-	h.nodes = make([]*vertex, initialSize)
+	h.nodes = make([]*vertex, cache.InitialSize)
 
 	return h.commitLog.Reset()
 }
 
 func (h *hnsw) tombstonesAsDenyList() helpers.AllowList {
-	deleteList := helpers.AllowList{}
+	deleteList := helpers.NewAllowList()
 	h.tombstoneLock.Lock()
 	defer h.tombstoneLock.Unlock()
 
@@ -150,7 +188,7 @@ func (h *hnsw) copyTombstonesToAllowList(breakCleanUpTombstonedNodes breakCleanU
 	h.tombstoneLock.Lock()
 	defer h.tombstoneLock.Unlock()
 
-	deleteList = helpers.AllowList{}
+	deleteList = helpers.NewAllowList()
 	for id := range h.tombstones {
 		if lenOfNodes <= id {
 			// we're trying to delete an id outside the possible range, nothing to do
@@ -160,7 +198,7 @@ func (h *hnsw) copyTombstonesToAllowList(breakCleanUpTombstonedNodes breakCleanU
 		deleteList.Insert(id)
 	}
 
-	if len(deleteList) == 0 {
+	if deleteList.IsEmpty() {
 		return false, nil
 	}
 
@@ -169,7 +207,22 @@ func (h *hnsw) copyTombstonesToAllowList(breakCleanUpTombstonedNodes breakCleanU
 
 // CleanUpTombstonedNodes removes nodes with a tombstone and reassigns
 // edges that were previously pointing to the tombstoned nodes
-func (h *hnsw) CleanUpTombstonedNodes(stopFunc cyclemanager.StopFunc) error {
+func (h *hnsw) CleanUpTombstonedNodes(shouldAbort cyclemanager.ShouldAbortCallback) error {
+	_, err := h.cleanUpTombstonedNodes(shouldAbort)
+	return err
+}
+
+func (h *hnsw) cleanUpTombstonedNodes(shouldAbort cyclemanager.ShouldAbortCallback) (bool, error) {
+	h.compressActionLock.RLock()
+	defer h.compressActionLock.RUnlock()
+	defer func() {
+		err := recover()
+		if err != nil {
+			h.logger.WithField("panic", err).Errorf("class %s: tombstone cleanup panicked", h.className)
+			debug.PrintStack()
+		}
+	}()
+
 	h.metrics.StartCleanup(1)
 	defer h.metrics.EndCleanup(1)
 
@@ -178,37 +231,40 @@ func (h *hnsw) CleanUpTombstonedNodes(stopFunc cyclemanager.StopFunc) error {
 	h.resetLock.Unlock()
 
 	breakCleanUpTombstonedNodes := func() bool {
-		return resetCtx.Err() != nil || stopFunc()
+		return resetCtx.Err() != nil || shouldAbort()
 	}
 
+	executed := false
 	ok, deleteList := h.copyTombstonesToAllowList(breakCleanUpTombstonedNodes)
 	if !ok {
-		return nil
+		return executed, nil
 	}
 
+	executed = true
 	if ok, err := h.reassignNeighborsOf(deleteList, breakCleanUpTombstonedNodes); err != nil {
-		return err
+		return executed, err
 	} else if !ok {
-		return nil
+		return executed, nil
 	}
+	h.reassignNeighbor(h.getEntrypoint(), deleteList, breakCleanUpTombstonedNodes)
 
 	if ok, err := h.replaceDeletedEntrypoint(deleteList, breakCleanUpTombstonedNodes); err != nil {
-		return err
+		return executed, err
 	} else if !ok {
-		return nil
+		return executed, nil
 	}
 
 	if ok, err := h.removeTombstonesAndNodes(deleteList, breakCleanUpTombstonedNodes); err != nil {
-		return err
+		return executed, err
 	} else if !ok {
-		return nil
+		return executed, nil
 	}
 
 	if _, err := h.resetIfEmpty(); err != nil {
-		return err
+		return executed, err
 	}
 
-	return nil
+	return executed, nil
 }
 
 func (h *hnsw) replaceDeletedEntrypoint(deleteList helpers.AllowList, breakCleanUpTombstonedNodes breakCleanUpTombstonedNodesFunc) (ok bool, err error) {
@@ -219,7 +275,8 @@ func (h *hnsw) replaceDeletedEntrypoint(deleteList helpers.AllowList, breakClean
 		return false, nil
 	}
 
-	for id := range deleteList {
+	it := deleteList.Iterator()
+	for id, ok := it.Next(); ok; id, ok = it.Next() {
 		if h.getEntrypoint() == id {
 			// this a special case because:
 			//
@@ -227,9 +284,10 @@ func (h *hnsw) replaceDeletedEntrypoint(deleteList helpers.AllowList, breakClean
 			// level, we need to find an entrypoint on a lower level
 			// 2. there is a risk that this is the only node in the entire graph. In
 			// this case we must reset the graph
-			h.RLock()
+			h.shardedNodeLocks.RLock(id)
 			node := h.nodes[id]
-			h.RUnlock()
+			h.shardedNodeLocks.RUnlock(id)
+
 			if err := h.deleteEntrypoint(node, deleteList); err != nil {
 				return false, errors.Wrap(err, "delete entrypoint")
 			}
@@ -239,32 +297,83 @@ func (h *hnsw) replaceDeletedEntrypoint(deleteList helpers.AllowList, breakClean
 	return true, nil
 }
 
+func tombstoneDeletionConcurrency() int {
+	if v := os.Getenv("TOMBSTONE_DELETION_CONCURRENCY"); v != "" {
+		asInt, err := strconv.Atoi(v)
+		if err == nil && asInt > 0 {
+			return asInt
+		}
+	}
+	return runtime.GOMAXPROCS(0) / 2
+}
+
 func (h *hnsw) reassignNeighborsOf(deleteList helpers.AllowList, breakCleanUpTombstonedNodes breakCleanUpTombstonedNodesFunc) (ok bool, err error) {
 	h.RLock()
 	size := len(h.nodes)
 	h.RUnlock()
-
-	for n := 0; n < size; n++ {
-		if ok, err := h.reassignNeighbor(uint64(n), deleteList, breakCleanUpTombstonedNodes); err != nil {
-			return false, errors.Wrap(err, "reassign neighbor edges")
-		} else if !ok {
-			return false, nil
-		}
-	}
-
-	return true, nil
-}
-
-func (h *hnsw) reassignNeighbor(neighbor uint64, deleteList helpers.AllowList, breakCleanUpTombstonedNodes breakCleanUpTombstonedNodesFunc) (ok bool, err error) {
 	h.resetLock.Lock()
 	defer h.resetLock.Unlock()
 
+	g, ctx := enterrors.NewErrorGroupWithContextWrapper(h.logger, h.shutdownCtx)
+	ch := make(chan uint64)
+
+	for i := 0; i < tombstoneDeletionConcurrency(); i++ {
+		g.Go(func() error {
+			for {
+				select {
+				case <-ctx.Done():
+					return nil
+				case deletedID, ok := <-ch:
+					if !ok {
+						return nil
+					}
+					h.shardedNodeLocks.RLock(deletedID)
+					if uint64(size) < deletedID || h.nodes[deletedID] == nil {
+						h.shardedNodeLocks.RUnlock(deletedID)
+						continue
+					}
+					h.shardedNodeLocks.RUnlock(deletedID)
+					if h.getEntrypoint() != deletedID {
+						h.reassignNeighbor(deletedID, deleteList, breakCleanUpTombstonedNodes)
+					}
+				}
+			}
+		})
+	}
+
+LOOP:
+	for i := 0; i < size; i++ {
+		select {
+		case ch <- uint64(i):
+		case <-ctx.Done():
+			break LOOP
+		}
+	}
+
+	close(ch)
+
+	err = g.Wait()
+	if errors.Is(err, context.Canceled) {
+		h.logger.Errorf("class %s: tombstone cleanup canceled", h.className)
+		return false, nil
+	}
+
+	return true, err
+}
+
+func (h *hnsw) reassignNeighbor(
+	neighbor uint64,
+	deleteList helpers.AllowList,
+	breakCleanUpTombstonedNodes breakCleanUpTombstonedNodesFunc,
+) (ok bool, err error) {
 	if breakCleanUpTombstonedNodes() {
 		return false, nil
 	}
 
 	h.RLock()
+	h.shardedNodeLocks.RLock(neighbor)
 	neighborNode := h.nodes[neighbor]
+	h.shardedNodeLocks.RUnlock(neighbor)
 	currentEntrypoint := h.entryPointID
 	currentMaximumLayer := h.currentMaximumLayer
 	h.RUnlock()
@@ -273,7 +382,14 @@ func (h *hnsw) reassignNeighbor(neighbor uint64, deleteList helpers.AllowList, b
 		return true, nil
 	}
 
-	neighborVec, err := h.vectorForID(context.Background(), neighbor)
+	var neighborVec []float32
+	var compressorDistancer compressionhelpers.CompressorDistancer
+	if h.compressed.Load() {
+		compressorDistancer, err = h.compressor.NewDistancerFromID(neighbor)
+	} else {
+		neighborVec, err = h.cache.Get(context.Background(), neighbor)
+	}
+
 	if err != nil {
 		var e storobj.ErrNotFound
 		if errors.As(err, &e) {
@@ -294,7 +410,7 @@ func (h *hnsw) reassignNeighbor(neighbor uint64, deleteList helpers.AllowList, b
 	neighborNode.Unlock()
 
 	entryPointID, err := h.findBestEntrypointForNode(currentMaximumLayer,
-		neighborLevel, currentEntrypoint, neighborVec)
+		neighborLevel, currentEntrypoint, neighborVec, compressorDistancer)
 	if err != nil {
 		return false, errors.Wrap(err, "find best entrypoint")
 	}
@@ -327,23 +443,13 @@ func (h *hnsw) reassignNeighbor(neighbor uint64, deleteList helpers.AllowList, b
 			// reset connections according to level
 			neighborNode.connections = make([][]uint64, level+1)
 			neighborNode.Unlock()
+			neighborLevel = level
 		}
-		neighborLevel = level
 		entryPointID = alternative
 	}
 
 	neighborNode.markAsMaintenance()
-	neighborNode.Lock()
-	// delete all existing connections before re-assigning
-	for level := range neighborNode.connections {
-		neighborNode.connections[level] = neighborNode.connections[level][:0]
-	}
-	neighborNode.Unlock()
-	if err := h.commitLog.ClearLinks(neighbor); err != nil {
-		return false, err
-	}
-
-	if err := h.findAndConnectNeighbors(neighborNode, entryPointID, neighborVec,
+	if err := h.reconnectNeighboursOf(neighborNode, entryPointID, neighborVec, compressorDistancer,
 		neighborLevel, currentMaximumLayer, deleteList); err != nil {
 		return false, errors.Wrap(err, "find and connect neighbors")
 	}
@@ -426,9 +532,10 @@ func (h *hnsw) findNewGlobalEntrypoint(denyList helpers.AllowList, targetLevel i
 			if denyList.Contains(uint64(i)) {
 				continue
 			}
-			h.RLock()
+
+			h.shardedNodeLocks.RLock(uint64(i))
 			candidate := h.nodes[i]
-			h.RUnlock()
+			h.shardedNodeLocks.RUnlock(uint64(i))
 
 			if candidate == nil {
 				continue
@@ -448,10 +555,12 @@ func (h *hnsw) findNewGlobalEntrypoint(denyList helpers.AllowList, targetLevel i
 		}
 	}
 
-	// we made it thorugh the entire graph and didn't find a new entrypoint all
+	// we made it through the entire graph and didn't find a new entrypoint all
 	// the way down to level 0. This can only mean the graph is empty, which is
 	// unexpected. This situation should have been prevented by the deleteLock.
-	panic("findNewEntrypoint called on an empty hnsw graph")
+	panic(fmt.Sprintf(
+		"class %s: shard %s: findNewEntrypoint called on an empty hnsw graph",
+		h.className, h.shardName))
 }
 
 // returns entryPointID, level and whether a change occurred
@@ -479,9 +588,10 @@ func (h *hnsw) findNewLocalEntrypoint(denyList helpers.AllowList, targetLevel in
 			if denyList.Contains(uint64(i)) {
 				continue
 			}
-			h.RLock()
+
+			h.shardedNodeLocks.RLock(uint64(i))
 			candidate := h.nodes[i]
-			h.RUnlock()
+			h.shardedNodeLocks.RUnlock(uint64(i))
 
 			if candidate == nil {
 				continue
@@ -501,17 +611,21 @@ func (h *hnsw) findNewLocalEntrypoint(denyList helpers.AllowList, targetLevel in
 		}
 	}
 
-	panic("findNewLocalEntrypoint called on an empty hnsw graph")
+	panic(fmt.Sprintf(
+		"class %s: shard %s: findNewLocalEntrypoint called on an empty hnsw graph",
+		h.className, h.shardName))
 }
 
 func (h *hnsw) isOnlyNode(needle *vertex, denyList helpers.AllowList) bool {
 	h.RLock()
+	h.shardedNodeLocks.RLockAll()
 	defer h.RUnlock()
+	defer h.shardedNodeLocks.RUnlockAll()
 
-	return h.isOnlyNodeUnsecured(needle, denyList)
+	return h.isOnlyNodeUnlocked(needle, denyList)
 }
 
-func (h *hnsw) isOnlyNodeUnsecured(needle *vertex, denyList helpers.AllowList) bool {
+func (h *hnsw) isOnlyNodeUnlocked(needle *vertex, denyList helpers.AllowList) bool {
 	for _, node := range h.nodes {
 		if node == nil || node.id == needle.id || denyList.Contains(node.id) {
 			continue
@@ -528,16 +642,23 @@ func (h *hnsw) hasTombstone(id uint64) bool {
 	return ok
 }
 
-func (h *hnsw) addTombstone(id uint64) error {
-	h.metrics.AddTombstone()
+func (h *hnsw) addTombstone(ids ...uint64) error {
 	h.tombstoneLock.Lock()
-	h.tombstones[id] = struct{}{}
-	h.tombstoneLock.Unlock()
-	return h.commitLog.AddTombstone(id)
+	defer h.tombstoneLock.Unlock()
+
+	for _, id := range ids {
+		h.metrics.AddTombstone()
+		h.tombstones[id] = struct{}{}
+		if err := h.commitLog.AddTombstone(id); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (h *hnsw) removeTombstonesAndNodes(deleteList helpers.AllowList, breakCleanUpTombstonedNodes breakCleanUpTombstonedNodesFunc) (ok bool, err error) {
-	for id := range deleteList {
+	it := deleteList.Iterator()
+	for id, ok := it.Next(); ok; id, ok = it.Next() {
 		h.metrics.RemoveTombstone()
 		h.tombstoneLock.Lock()
 		delete(h.tombstones, id)
@@ -545,7 +666,14 @@ func (h *hnsw) removeTombstonesAndNodes(deleteList helpers.AllowList, breakClean
 
 		h.resetLock.Lock()
 		if !breakCleanUpTombstonedNodes() {
+			h.shardedNodeLocks.Lock(id)
 			h.nodes[id] = nil
+			h.shardedNodeLocks.Unlock(id)
+			if h.compressed.Load() {
+				h.compressor.Delete(context.TODO(), id)
+			} else {
+				h.cache.Delete(context.TODO(), id)
+			}
 			if err := h.commitLog.DeleteNode(id); err != nil {
 				h.resetLock.Unlock()
 				return false, err

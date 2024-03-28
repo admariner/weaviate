@@ -4,17 +4,17 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package lsmkv
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
-	"math/rand"
 	"os"
 	"sync"
 	"testing"
@@ -25,6 +25,7 @@ import (
 	"github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/entities/cyclemanager"
 )
 
 func BenchmarkConcurrentReading(b *testing.B) {
@@ -54,15 +55,15 @@ func BenchmarkConcurrentReading(b *testing.B) {
 }
 
 func prepareBucket(b *testing.B) (bucket *Bucket, cleanup func()) {
-	rand.Seed(time.Now().UnixNano())
-	dirName := fmt.Sprintf("./testdata/%d", rand.Intn(10000000))
+	dirName := fmt.Sprintf("./testdata/%d", mustRandIntn(10000000))
 	os.MkdirAll(dirName, 0o777)
 	defer func() {
 		err := os.RemoveAll(dirName)
 		fmt.Println(err)
 	}()
 
-	bucket, err := NewBucket(testCtxB(), dirName, "", nullLoggerB(), nil,
+	bucket, err := NewBucketCreator().NewBucket(testCtxB(), dirName, "", nullLoggerB(), nil,
+		cyclemanager.NewCallbackGroupNoop(), cyclemanager.NewCallbackGroupNoop(),
 		WithStrategy(StrategyMapCollection),
 		WithMemtableThreshold(5000))
 	require.Nil(b, err)

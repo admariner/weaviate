@@ -4,21 +4,19 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package aggregator
 
 import (
-	"fmt"
 	"math/rand"
 	"testing"
-	"time"
 
-	"github.com/semi-technologies/weaviate/entities/aggregation"
 	"github.com/stretchr/testify/assert"
+	"github.com/weaviate/weaviate/entities/aggregation"
 )
 
 const (
@@ -100,7 +98,6 @@ type TestStructNumbers struct {
 }
 
 func TestShardCombinerMergeNumerical(t *testing.T) {
-	setSeed(t)
 	tests := []TestStructNumbers{
 		{
 			name:     "Uneven number of elements for both",
@@ -243,16 +240,10 @@ func createNumericalAgg(numbers []float64) map[string]interface{} {
 }
 
 func createRandomSlice() []float64 {
-	size := rand.Intn(100)
+	size := rand.Intn(100) + 1 // at least one entry
 	array := make([]float64, size)
 	for i := 0; i < size; i++ {
 		array[i] = rand.Float64() * 1000
 	}
 	return array
-}
-
-func setSeed(t *testing.T) {
-	time := time.Now().UnixNano()
-	t.Log("Seed is", fmt.Sprint(time))
-	rand.Seed(time)
 }

@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package inverted
@@ -31,7 +31,8 @@ func NewDeltaMerger() *DeltaMerger {
 func (dm *DeltaMerger) AddAdditions(props []Property, docID uint64) {
 	for _, prop := range props {
 		storedProp := dm.additions.getOrCreate(prop.Name)
-		storedProp.hasFrequency = prop.HasFrequency
+		storedProp.hasFilterableIndex = prop.HasFilterableIndex
+		storedProp.hasSearchableIndex = prop.HasSearchableIndex
 		for _, item := range prop.Items {
 			storedItem := storedProp.getOrCreateItem(item.Data)
 			storedItem.addDocIDAndFrequency(docID, item.TermFrequency)
@@ -51,7 +52,10 @@ func (dm *DeltaMerger) AddDeletions(props []Property, docID uint64) {
 			}
 
 			// this was not added by us, we need to remove it
-			deletionItem := dm.deletions.getOrCreate(prop.Name).getOrCreateItem(item.Data)
+			deletionProp := dm.deletions.getOrCreate(prop.Name)
+			deletionProp.hasFilterableIndex = prop.HasFilterableIndex
+			deletionProp.hasSearchableIndex = prop.HasSearchableIndex
+			deletionItem := deletionProp.getOrCreateItem(item.Data)
 			deletionItem.addDocIDAndFrequency(docID, 0) // frequency does not matter on deletion
 		}
 	}
@@ -70,9 +74,10 @@ type DeltaMergeResult struct {
 }
 
 type MergeProperty struct {
-	Name         string
-	HasFrequency bool
-	MergeItems   []MergeItem
+	Name               string
+	MergeItems         []MergeItem
+	HasFilterableIndex bool
+	HasSearchableIndex bool
 }
 
 type MergeItem struct {
@@ -137,9 +142,10 @@ func (pbn propsByName) merge() []MergeProperty {
 }
 
 type propWithDocIDs struct {
-	name         string
-	items        map[string]*countableWithDocIDs
-	hasFrequency bool
+	name               string
+	items              map[string]*countableWithDocIDs
+	hasFilterableIndex bool
+	hasSearchableIndex bool
 }
 
 func (pwd *propWithDocIDs) getOrCreateItem(data []byte) *countableWithDocIDs {
@@ -175,9 +181,10 @@ func (pwd *propWithDocIDs) merge() *MergeProperty {
 	}
 
 	return &MergeProperty{
-		Name:         pwd.name,
-		HasFrequency: pwd.hasFrequency,
-		MergeItems:   items[:i],
+		Name:               pwd.name,
+		MergeItems:         items[:i],
+		HasFilterableIndex: pwd.hasFilterableIndex,
+		HasSearchableIndex: pwd.hasSearchableIndex,
 	}
 }
 

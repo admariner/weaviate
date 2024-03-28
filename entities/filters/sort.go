@@ -4,17 +4,17 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package filters
 
 // Sort contains path and order (asc, desc) information
 type Sort struct {
-	Path  []string
-	Order string
+	Path  []string `json:"path"`
+	Order string   `json:"order"`
 }
 
 // ExtractSortFromArgs gets the sort parameters

@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 //go:build integrationTest
@@ -19,24 +19,23 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"math/rand"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/entities/cyclemanager"
 )
 
 func TestReplaceStrategy_RecoverFromWAL(t *testing.T) {
-	rand.Seed(time.Now().UnixNano())
 	dirNameOriginal := t.TempDir()
 	dirNameRecovered := t.TempDir()
 
 	t.Run("with some previous state", func(t *testing.T) {
-		b, err := NewBucket(testCtx(), dirNameOriginal, "", nullLogger(), nil,
+		b, err := NewBucketCreator().NewBucket(testCtx(), dirNameOriginal, "", nullLogger(), nil,
+			cyclemanager.NewCallbackGroupNoop(), cyclemanager.NewCallbackGroupNoop(),
 			WithStrategy(StrategyReplace))
 		require.Nil(t, err)
 
@@ -70,7 +69,8 @@ func TestReplaceStrategy_RecoverFromWAL(t *testing.T) {
 
 			// then recreate bucket
 			var err error
-			b, err = NewBucket(testCtx(), dirNameOriginal, "", nullLogger(), nil,
+			b, err = NewBucketCreator().NewBucket(testCtx(), dirNameOriginal, "", nullLogger(), nil,
+				cyclemanager.NewCallbackGroupNoop(), cyclemanager.NewCallbackGroupNoop(),
 				WithStrategy(StrategyReplace))
 			require.Nil(t, err)
 		})
@@ -155,7 +155,8 @@ func TestReplaceStrategy_RecoverFromWAL(t *testing.T) {
 		var bRec *Bucket
 
 		t.Run("create new bucket from existing state", func(t *testing.T) {
-			b, err := NewBucket(testCtx(), dirNameRecovered, "", nullLogger(), nil,
+			b, err := NewBucketCreator().NewBucket(testCtx(), dirNameRecovered, "", nullLogger(), nil,
+				cyclemanager.NewCallbackGroupNoop(), cyclemanager.NewCallbackGroupNoop(),
 				WithStrategy(StrategyReplace))
 			require.Nil(t, err)
 
@@ -185,12 +186,12 @@ func TestReplaceStrategy_RecoverFromWAL(t *testing.T) {
 }
 
 func TestReplaceStrategy_RecoverFromWALWithCorruptLastElement(t *testing.T) {
-	rand.Seed(time.Now().UnixNano())
 	dirNameOriginal := t.TempDir()
 	dirNameRecovered := t.TempDir()
 
 	t.Run("without previous state", func(t *testing.T) {
-		b, err := NewBucket(testCtx(), dirNameOriginal, "", nullLogger(), nil,
+		b, err := NewBucketCreator().NewBucket(testCtx(), dirNameOriginal, "", nullLogger(), nil,
+			cyclemanager.NewCallbackGroupNoop(), cyclemanager.NewCallbackGroupNoop(),
 			WithStrategy(StrategyReplace))
 		require.Nil(t, err)
 
@@ -297,7 +298,8 @@ func TestReplaceStrategy_RecoverFromWALWithCorruptLastElement(t *testing.T) {
 		var bRec *Bucket
 
 		t.Run("create new bucket from existing state", func(t *testing.T) {
-			b, err := NewBucket(testCtx(), dirNameRecovered, "", nullLogger(), nil,
+			b, err := NewBucketCreator().NewBucket(testCtx(), dirNameRecovered, "", nullLogger(), nil,
+				cyclemanager.NewCallbackGroupNoop(), cyclemanager.NewCallbackGroupNoop(),
 				WithStrategy(StrategyReplace))
 			require.Nil(t, err)
 
@@ -332,12 +334,12 @@ func TestReplaceStrategy_RecoverFromWALWithCorruptLastElement(t *testing.T) {
 }
 
 func TestSetStrategy_RecoverFromWAL(t *testing.T) {
-	rand.Seed(time.Now().UnixNano())
 	dirNameOriginal := t.TempDir()
 	dirNameRecovered := t.TempDir()
 
 	t.Run("without prior state", func(t *testing.T) {
-		b, err := NewBucket(testCtx(), dirNameOriginal, "", nullLogger(), nil,
+		b, err := NewBucketCreator().NewBucket(testCtx(), dirNameOriginal, "", nullLogger(), nil,
+			cyclemanager.NewCallbackGroupNoop(), cyclemanager.NewCallbackGroupNoop(),
 			WithStrategy(StrategySetCollection))
 		require.Nil(t, err)
 
@@ -436,7 +438,8 @@ func TestSetStrategy_RecoverFromWAL(t *testing.T) {
 		var bRec *Bucket
 
 		t.Run("create new bucket from existing state", func(t *testing.T) {
-			b, err := NewBucket(testCtx(), dirNameRecovered, "", nullLogger(), nil,
+			b, err := NewBucketCreator().NewBucket(testCtx(), dirNameRecovered, "", nullLogger(), nil,
+				cyclemanager.NewCallbackGroupNoop(), cyclemanager.NewCallbackGroupNoop(),
 				WithStrategy(StrategySetCollection))
 			require.Nil(t, err)
 
@@ -473,12 +476,12 @@ func TestSetStrategy_RecoverFromWAL(t *testing.T) {
 }
 
 func TestMapStrategy_RecoverFromWAL(t *testing.T) {
-	rand.Seed(time.Now().UnixNano())
 	dirNameOriginal := t.TempDir()
 	dirNameRecovered := t.TempDir()
 
 	t.Run("without prior state", func(t *testing.T) {
-		b, err := NewBucket(testCtx(), dirNameOriginal, "", nullLogger(), nil,
+		b, err := NewBucketCreator().NewBucket(testCtx(), dirNameOriginal, "", nullLogger(), nil,
+			cyclemanager.NewCallbackGroupNoop(), cyclemanager.NewCallbackGroupNoop(),
 			WithStrategy(StrategyMapCollection))
 		require.Nil(t, err)
 
@@ -615,7 +618,8 @@ func TestMapStrategy_RecoverFromWAL(t *testing.T) {
 		var bRec *Bucket
 
 		t.Run("create new bucket from existing state", func(t *testing.T) {
-			b, err := NewBucket(testCtx(), dirNameRecovered, "", nullLogger(), nil,
+			b, err := NewBucketCreator().NewBucket(testCtx(), dirNameRecovered, "", nullLogger(), nil,
+				cyclemanager.NewCallbackGroupNoop(), cyclemanager.NewCallbackGroupNoop(),
 				WithStrategy(StrategyMapCollection))
 			require.Nil(t, err)
 

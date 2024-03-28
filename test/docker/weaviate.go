@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package docker
@@ -14,6 +14,8 @@ package docker
 import (
 	"context"
 	"os"
+	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 
@@ -25,12 +27,14 @@ import (
 const (
 	Weaviate      = "weaviate"
 	WeaviateNode2 = "weaviate2"
+
+	SecondWeaviate = "second-weaviate"
 )
 
 func startWeaviate(ctx context.Context,
 	enableModules []string, defaultVectorizerModule string,
 	extraEnvSettings map[string]string, networkName string,
-	weaviateImage, hostname string,
+	weaviateImage, hostname string, exposeGRPCPort bool,
 ) (*DockerContainer, error) {
 	fromDockerFile := testcontainers.FromDockerfile{}
 	if len(weaviateImage) == 0 {
@@ -38,12 +42,31 @@ func startWeaviate(ctx context.Context,
 		if err != nil {
 			return nil, err
 		}
-		// this must be an absolute path
-		contextPath := path[:strings.Index(path, "/test/modules")]
+		getContextPath := func(path string) string {
+			if strings.Contains(path, "test/acceptance_with_go_client") {
+				return path[:strings.Index(path, "/test/acceptance_with_go_client")]
+			}
+			if strings.Contains(path, "test/acceptance") {
+				return path[:strings.Index(path, "/test/acceptance")]
+			}
+			return path[:strings.Index(path, "/test/modules")]
+		}
+		targetArch := runtime.GOARCH
+		gitHashBytes, err := exec.Command("git", "rev-parse", "--short", "HEAD").CombinedOutput()
+		if err != nil {
+			return nil, err
+		}
+		gitHash := strings.ReplaceAll(string(gitHashBytes), "\n", "")
+		contextPath := getContextPath(path)
 		fromDockerFile = testcontainers.FromDockerfile{
-			Context:       contextPath,
-			Dockerfile:    "Dockerfile",
+			Context:    contextPath,
+			Dockerfile: "Dockerfile",
+			BuildArgs: map[string]*string{
+				"TARGETARCH": &targetArch,
+				"GITHASH":    &gitHash,
+			},
 			PrintBuildLog: true,
+			KeepImage:     false,
 		}
 	}
 	containerName := Weaviate
@@ -66,6 +89,17 @@ func startWeaviate(ctx context.Context,
 	for key, value := range extraEnvSettings {
 		env[key] = value
 	}
+	httpPort := nat.Port("8080/tcp")
+	exposedPorts := []string{"8080/tcp"}
+	waitStrategies := []wait.Strategy{
+		wait.ForListeningPort(httpPort),
+		wait.ForHTTP("/v1/.well-known/ready").WithPort(httpPort),
+	}
+	grpcPort := nat.Port("50051/tcp")
+	if exposeGRPCPort {
+		exposedPorts = append(exposedPorts, "50051/tcp")
+		waitStrategies = append(waitStrategies, wait.ForListeningPort(grpcPort))
+	}
 	req := testcontainers.ContainerRequest{
 		FromDockerfile: fromDockerFile,
 		Image:          weaviateImage,
@@ -74,23 +108,31 @@ func startWeaviate(ctx context.Context,
 		NetworkAliases: map[string][]string{
 			networkName: {containerName},
 		},
-		ExposedPorts: []string{"8080/tcp"},
+		Name:         containerName,
+		ExposedPorts: exposedPorts,
 		Env:          env,
-		WaitingFor: wait.
-			ForHTTP("/v1/.well-known/ready").
-			WithPort(nat.Port("8080")).
-			WithStartupTimeout(120 * time.Second),
+		WaitingFor:   wait.ForAll(waitStrategies...).WithStartupTimeoutDefault(120 * time.Second),
 	}
 	c, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: req,
 		Started:          true,
+		Reuse:            true,
 	})
 	if err != nil {
 		return nil, err
 	}
-	uri, err := c.Endpoint(ctx, "")
+	httpUri, err := c.PortEndpoint(ctx, httpPort, "")
 	if err != nil {
 		return nil, err
 	}
-	return &DockerContainer{containerName, uri, c, nil}, nil
+	endpoints := make(map[EndpointName]endpoint)
+	endpoints[HTTP] = endpoint{httpPort, httpUri}
+	if exposeGRPCPort {
+		grpcUri, err := c.PortEndpoint(ctx, grpcPort, "")
+		if err != nil {
+			return nil, err
+		}
+		endpoints[GRPC] = endpoint{grpcPort, grpcUri}
+	}
+	return &DockerContainer{containerName, endpoints, c, nil}, nil
 }

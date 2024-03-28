@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package filterext
@@ -15,10 +15,10 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/semi-technologies/weaviate/entities/filters"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/schema"
 	"github.com/stretchr/testify/assert"
+	"github.com/weaviate/weaviate/entities/filters"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
 )
 
 func Test_ExtractFlatFilters(t *testing.T) {
@@ -52,25 +52,6 @@ func Test_ExtractFlatFilters(t *testing.T) {
 					Value: &filters.Value{
 						Value: 42,
 						Type:  schema.DataTypeInt,
-					},
-				}},
-			},
-			{
-				name: "valid string filter",
-				input: &models.WhereFilter{
-					Operator:    "Equal",
-					ValueString: ptString("foo bar"),
-					Path:        []string{"stringField"},
-				},
-				expectedFilter: &filters.LocalFilter{Root: &filters.Clause{
-					Operator: filters.OperatorEqual,
-					On: &filters.Path{
-						Class:    schema.AssertValidClassName("Todo"),
-						Property: schema.AssertValidPropertyName("stringField"),
-					},
-					Value: &filters.Value{
-						Value: "foo bar",
-						Type:  schema.DataTypeString,
 					},
 				}},
 			},
@@ -172,6 +153,25 @@ func Test_ExtractFlatFilters(t *testing.T) {
 							Distance: 2.0,
 						},
 						Type: schema.DataTypeGeoCoordinates,
+					},
+				}},
+			},
+			{
+				name: "[deprecated string] valid string filter",
+				input: &models.WhereFilter{
+					Operator:    "Equal",
+					ValueString: ptString("foo bar"),
+					Path:        []string{"stringField"},
+				},
+				expectedFilter: &filters.LocalFilter{Root: &filters.Clause{
+					Operator: filters.OperatorEqual,
+					On: &filters.Path{
+						Class:    schema.AssertValidClassName("Todo"),
+						Property: schema.AssertValidPropertyName("stringField"),
+					},
+					Value: &filters.Value{
+						Value: "foo bar",
+						Type:  schema.DataTypeString,
 					},
 				}},
 			},
@@ -345,7 +345,7 @@ func Test_ExtractFlatFilters(t *testing.T) {
 		// all tests use int as the value type, value types are tested separately
 		tests := []test{
 			{
-				name: "chainied together using and",
+				name: "chained together using and",
 				input: &models.WhereFilter{
 					Operator: "And",
 					Operands: []*models.WhereFilter{
@@ -389,7 +389,7 @@ func Test_ExtractFlatFilters(t *testing.T) {
 				},
 			},
 			{
-				name: "chainied together using or",
+				name: "chained together using or",
 				input: &models.WhereFilter{
 					Operator: "Or",
 					Operands: []*models.WhereFilter{

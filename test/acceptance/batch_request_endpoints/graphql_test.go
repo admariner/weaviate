@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package batch_request_endpoints
@@ -26,10 +26,10 @@ import (
 	"fmt"
 	"testing"
 
-	graphql_client "github.com/semi-technologies/weaviate/client/graphql"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/test/helper"
 	"github.com/stretchr/testify/assert"
+	graphql_client "github.com/weaviate/weaviate/client/graphql"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/test/helper"
 )
 
 // TODO: change this test to simulate a successful query response when the test dataset is implemented.
@@ -42,7 +42,7 @@ func gqlResultsOrder(t *testing.T) {
 	expectedResult := "Syntax Error GraphQL request (1:1) Unexpected Name \"%s\"\n\n1: %s\n   ^\n"
 
 	// perform the query
-	gqlResponse, err := queryBatchEndpoint(t)
+	gqlResponse, err := queryBatchEndpoint(t, nil)
 	if err != nil {
 		t.Fatalf("The returned schema is not an JSON object: %v", err)
 	}
@@ -62,11 +62,27 @@ func gqlResultsOrder(t *testing.T) {
 	}
 }
 
+func gqlMalformedRequest(t *testing.T) {
+	vars := []int{1, 2, 3}
+	expectedResult := "422: expected map[string]interface{}, received %v"
+
+	// perform the query
+	gqlResponse, err := queryBatchEndpoint(t, vars)
+	if err != nil {
+		t.Fatalf("The returned schema is not an JSON object: %v", err)
+	}
+	// check if the batch response contains two batched responses
+	assert.Equal(t, 2, len(gqlResponse))
+
+	fullExpectedOutcome := fmt.Sprintf(expectedResult, vars)
+	assert.Equal(t, fullExpectedOutcome, gqlResponse[0].Errors[0].Message)
+	assert.Equal(t, fullExpectedOutcome, gqlResponse[1].Errors[0].Message)
+}
+
 // Helper functions
 // TODO: change this to a successful query when the test dataset is implemented. Make sure to implement a query returning 3 or more elements.
 // Perform a batch GraphQL query
-func queryBatchEndpoint(t *testing.T) (models.GraphQLResponses, error) {
-	var vars interface{} = nil
+func queryBatchEndpoint(t *testing.T, vars interface{}) (models.GraphQLResponses, error) {
 	query1 := &models.GraphQLQuery{OperationName: "testQuery", Query: "testQuery", Variables: vars}
 	query2 := &models.GraphQLQuery{OperationName: "testQuery2", Query: "testQuery2", Variables: vars}
 

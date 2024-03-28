@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 //go:build integrationTest
@@ -16,21 +16,20 @@ package db
 
 import (
 	"context"
-	"math/rand"
 	"testing"
-	"time"
 
-	"github.com/semi-technologies/weaviate/entities/additional"
-	"github.com/semi-technologies/weaviate/entities/filters"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	libschema "github.com/semi-technologies/weaviate/entities/schema"
-	"github.com/semi-technologies/weaviate/entities/search"
-	enthnsw "github.com/semi-technologies/weaviate/entities/vectorindex/hnsw"
-	"github.com/semi-technologies/weaviate/usecases/traverser"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/adapters/repos/db/inverted"
+	"github.com/weaviate/weaviate/entities/additional"
+	"github.com/weaviate/weaviate/entities/dto"
+	"github.com/weaviate/weaviate/entities/filters"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
+	libschema "github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/search"
+	enthnsw "github.com/weaviate/weaviate/entities/vectorindex/hnsw"
 )
 
 // Updates are non trivial, because vector indices are built under the
@@ -40,20 +39,22 @@ import (
 // needs to be tested extensively because there's a lot of room for error
 // regarding the clean up of Doc ID pointers in the inverted indices, etc.
 func TestUpdateJourney(t *testing.T) {
-	rand.Seed(time.Now().UnixNano())
 	dirName := t.TempDir()
 
 	logger := logrus.New()
-	schemaGetter := &fakeSchemaGetter{shardState: singleShardState()}
-	repo := New(logger, Config{
-		MemtablesFlushIdleAfter:   60,
+	schemaGetter := &fakeSchemaGetter{
+		schema:     schema.Schema{Objects: &models.Schema{Classes: nil}},
+		shardState: singleShardState(),
+	}
+	repo, err := New(logger, Config{
+		MemtablesFlushDirtyAfter:  60,
 		RootPath:                  dirName,
 		QueryMaximumResults:       10000,
 		MaxImportGoroutinesFactor: 1,
 	}, &fakeRemoteClient{}, &fakeNodeResolver{}, &fakeRemoteNodeClient{}, &fakeReplicationClient{}, nil)
-	repo.SetSchemaGetter(schemaGetter)
-	err := repo.WaitForStartup(testCtx())
 	require.Nil(t, err)
+	repo.SetSchemaGetter(schemaGetter)
+	require.Nil(t, repo.WaitForStartup(testCtx()))
 	defer repo.Shutdown(context.Background())
 	migrator := NewMigrator(repo, logger)
 
@@ -71,16 +72,26 @@ func TestUpdateJourney(t *testing.T) {
 
 	t.Run("import some objects", func(t *testing.T) {
 		for _, res := range updateTestData() {
-			err := repo.PutObject(context.Background(), res.Object(), res.Vector)
+			err := repo.PutObject(context.Background(), res.Object(), res.Vector, nil, nil)
 			require.Nil(t, err)
 		}
+
+		tracker := getTracker(repo, "UpdateTestClass")
+
+		require.Nil(t, err)
+
+		sum, count, mean, err := tracker.PropertyTally("name")
+		require.Nil(t, err)
+		assert.Equal(t, 4, sum)
+		assert.Equal(t, 4, count)
+		assert.InEpsilon(t, 1, mean, 0.1)
 	})
 
 	searchVector := []float32{0.1, 0.1, 0.1}
 
 	t.Run("verify vector search results are initially as expected",
 		func(t *testing.T) {
-			res, err := repo.VectorClassSearch(context.Background(), traverser.GetParams{
+			res, err := repo.VectorSearch(context.Background(), dto.GetParams{
 				ClassName:    "UpdateTestClass",
 				SearchVector: searchVector,
 				Pagination: &filters.Pagination{
@@ -88,13 +99,13 @@ func TestUpdateJourney(t *testing.T) {
 				},
 			})
 
-			expectedOrder := []interface{}{
-				"element-0", "element-2", "element-3", "element-1",
+			expectedInAnyOrder := []interface{}{
+				"element-0", "element-1", "element-2", "element-3",
 			}
 
 			require.Nil(t, err)
 			require.Len(t, res, 4)
-			assert.Equal(t, expectedOrder, extractPropValues(res, "name"))
+			assert.ElementsMatch(t, expectedInAnyOrder, extractPropValues(res, "name"))
 		})
 
 	searchInv := func(t *testing.T, op filters.Operator, value int) []interface{} {
@@ -111,29 +122,29 @@ func TestUpdateJourney(t *testing.T) {
 						Value: value,
 					},
 				},
-			}, nil, additional.Properties{})
+			}, nil, additional.Properties{}, "")
 		require.Nil(t, err)
 		return extractPropValues(res, "name")
 	}
 
 	t.Run("verify invert index results are initially as expected",
 		func(t *testing.T) {
-			expectedOrder := []interface{}{
+			expectedInAnyOrder := []interface{}{
 				"element-0", "element-1", "element-2", "element-3",
 			}
-			assert.Equal(t, expectedOrder, searchInv(t, filters.OperatorGreaterThanEqual, 0))
+			assert.ElementsMatch(t, expectedInAnyOrder, searchInv(t, filters.OperatorGreaterThanEqual, 0))
 
-			expectedOrder = []interface{}{"element-0"}
-			assert.Equal(t, expectedOrder, searchInv(t, filters.OperatorEqual, 0))
+			expectedInAnyOrder = []interface{}{"element-0"}
+			assert.ElementsMatch(t, expectedInAnyOrder, searchInv(t, filters.OperatorEqual, 0))
 
-			expectedOrder = []interface{}{"element-1"}
-			assert.Equal(t, expectedOrder, searchInv(t, filters.OperatorEqual, 10))
+			expectedInAnyOrder = []interface{}{"element-1"}
+			assert.ElementsMatch(t, expectedInAnyOrder, searchInv(t, filters.OperatorEqual, 10))
 
-			expectedOrder = []interface{}{"element-2"}
-			assert.Equal(t, expectedOrder, searchInv(t, filters.OperatorEqual, 20))
+			expectedInAnyOrder = []interface{}{"element-2"}
+			assert.ElementsMatch(t, expectedInAnyOrder, searchInv(t, filters.OperatorEqual, 20))
 
-			expectedOrder = []interface{}{"element-3"}
-			assert.Equal(t, expectedOrder, searchInv(t, filters.OperatorEqual, 30))
+			expectedInAnyOrder = []interface{}{"element-3"}
+			assert.ElementsMatch(t, expectedInAnyOrder, searchInv(t, filters.OperatorEqual, 30))
 		})
 
 	t.Run("update vector position of one item to move it into a different direction",
@@ -142,16 +153,25 @@ func TestUpdateJourney(t *testing.T) {
 			updatedVec := []float32{-0.1, -0.12, -0.105}
 			id := updateTestData()[0].ID
 
-			old, err := repo.ObjectByID(context.Background(), id, search.SelectProperties{},
-				additional.Properties{})
+			old, err := repo.ObjectByID(context.Background(), id, search.SelectProperties{}, additional.Properties{}, "")
 			require.Nil(t, err)
 
-			err = repo.PutObject(context.Background(), old.Object(), updatedVec)
+			err = repo.PutObject(context.Background(), old.Object(), updatedVec, nil, nil)
 			require.Nil(t, err)
+
+			tracker := getTracker(repo, "UpdateTestClass")
+
+			require.Nil(t, err)
+
+			sum, count, mean, err := tracker.PropertyTally("name")
+			require.Nil(t, err)
+			assert.Equal(t, 4, sum)
+			assert.Equal(t, 4, count)
+			assert.InEpsilon(t, 1, mean, 0.1)
 		})
 
 	t.Run("verify new vector search results are as expected", func(t *testing.T) {
-		res, err := repo.VectorClassSearch(context.Background(), traverser.GetParams{
+		res, err := repo.VectorSearch(context.Background(), dto.GetParams{
 			ClassName:    "UpdateTestClass",
 			SearchVector: searchVector,
 			Pagination: &filters.Pagination{
@@ -159,32 +179,32 @@ func TestUpdateJourney(t *testing.T) {
 			},
 		})
 
-		expectedOrder := []interface{}{
-			"element-2", "element-3", "element-1", "element-0",
+		expectedInAnyOrder := []interface{}{
+			"element-0", "element-1", "element-2", "element-3",
 		}
 
 		require.Nil(t, err)
 		require.Len(t, res, 4)
-		assert.Equal(t, expectedOrder, extractPropValues(res, "name"))
+		assert.ElementsMatch(t, expectedInAnyOrder, extractPropValues(res, "name"))
 	})
 
 	t.Run("verify invert results still work properly", func(t *testing.T) {
-		expectedOrder := []interface{}{
+		expectedInAnyOrder := []interface{}{
 			"element-0", "element-1", "element-2", "element-3",
 		}
-		assert.Equal(t, expectedOrder, searchInv(t, filters.OperatorGreaterThanEqual, 0))
+		assert.ElementsMatch(t, expectedInAnyOrder, searchInv(t, filters.OperatorGreaterThanEqual, 0))
 
-		expectedOrder = []interface{}{"element-0"}
-		assert.Equal(t, expectedOrder, searchInv(t, filters.OperatorEqual, 0))
+		expectedInAnyOrder = []interface{}{"element-0"}
+		assert.ElementsMatch(t, expectedInAnyOrder, searchInv(t, filters.OperatorEqual, 0))
 
-		expectedOrder = []interface{}{"element-1"}
-		assert.Equal(t, expectedOrder, searchInv(t, filters.OperatorEqual, 10))
+		expectedInAnyOrder = []interface{}{"element-1"}
+		assert.ElementsMatch(t, expectedInAnyOrder, searchInv(t, filters.OperatorEqual, 10))
 
-		expectedOrder = []interface{}{"element-2"}
-		assert.Equal(t, expectedOrder, searchInv(t, filters.OperatorEqual, 20))
+		expectedInAnyOrder = []interface{}{"element-2"}
+		assert.ElementsMatch(t, expectedInAnyOrder, searchInv(t, filters.OperatorEqual, 20))
 
-		expectedOrder = []interface{}{"element-3"}
-		assert.Equal(t, expectedOrder, searchInv(t, filters.OperatorEqual, 30))
+		expectedInAnyOrder = []interface{}{"element-3"}
+		assert.ElementsMatch(t, expectedInAnyOrder, searchInv(t, filters.OperatorEqual, 30))
 	})
 
 	t.Run("update a second object and modify vector and invert props at the same time",
@@ -195,18 +215,26 @@ func TestUpdateJourney(t *testing.T) {
 			updatedVec := []float32{-0.1, -0.12, -0.105123}
 			id := updateTestData()[2].ID
 
-			old, err := repo.ObjectByID(context.Background(), id, search.SelectProperties{},
-				additional.Properties{})
+			old, err := repo.ObjectByID(context.Background(), id, search.SelectProperties{}, additional.Properties{}, "")
 			require.Nil(t, err)
 
 			old.Schema.(map[string]interface{})["intProp"] = int64(21)
-
-			err = repo.PutObject(context.Background(), old.Object(), updatedVec)
+			err = repo.PutObject(context.Background(), old.Object(), updatedVec, nil, nil)
 			require.Nil(t, err)
+
+			tracker := getTracker(repo, "UpdateTestClass")
+
+			require.Nil(t, err)
+
+			sum, count, mean, err := tracker.PropertyTally("name")
+			require.Nil(t, err)
+			assert.Equal(t, 4, sum)
+			assert.Equal(t, 4, count)
+			assert.InEpsilon(t, 1, mean, 0.1)
 		})
 
 	t.Run("verify new vector search results are as expected", func(t *testing.T) {
-		res, err := repo.VectorClassSearch(context.Background(), traverser.GetParams{
+		res, err := repo.VectorSearch(context.Background(), dto.GetParams{
 			ClassName:    "UpdateTestClass",
 			SearchVector: searchVector,
 			Pagination: &filters.Pagination{
@@ -214,35 +242,64 @@ func TestUpdateJourney(t *testing.T) {
 			},
 		})
 
-		expectedOrder := []interface{}{
-			"element-3", "element-1", "element-0", "element-2",
+		expectedInAnyOrder := []interface{}{
+			"element-0", "element-1", "element-2", "element-3",
 		}
 
 		require.Nil(t, err)
 		require.Len(t, res, 4)
-		assert.Equal(t, expectedOrder, extractPropValues(res, "name"))
+		assert.ElementsMatch(t, expectedInAnyOrder, extractPropValues(res, "name"))
 	})
 
 	t.Run("verify invert results have been updated correctly", func(t *testing.T) {
-		expectedOrder := []interface{}{
+		expectedInAnyOrder := []interface{}{
 			"element-0", "element-1", "element-2", "element-3",
 		}
-		assert.Equal(t, expectedOrder, searchInv(t, filters.OperatorGreaterThanEqual, 0))
+		assert.ElementsMatch(t, expectedInAnyOrder, searchInv(t, filters.OperatorGreaterThanEqual, 0))
 
-		expectedOrder = []interface{}{"element-0"}
-		assert.Equal(t, expectedOrder, searchInv(t, filters.OperatorEqual, 0))
+		expectedInAnyOrder = []interface{}{"element-0"}
+		assert.ElementsMatch(t, expectedInAnyOrder, searchInv(t, filters.OperatorEqual, 0))
 
-		expectedOrder = []interface{}{"element-1"}
-		assert.Equal(t, expectedOrder, searchInv(t, filters.OperatorEqual, 10))
+		expectedInAnyOrder = []interface{}{"element-1"}
+		assert.ElementsMatch(t, expectedInAnyOrder, searchInv(t, filters.OperatorEqual, 10))
 
-		expectedOrder = []interface{}{} // value is no longer 20, but 21
-		assert.Equal(t, expectedOrder, searchInv(t, filters.OperatorEqual, 20))
+		expectedInAnyOrder = []interface{}{} // value is no longer 20, but 21
+		assert.ElementsMatch(t, expectedInAnyOrder, searchInv(t, filters.OperatorEqual, 20))
 
-		expectedOrder = []interface{}{"element-2"}
-		assert.Equal(t, expectedOrder, searchInv(t, filters.OperatorEqual, 21))
+		expectedInAnyOrder = []interface{}{"element-2"}
+		assert.ElementsMatch(t, expectedInAnyOrder, searchInv(t, filters.OperatorEqual, 21))
 
-		expectedOrder = []interface{}{"element-3"}
-		assert.Equal(t, expectedOrder, searchInv(t, filters.OperatorEqual, 30))
+		expectedInAnyOrder = []interface{}{"element-3"}
+		assert.ElementsMatch(t, expectedInAnyOrder, searchInv(t, filters.OperatorEqual, 30))
+	})
+
+	t.Run("test recount", func(t *testing.T) {
+		tracker := getTracker(repo, "UpdateTestClass")
+
+		require.Nil(t, err)
+
+		sum, count, mean, err := tracker.PropertyTally("name")
+		require.Nil(t, err)
+		assert.Equal(t, 4, sum)
+		assert.Equal(t, 4, count)
+		assert.InEpsilon(t, 1, mean, 0.1)
+
+		tracker.Clear()
+		sum, count, mean, err = tracker.PropertyTally("name")
+		require.Nil(t, err)
+		assert.Equal(t, 0, sum)
+		assert.Equal(t, 0, count)
+		assert.Equal(t, float64(0), mean)
+
+		logger := logrus.New()
+		migrator := NewMigrator(repo, logger)
+		migrator.RecountProperties(context.Background())
+
+		sum, count, mean, err = tracker.PropertyTally("name")
+		require.Nil(t, err)
+		assert.Equal(t, 4, sum)
+		assert.Equal(t, 4, count)
+		assert.Equal(t, float64(1), mean)
 	})
 }
 
@@ -259,8 +316,9 @@ func updateTestClass() *models.Class {
 				Name:     "intProp",
 			},
 			{
-				DataType: []string{string(schema.DataTypeString)},
-				Name:     "name",
+				DataType:     schema.DataTypeText.PropString(),
+				Tokenization: models.PropertyTokenizationWhitespace,
+				Name:         "name",
 			},
 		},
 	}
@@ -317,4 +375,17 @@ func extractPropValues(in search.Results, propName string) []interface{} {
 	}
 
 	return out
+}
+
+func getTracker(repo *DB, className string) *inverted.JsonPropertyLengthTracker {
+	index := repo.GetIndex("UpdateTestClass")
+	var shard ShardLike
+	index.ForEachShard(func(name string, shardv ShardLike) error {
+		shard = shardv
+		return nil
+	})
+
+	tracker := shard.GetPropertyLengthTracker()
+
+	return tracker
 }

@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package filters
@@ -15,18 +15,18 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/semi-technologies/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/schema"
 )
 
 // Represents the path in a filter.
 // Either RelationProperty or PrimitiveProperty must be empty (e.g. "").
 type Path struct {
-	Class    schema.ClassName
-	Property schema.PropertyName
+	Class    schema.ClassName    `json:"class"`
+	Property schema.PropertyName `json:"property"`
 
 	// If nil, then this is the property we're interested in.
 	// If a pointer to another Path, the constraint applies to that one.
-	Child *Path
+	Child *Path `json:"child"`
 }
 
 // GetInnerMost recursively searches for child paths, only when no more
@@ -85,7 +85,7 @@ func ParsePath(pathElements []interface{}, rootClass string) (*Path, error) {
 	pathElements = append([]interface{}{rootClass}, pathElements...)
 
 	// The sentinel is used to bootstrap the inlined recursion.
-	// we return sentinal.Child at the end.
+	// we return sentinel.Child at the end.
 	var sentinel Path
 
 	// Keep track of where we are in the path (e.g. always points to latest Path segment)

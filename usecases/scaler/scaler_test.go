@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package scaler
@@ -18,9 +18,9 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/semi-technologies/weaviate/entities/backup"
-	"github.com/semi-technologies/weaviate/usecases/sharding"
 	"github.com/stretchr/testify/assert"
+	"github.com/weaviate/weaviate/entities/backup"
+	"github.com/weaviate/weaviate/usecases/sharding"
 )
 
 func TestScalerScale(t *testing.T) {
@@ -57,7 +57,7 @@ func TestScalerScaleOut(t *testing.T) {
 		old     = sharding.Config{}
 		bak     = backup.ClassDescriptor{
 			Name: "C",
-			Shards: []backup.ShardDescriptor{
+			Shards: []*backup.ShardDescriptor{
 				{
 					Name: "S1", Files: []string{"f1"},
 					PropLengthTrackerPath: "f4",

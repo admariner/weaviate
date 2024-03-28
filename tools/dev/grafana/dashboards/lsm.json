@@ -32,7 +32,7 @@
         "type": "prometheus",
         "uid": "Prometheus"
       },
-      "description": "Replace is used primarly for object storage, but also for inverted index hash buckets.",
+      "description": "Replace is used primarly for object storage.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -476,7 +476,7 @@
             "uid": "Prometheus"
           },
           "editorMode": "code",
-          "expr": "rate(lsm_bloom_filters_duration_ms_sum{strategy=\"replace\"}[5s])/rate(lsm_bloom_filters_duration_ms_count{strategy=\"replace\"}[5s])",
+          "expr": "rate(lsm_bloom_filters_duration_ms_sum{strategy=\"replace\"}[$__interval])/rate(lsm_bloom_filters_duration_ms_count{strategy=\"replace\"}[$__interval])",
           "legendFormat": "{{operation}} ({{class_name}}/{{shard_name}})",
           "range": true,
           "refId": "A"
@@ -640,7 +640,7 @@
         "type": "prometheus",
         "uid": "Prometheus"
       },
-      "description": "The grouping is done by strategy which means the reported Object storage value is slightly too high, as all inverted index hash buckets are also of type replace.",
+      "description": "The grouping is done by strategy which means the reported Object storage value may be slightly too high, due to other buckets using replace strategy.",
       "fieldConfig": {
         "defaults": {
           "color": {

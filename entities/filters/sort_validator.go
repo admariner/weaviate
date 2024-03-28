@@ -4,16 +4,18 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package filters
 
 import (
+	"fmt"
+
 	"github.com/pkg/errors"
-	"github.com/semi-technologies/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/schema"
 )
 
 func ValidateSort(sch schema.Schema, className schema.ClassName, sort []Sort) error {
@@ -62,6 +64,13 @@ func validateSortClause(sch schema.Schema, className schema.ClassName, sort Sort
 		if err != nil {
 			return err
 		}
+
+		if isUUIDType(prop.DataType[0]) {
+			return fmt.Errorf("prop %q is of type uuid/uuid[]: "+
+				"sorting by uuid is currently not supported - if you believe it should be, "+
+				"please open a feature request on github.com/weaviate/weaviate", prop.Name)
+		}
+
 		if schema.IsRefDataType(prop.DataType) {
 			return errors.Errorf("sorting by reference not supported, "+
 				"property %q is a ref prop to the class %q", propName, prop.DataType[0])

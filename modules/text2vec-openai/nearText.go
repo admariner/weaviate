@@ -4,21 +4,21 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package modopenai
 
 import (
-	"github.com/semi-technologies/weaviate/entities/modulecapabilities"
-	"github.com/semi-technologies/weaviate/modules/text2vec-openai/neartext"
+	"github.com/weaviate/weaviate/entities/modulecapabilities"
+	"github.com/weaviate/weaviate/usecases/modulecomponents/arguments/nearText"
 )
 
 func (m *OpenAIModule) initNearText() error {
-	m.searcher = neartext.NewSearcher(m.vectorizer)
-	m.graphqlProvider = neartext.New(m.nearTextTransformer)
+	m.searcher = nearText.NewSearcher(m.vectorizer)
+	m.graphqlProvider = nearText.New(m.nearTextTransformer)
 	return nil
 }
 

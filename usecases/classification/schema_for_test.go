@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package classification
@@ -15,9 +15,9 @@ import (
 	"fmt"
 
 	"github.com/go-openapi/strfmt"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	"github.com/semi-technologies/weaviate/entities/search"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/search"
 )
 
 func testSchema() schema.Schema {
@@ -38,8 +38,9 @@ func testSchema() schema.Schema {
 							DataType: []string{string(schema.DataTypeText)},
 						},
 						{
-							Name:     "name",
-							DataType: []string{string(schema.DataTypeString)},
+							Name:         "name",
+							DataType:     schema.DataTypeText.PropString(),
+							Tokenization: models.PropertyTokenizationWhitespace,
 						},
 						{
 							Name:     "exactCategory",
@@ -56,6 +57,10 @@ func testSchema() schema.Schema {
 						{
 							Name:     "anyCategory",
 							DataType: []string{"MainCategory", "ExactCategory"},
+						},
+						{
+							Name:     "words",
+							DataType: schema.DataTypeInt.PropString(),
 						},
 					},
 				},

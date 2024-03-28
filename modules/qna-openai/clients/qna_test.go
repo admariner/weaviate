@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package clients
@@ -19,11 +19,11 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/semi-technologies/weaviate/modules/qna-openai/ent"
 	"github.com/sirupsen/logrus"
 	"github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/modules/qna-openai/ent"
 )
 
 func nullLogger() logrus.FieldLogger {
@@ -48,8 +48,10 @@ func TestGetAnswer(t *testing.T) {
 		server := httptest.NewServer(handler)
 		defer server.Close()
 
-		c := New("apiKey", nullLogger())
-		c.host = server.URL
+		c := New("openAIApiKey", "", "", 0, nullLogger())
+		c.buildUrlFn = func(baseURL, resourceName, deploymentID string) (string, error) {
+			return buildUrl(server.URL, resourceName, deploymentID)
+		}
 
 		expected := ent.AnswerResult{
 			Text:     "My name is John",
@@ -74,13 +76,30 @@ func TestGetAnswer(t *testing.T) {
 		})
 		defer server.Close()
 
-		c := New("apiKey", nullLogger())
-		c.host = server.URL
+		c := New("openAIApiKey", "", "", 0, nullLogger())
+		c.buildUrlFn = func(baseURL, resourceName, deploymentID string) (string, error) {
+			return buildUrl(server.URL, resourceName, deploymentID)
+		}
 
 		_, err := c.Answer(context.Background(), "My name is John", "What is my name?", nil)
 
 		require.NotNil(t, err)
-		assert.Contains(t, err.Error(), "some error from the server")
+		assert.Error(t, err, "connection to OpenAI failed with status: 500 error: some error from the server")
+	})
+
+	t.Run("when X-OpenAI-BaseURL header is passed", func(t *testing.T) {
+		c := New("openAIApiKey", "", "", 0, nullLogger())
+
+		ctxWithValue := context.WithValue(context.Background(),
+			"X-Openai-Baseurl", []string{"http://base-url-passed-in-header.com"})
+
+		buildURL, err := c.buildOpenAIUrl(ctxWithValue, "http://default-url.com", "", "")
+		require.NoError(t, err)
+		assert.Equal(t, "http://base-url-passed-in-header.com/v1/completions", buildURL)
+
+		buildURL, err = c.buildOpenAIUrl(context.TODO(), "http://default-url.com", "", "")
+		require.NoError(t, err)
+		assert.Equal(t, "http://default-url.com/v1/completions", buildURL)
 	})
 }
 
@@ -114,6 +133,59 @@ func (f *testAnswerHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	require.Nil(f.t, err)
 
 	w.Write(outBytes)
+}
+
+func TestOpenAIApiErrorDecode(t *testing.T) {
+	t.Run("getModelStringQuery", func(t *testing.T) {
+		type args struct {
+			response []byte
+		}
+		tests := []struct {
+			name string
+			args args
+			want string
+		}{
+			{
+				name: "Error code: missing property",
+				args: args{
+					response: []byte(`{"message": "failed", "type": "error", "param": "arg..."}`),
+				},
+				want: "",
+			},
+			{
+				name: "Error code: as int",
+				args: args{
+					response: []byte(`{"message": "failed", "type": "error", "param": "arg...", "code": 500}`),
+				},
+				want: "500",
+			},
+			{
+				name: "Error code as string number",
+				args: args{
+					response: []byte(`{"message": "failed", "type": "error", "param": "arg...", "code": "500"}`),
+				},
+				want: "500",
+			},
+			{
+				name: "Error code as string text",
+				args: args{
+					response: []byte(`{"message": "failed", "type": "error", "param": "arg...", "code": "invalid_api_key"}`),
+				},
+				want: "invalid_api_key",
+			},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				var got *openAIApiError
+				err := json.Unmarshal(tt.args.response, &got)
+				require.NoError(t, err)
+
+				if got.Code.String() != tt.want {
+					t.Errorf("OpenAIerror.code = %v, want %v", got.Code, tt.want)
+				}
+			})
+		}
+	})
 }
 
 func ptString(in string) *string {

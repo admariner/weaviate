@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package hnsw
@@ -19,8 +19,9 @@ import (
 	"os"
 
 	"github.com/pkg/errors"
-	"github.com/semi-technologies/weaviate/entities/errorcompounder"
 	"github.com/sirupsen/logrus"
+	"github.com/weaviate/weaviate/adapters/repos/db/vector/compressionhelpers"
+	"github.com/weaviate/weaviate/entities/errorcompounder"
 )
 
 type MemoryCondensor struct {
@@ -34,6 +35,7 @@ func (c *MemoryCondensor) Do(fileName string) error {
 	if err != nil {
 		return errors.Wrap(err, "open commit log to be condensed")
 	}
+	defer fd.Close()
 	fdBuf := bufio.NewReaderSize(fd, 256*1024)
 
 	res, _, err := NewDeserializer(c.logger).Do(fdBuf, nil, true)
@@ -50,6 +52,12 @@ func (c *MemoryCondensor) Do(fileName string) error {
 	c.newLogFile = newLogFile
 
 	c.newLog = NewWriterSize(c.newLogFile, 1*1024*1024)
+
+	if res.Compressed {
+		if err := c.AddPQ(res.PQData); err != nil {
+			return fmt.Errorf("write pq data: %w", err)
+		}
+	}
 
 	for _, node := range res.Nodes {
 		if node == nil {
@@ -225,6 +233,27 @@ func (c *MemoryCondensor) AddTombstone(nodeid uint64) error {
 	ec.Add(c.writeUint64(c.newLog, nodeid))
 
 	return ec.ToError()
+}
+
+func (c *MemoryCondensor) AddPQ(data compressionhelpers.PQData) error {
+	toWrite := make([]byte, 10)
+	toWrite[0] = byte(AddPQ)
+	binary.LittleEndian.PutUint16(toWrite[1:3], data.Dimensions)
+	toWrite[3] = byte(data.EncoderType)
+	binary.LittleEndian.PutUint16(toWrite[4:6], data.Ks)
+	binary.LittleEndian.PutUint16(toWrite[6:8], data.M)
+	toWrite[8] = data.EncoderDistribution
+	if data.UseBitsEncoding {
+		toWrite[9] = 1
+	} else {
+		toWrite[9] = 0
+	}
+
+	for _, encoder := range data.Encoders {
+		toWrite = append(toWrite, encoder.ExposeDataForRestore()...)
+	}
+	_, err := c.newLog.Write(toWrite)
+	return err
 }
 
 func NewMemoryCondensor(logger logrus.FieldLogger) *MemoryCondensor {

@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package helper
@@ -19,11 +19,12 @@ import (
 	"testing"
 
 	"github.com/davecgh/go-spew/spew"
-	"github.com/semi-technologies/weaviate/entities/schema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 	"github.com/tailor-inc/graphql"
 	"github.com/tailor-inc/graphql/gqlerrors"
+	"github.com/weaviate/weaviate/entities/schema"
 )
 
 type MockResolver struct {
@@ -75,12 +76,15 @@ func (mr *MockResolver) AssertResolve(t *testing.T, query string) *GraphQLResult
 	return &GraphQLResult{Result: result.Data}
 }
 
-func (mr *MockResolver) AssertFailToResolve(t *testing.T, query string) {
+func (mr *MockResolver) AssertFailToResolve(t *testing.T, query string, errors ...string) {
 	result := mr.Resolve(query)
 	if len(result.Errors) == 0 {
 		t.Fatalf("Expected to not resolve; %#v", result.Errors)
 	} else {
 		t.Log("Resolve failed, as expected, with error", result.Errors)
+	}
+	if len(errors) > 0 {
+		require.Equal(t, errors[0], result.Errors[0].Error())
 	}
 }
 

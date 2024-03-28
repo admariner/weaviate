@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 //go:build integrationTest
@@ -17,44 +17,45 @@ package db
 import (
 	"context"
 	"fmt"
-	"math/rand"
 	"testing"
 	"time"
 
 	"github.com/go-openapi/strfmt"
 	"github.com/google/uuid"
-	"github.com/semi-technologies/weaviate/entities/additional"
-	"github.com/semi-technologies/weaviate/entities/filters"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	"github.com/semi-technologies/weaviate/entities/schema/crossref"
-	enthnsw "github.com/semi-technologies/weaviate/entities/vectorindex/hnsw"
-	"github.com/semi-technologies/weaviate/usecases/objects"
-	"github.com/semi-technologies/weaviate/usecases/traverser"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/entities/additional"
+	"github.com/weaviate/weaviate/entities/dto"
+	"github.com/weaviate/weaviate/entities/filters"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/schema/crossref"
+	enthnsw "github.com/weaviate/weaviate/entities/vectorindex/hnsw"
+	"github.com/weaviate/weaviate/usecases/objects"
 )
 
 func Test_MergingObjects(t *testing.T) {
-	rand.Seed(time.Now().UnixNano())
 	dirName := t.TempDir()
 
 	logger := logrus.New()
-	schemaGetter := &fakeSchemaGetter{shardState: singleShardState()}
-	repo := New(logger, Config{
-		MemtablesFlushIdleAfter:   60,
+	schemaGetter := &fakeSchemaGetter{
+		schema:     schema.Schema{Objects: &models.Schema{Classes: nil}},
+		shardState: singleShardState(),
+	}
+	repo, err := New(logger, Config{
+		MemtablesFlushDirtyAfter:  60,
 		RootPath:                  dirName,
 		MaxImportGoroutinesFactor: 1,
 		TrackVectorDimensions:     true,
 	}, &fakeRemoteClient{}, &fakeNodeResolver{}, &fakeRemoteNodeClient{}, &fakeReplicationClient{}, nil)
-	repo.SetSchemaGetter(schemaGetter)
-	err := repo.WaitForStartup(testCtx())
 	require.Nil(t, err)
+	repo.SetSchemaGetter(schemaGetter)
+	require.Nil(t, repo.WaitForStartup(testCtx()))
 	defer repo.Shutdown(context.Background())
 	migrator := NewMigrator(repo, logger)
 
-	schema := schema.Schema{
+	sch := schema.Schema{
 		Objects: &models.Schema{
 			Classes: []*models.Class{
 				{
@@ -63,8 +64,9 @@ func Test_MergingObjects(t *testing.T) {
 					InvertedIndexConfig: invertedConfig(),
 					Properties: []*models.Property{
 						{
-							Name:     "name",
-							DataType: []string{"string"},
+							Name:         "name",
+							DataType:     schema.DataTypeText.PropString(),
+							Tokenization: models.PropertyTokenizationWhitespace,
 						},
 					},
 				},
@@ -74,8 +76,9 @@ func Test_MergingObjects(t *testing.T) {
 					InvertedIndexConfig: invertedConfig(),
 					Properties: []*models.Property{ // tries to have "one of each property type"
 						{
-							Name:     "string",
-							DataType: []string{"string"},
+							Name:         "string",
+							DataType:     schema.DataTypeText.PropString(),
+							Tokenization: models.PropertyTokenizationWhitespace,
 						},
 						{
 							Name:     "text",
@@ -109,8 +112,9 @@ func Test_MergingObjects(t *testing.T) {
 					InvertedIndexConfig: invertedConfig(),
 					Properties: []*models.Property{
 						{
-							Name:     "foo",
-							DataType: []string{"string"},
+							Name:         "foo",
+							DataType:     schema.DataTypeText.PropString(),
+							Tokenization: models.PropertyTokenizationWhitespace,
 						},
 					},
 				},
@@ -119,7 +123,7 @@ func Test_MergingObjects(t *testing.T) {
 	}
 
 	t.Run("add required classes", func(t *testing.T) {
-		for _, class := range schema.Objects.Classes {
+		for _, class := range sch.Objects.Classes {
 			t.Run(fmt.Sprintf("add %s", class.Class), func(t *testing.T) {
 				err := migrator.AddClass(context.Background(), class, schemaGetter.shardState)
 				require.Nil(t, err)
@@ -127,7 +131,7 @@ func Test_MergingObjects(t *testing.T) {
 		}
 	})
 
-	schemaGetter.schema = schema
+	schemaGetter.schema = sch
 
 	target1 := strfmt.UUID("897be7cc-1ae1-4b40-89d9-d3ea98037638")
 	target2 := strfmt.UUID("5cc94aba-93e4-408a-ab19-3d803216a04e")
@@ -146,7 +150,7 @@ func Test_MergingObjects(t *testing.T) {
 			},
 			CreationTimeUnix:   now,
 			LastUpdateTimeUnix: now,
-		}, []float32{0.5})
+		}, []float32{0.5}, nil, nil)
 		require.Nil(t, err)
 
 		targetDimensionsBefore := GetDimensionsFromRepo(repo, "MergeTestTarget")
@@ -160,7 +164,7 @@ func Test_MergingObjects(t *testing.T) {
 				Properties: map[string]interface{}{
 					"name": fmt.Sprintf("target item %d", i),
 				},
-			}, []float32{0.5})
+			}, []float32{0.5}, nil, nil)
 			require.Nil(t, err)
 		}
 
@@ -175,7 +179,7 @@ func Test_MergingObjects(t *testing.T) {
 			},
 			CreationTimeUnix:   now,
 			LastUpdateTimeUnix: now,
-		}, nil)
+		}, nil, nil, nil)
 		require.Nil(t, err)
 
 		targetDimensionsAfterNoVec := GetDimensionsFromRepo(repo, "MergeTestTarget")
@@ -187,7 +191,7 @@ func Test_MergingObjects(t *testing.T) {
 	t.Run("fetch original object's update timestamp", func(t *testing.T) {
 		source, err := repo.ObjectByID(context.Background(), sourceID, nil, additional.Properties{
 			LastUpdateTimeUnix: true,
-		})
+		}, "")
 		require.Nil(t, err)
 
 		lastUpdateTimeUnix = source.Object().LastUpdateTimeUnix
@@ -215,24 +219,24 @@ func Test_MergingObjects(t *testing.T) {
 			UpdateTime: time.Now().UnixNano() / int64(time.Millisecond),
 		}
 
-		err := repo.Merge(context.Background(), md)
+		err := repo.Merge(context.Background(), md, nil, "")
 		assert.Nil(t, err)
 	})
 
 	t.Run("compare merge object's update time with original", func(t *testing.T) {
 		source, err := repo.ObjectByID(context.Background(), sourceID, nil, additional.Properties{
 			LastUpdateTimeUnix: true,
-		})
+		}, "")
 		require.Nil(t, err)
 
 		assert.Greater(t, source.Object().LastUpdateTimeUnix, lastUpdateTimeUnix)
 	})
 
 	t.Run("check that the object was successfully merged", func(t *testing.T) {
-		source, err := repo.ObjectByID(context.Background(), sourceID, nil, additional.Properties{})
+		source, err := repo.ObjectByID(context.Background(), sourceID, nil, additional.Properties{}, "")
 		require.Nil(t, err)
 
-		schema := source.Object().Properties.(map[string]interface{})
+		sch := source.Object().Properties.(map[string]interface{})
 		expectedSchema := map[string]interface{}{
 			// from original
 			"string": "only the string prop set",
@@ -247,7 +251,7 @@ func Test_MergingObjects(t *testing.T) {
 			"text": "some text",
 		}
 
-		assert.Equal(t, expectedSchema, schema)
+		assert.Equal(t, expectedSchema, sch)
 	})
 
 	t.Run("trying to merge from non-existing index", func(t *testing.T) {
@@ -259,7 +263,7 @@ func Test_MergingObjects(t *testing.T) {
 			},
 		}
 
-		err := repo.Merge(context.Background(), md)
+		err := repo.Merge(context.Background(), md, nil, "")
 		assert.Equal(t, fmt.Errorf(
 			"merge from non-existing index for WrongClass"), err)
 	})
@@ -268,7 +272,7 @@ func Test_MergingObjects(t *testing.T) {
 			"weaviate://localhost/MergeTestSource/%s/toTarget", sourceID))
 		require.Nil(t, err)
 		targets := []strfmt.UUID{target1}
-		refs := make(objects.BatchReferences, len(targets), len(targets))
+		refs := make(objects.BatchReferences, len(targets))
 		for i, target := range targets {
 			to, err := crossref.Parse(fmt.Sprintf("weaviate://localhost/%s", target))
 			require.Nil(t, err)
@@ -286,18 +290,18 @@ func Test_MergingObjects(t *testing.T) {
 			},
 			References: refs,
 		}
-		err = repo.Merge(context.Background(), md)
+		err = repo.Merge(context.Background(), md, nil, "")
 		assert.Nil(t, err)
 	})
 
 	t.Run("check that the object was successfully merged", func(t *testing.T) {
-		source, err := repo.ObjectByID(context.Background(), sourceID, nil, additional.Properties{})
+		source, err := repo.ObjectByID(context.Background(), sourceID, nil, additional.Properties{}, "")
 		require.Nil(t, err)
 
 		ref, err := crossref.Parse(fmt.Sprintf("weaviate://localhost/%s", target1))
 		require.Nil(t, err)
 
-		schema := source.Object().Properties.(map[string]interface{})
+		sch := source.Object().Properties.(map[string]interface{})
 		expectedSchema := map[string]interface{}{
 			"string": "let's update the string prop",
 			"number": 7.0,
@@ -312,7 +316,7 @@ func Test_MergingObjects(t *testing.T) {
 			},
 		}
 
-		assert.Equal(t, expectedSchema, schema)
+		assert.Equal(t, expectedSchema, sch)
 	})
 
 	t.Run("add more references in rapid succession", func(t *testing.T) {
@@ -321,7 +325,7 @@ func Test_MergingObjects(t *testing.T) {
 			"weaviate://localhost/MergeTestSource/%s/toTarget", sourceID))
 		require.Nil(t, err)
 		targets := []strfmt.UUID{target2, target3, target4}
-		refs := make(objects.BatchReferences, len(targets), len(targets))
+		refs := make(objects.BatchReferences, len(targets))
 		for i, target := range targets {
 			to, err := crossref.Parse(fmt.Sprintf("weaviate://localhost/%s", target))
 			require.Nil(t, err)
@@ -336,12 +340,12 @@ func Test_MergingObjects(t *testing.T) {
 			ID:         sourceID,
 			References: refs,
 		}
-		err = repo.Merge(context.Background(), md)
+		err = repo.Merge(context.Background(), md, nil, "")
 		assert.Nil(t, err)
 	})
 
 	t.Run("check all references are now present", func(t *testing.T) {
-		source, err := repo.ObjectByID(context.Background(), sourceID, nil, additional.Properties{})
+		source, err := repo.ObjectByID(context.Background(), sourceID, nil, additional.Properties{}, "")
 		require.Nil(t, err)
 
 		refs := source.Object().Properties.(map[string]interface{})["toTarget"]
@@ -367,10 +371,10 @@ func Test_MergingObjects(t *testing.T) {
 			Class:           "MergeTestNoVector",
 			ID:              noVecID,
 			PrimitiveSchema: map[string]interface{}{"foo": "baz"},
-		})
+		}, nil, "")
 		require.Nil(t, err)
 
-		orig, err := repo.ObjectByID(context.Background(), noVecID, nil, additional.Properties{})
+		orig, err := repo.ObjectByID(context.Background(), noVecID, nil, additional.Properties{}, "")
 		require.Nil(t, err)
 
 		expectedSchema := map[string]interface{}{
@@ -383,7 +387,7 @@ func Test_MergingObjects(t *testing.T) {
 }
 
 // This prevents a regression on
-// https://github.com/semi-technologies/weaviate/issues/2193
+// https://github.com/weaviate/weaviate/issues/2193
 //
 // Prior to the fix it was possible that a prop that was not touched during the
 // merge (and therefore only loaded from disk) failed during the
@@ -403,22 +407,25 @@ func Test_Merge_UntouchedPropsCorrectlyIndexed(t *testing.T) {
 	dirName := t.TempDir()
 
 	logger := logrus.New()
-	schemaGetter := &fakeSchemaGetter{shardState: singleShardState()}
-	repo := New(logger, Config{
-		MemtablesFlushIdleAfter:   60,
+	schemaGetter := &fakeSchemaGetter{
+		schema:     schema.Schema{Objects: &models.Schema{Classes: nil}},
+		shardState: singleShardState(),
+	}
+	repo, err := New(logger, Config{
+		MemtablesFlushDirtyAfter:  60,
 		RootPath:                  dirName,
 		MaxImportGoroutinesFactor: 1,
 		QueryMaximumResults:       10000,
 		TrackVectorDimensions:     true,
 	}, &fakeRemoteClient{}, &fakeNodeResolver{}, &fakeRemoteNodeClient{}, &fakeReplicationClient{}, nil)
-	repo.SetSchemaGetter(schemaGetter)
-	err := repo.WaitForStartup(testCtx())
 	require.Nil(t, err)
+	repo.SetSchemaGetter(schemaGetter)
+	require.Nil(t, repo.WaitForStartup(testCtx()))
 	defer repo.Shutdown(context.Background())
 	migrator := NewMigrator(repo, logger)
 	hnswConfig := enthnsw.NewDefaultUserConfig()
 	hnswConfig.Skip = true
-	schema := schema.Schema{
+	sch := schema.Schema{
 		Objects: &models.Schema{
 			Classes: []*models.Class{
 				{
@@ -427,20 +434,24 @@ func Test_Merge_UntouchedPropsCorrectlyIndexed(t *testing.T) {
 					InvertedIndexConfig: invertedConfig(),
 					Properties: []*models.Property{ // tries to have "one of each property type"
 						{
-							Name: "untouched_string", Tokenization: "word",
-							DataType: []string{"string"},
+							Name:         "untouched_string",
+							DataType:     schema.DataTypeText.PropString(),
+							Tokenization: models.PropertyTokenizationWhitespace,
 						},
 						{
-							Name: "touched_string", Tokenization: "word",
-							DataType: []string{"string"},
+							Name:         "touched_string",
+							DataType:     schema.DataTypeText.PropString(),
+							Tokenization: models.PropertyTokenizationWhitespace,
 						},
 						{
-							Name: "untouched_string_array", Tokenization: "word",
-							DataType: []string{"string[]"},
+							Name:         "untouched_string_array",
+							DataType:     schema.DataTypeTextArray.PropString(),
+							Tokenization: models.PropertyTokenizationWhitespace,
 						},
 						{
-							Name: "touched_string_array", Tokenization: "word",
-							DataType: []string{"string[]"},
+							Name:         "touched_string_array",
+							DataType:     schema.DataTypeTextArray.PropString(),
+							Tokenization: models.PropertyTokenizationWhitespace,
 						},
 						{
 							Name: "untouched_text", Tokenization: "word",
@@ -479,7 +490,7 @@ func Test_Merge_UntouchedPropsCorrectlyIndexed(t *testing.T) {
 	}
 
 	t.Run("add required classes", func(t *testing.T) {
-		for _, class := range schema.Objects.Classes {
+		for _, class := range sch.Objects.Classes {
 			t.Run(fmt.Sprintf("add %s", class.Class), func(t *testing.T) {
 				err := migrator.AddClass(context.Background(), class, schemaGetter.shardState)
 				require.Nil(t, err)
@@ -487,7 +498,7 @@ func Test_Merge_UntouchedPropsCorrectlyIndexed(t *testing.T) {
 		}
 	})
 
-	schemaGetter.schema = schema
+	schemaGetter.schema = sch
 
 	t.Run("add initial object", func(t *testing.T) {
 		id := 0
@@ -525,7 +536,7 @@ func Test_Merge_UntouchedPropsCorrectlyIndexed(t *testing.T) {
 			},
 			CreationTimeUnix:   int64(id),
 			LastUpdateTimeUnix: int64(id),
-		}, []float32{0.5})
+		}, []float32{0.5}, nil, nil)
 		require.Nil(t, err)
 	})
 
@@ -551,7 +562,7 @@ func Test_Merge_UntouchedPropsCorrectlyIndexed(t *testing.T) {
 			},
 			References: nil,
 		}
-		err = repo.Merge(context.Background(), md)
+		err = repo.Merge(context.Background(), md, nil, "")
 		assert.Nil(t, err)
 	})
 
@@ -570,7 +581,7 @@ func Test_Merge_UntouchedPropsCorrectlyIndexed(t *testing.T) {
 							fmt.Sprintf("%s_string", prefix),
 							fmt.Sprintf("%d", id),
 							eq,
-							dtString),
+							schema.DataTypeText),
 					},
 					{
 						name: "string array filter",
@@ -578,7 +589,7 @@ func Test_Merge_UntouchedPropsCorrectlyIndexed(t *testing.T) {
 							fmt.Sprintf("%s_string_array", prefix),
 							fmt.Sprintf("%d", id),
 							eq,
-							dtString),
+							schema.DataTypeText),
 					},
 					{
 						name: "text filter",
@@ -646,12 +657,263 @@ func Test_Merge_UntouchedPropsCorrectlyIndexed(t *testing.T) {
 
 				for _, tc := range tests {
 					t.Run(tc.name, func(t *testing.T) {
-						params := traverser.GetParams{
+						params := dto.GetParams{
 							ClassName:  "TestClass",
 							Pagination: &filters.Pagination{Limit: 5},
 							Filters:    tc.filter,
 						}
-						res, err := repo.ClassSearch(context.Background(), params)
+						res, err := repo.VectorSearch(context.Background(), params)
+						require.Nil(t, err)
+						require.Len(t, res, 1)
+
+						// hard-code the only uuid
+						assert.Equal(t, uuidFromInt(0), res[0].ID)
+					})
+				}
+			}
+		}
+		t.Run("using untouched", retrieve("untouched", 0))
+		t.Run("using touched", retrieve("touched", 28))
+	})
+}
+
+func Test_MergeDocIdPreserved_PropsCorrectlyIndexed(t *testing.T) {
+	dirName := t.TempDir()
+
+	logger := logrus.New()
+	schemaGetter := &fakeSchemaGetter{
+		schema:     schema.Schema{Objects: &models.Schema{Classes: nil}},
+		shardState: singleShardState(),
+	}
+	repo, err := New(logger, Config{
+		MemtablesFlushDirtyAfter:  60,
+		RootPath:                  dirName,
+		MaxImportGoroutinesFactor: 1,
+		QueryMaximumResults:       10000,
+		TrackVectorDimensions:     true,
+	}, &fakeRemoteClient{}, &fakeNodeResolver{}, &fakeRemoteNodeClient{}, &fakeReplicationClient{}, nil)
+	require.Nil(t, err)
+	repo.SetSchemaGetter(schemaGetter)
+	require.Nil(t, repo.WaitForStartup(testCtx()))
+	defer repo.Shutdown(context.Background())
+	migrator := NewMigrator(repo, logger)
+	hnswConfig := enthnsw.NewDefaultUserConfig()
+	hnswConfig.Skip = true
+	sch := schema.Schema{
+		Objects: &models.Schema{
+			Classes: []*models.Class{
+				{
+					Class:               "TestClass",
+					VectorIndexConfig:   hnswConfig,
+					InvertedIndexConfig: invertedConfig(),
+					Properties: []*models.Property{ // tries to have "one of each property type"
+						{
+							Name:         "untouched_string",
+							DataType:     schema.DataTypeText.PropString(),
+							Tokenization: models.PropertyTokenizationWhitespace,
+						},
+						{
+							Name:         "touched_string",
+							DataType:     schema.DataTypeText.PropString(),
+							Tokenization: models.PropertyTokenizationWhitespace,
+						},
+						{
+							Name:         "untouched_string_array",
+							DataType:     schema.DataTypeTextArray.PropString(),
+							Tokenization: models.PropertyTokenizationWhitespace,
+						},
+						{
+							Name:         "touched_string_array",
+							DataType:     schema.DataTypeTextArray.PropString(),
+							Tokenization: models.PropertyTokenizationWhitespace,
+						},
+						{
+							Name: "untouched_text", Tokenization: "word",
+							DataType: []string{"text"},
+						},
+						{
+							Name: "touched_text", Tokenization: "word",
+							DataType: []string{"text"},
+						},
+						{
+							Name: "untouched_text_array", Tokenization: "word",
+							DataType: []string{"text[]"},
+						},
+						{
+							Name: "touched_text_array", Tokenization: "word",
+							DataType: []string{"text[]"},
+						},
+						{Name: "untouched_number", DataType: []string{"number"}},
+						{Name: "touched_number", DataType: []string{"number"}},
+						{Name: "untouched_number_array", DataType: []string{"number[]"}},
+						{Name: "touched_number_array", DataType: []string{"number[]"}},
+						{Name: "untouched_int", DataType: []string{"int"}},
+						{Name: "touched_int", DataType: []string{"int"}},
+						{Name: "untouched_int_array", DataType: []string{"int[]"}},
+						{Name: "touched_int_array", DataType: []string{"int[]"}},
+						{Name: "untouched_date", DataType: []string{"date"}},
+						{Name: "touched_date", DataType: []string{"date"}},
+						{Name: "untouched_date_array", DataType: []string{"date[]"}},
+						{Name: "touched_date_array", DataType: []string{"date[]"}},
+					},
+				},
+			},
+		},
+	}
+
+	t.Run("add required classes", func(t *testing.T) {
+		for _, class := range sch.Objects.Classes {
+			t.Run(fmt.Sprintf("add %s", class.Class), func(t *testing.T) {
+				err := migrator.AddClass(context.Background(), class, schemaGetter.shardState)
+				require.Nil(t, err)
+			})
+		}
+	})
+
+	schemaGetter.schema = sch
+
+	t.Run("add initial object", func(t *testing.T) {
+		id := 0
+		err := repo.PutObject(context.Background(), &models.Object{
+			ID:    uuidFromInt(id),
+			Class: "TestClass",
+			Properties: map[string]interface{}{
+				"untouched_number":       float64(id),
+				"untouched_number_array": []interface{}{float64(id)},
+				"untouched_int":          id,
+				"untouched_int_array":    []interface{}{int64(id)},
+				"untouched_string":       fmt.Sprintf("%d", id),
+				"untouched_string_array": []string{fmt.Sprintf("%d", id)},
+				"untouched_text":         fmt.Sprintf("%d", id),
+				"untouched_text_array":   []string{fmt.Sprintf("%d", id)},
+				"untouched_date":         time.Unix(0, 0).Add(time.Duration(id) * time.Hour),
+				"untouched_date_array":   []time.Time{time.Unix(0, 0).Add(time.Duration(id) * time.Hour)},
+
+				"touched_number":       float64(id),
+				"touched_number_array": []interface{}{float64(id)},
+				"touched_int":          id,
+				"touched_int_array":    []interface{}{int64(id)},
+				"touched_string":       fmt.Sprintf("%d", id),
+				"touched_string_array": []string{fmt.Sprintf("%d", id)},
+				"touched_text":         fmt.Sprintf("%d", id),
+				"touched_text_array":   []string{fmt.Sprintf("%d", id)},
+				"touched_date":         time.Unix(0, 0).Add(time.Duration(id) * time.Hour),
+				"touched_date_array":   []time.Time{time.Unix(0, 0).Add(time.Duration(id) * time.Hour)},
+			},
+			CreationTimeUnix:   int64(id),
+			LastUpdateTimeUnix: int64(id),
+		}, []float32{0.5}, nil, nil)
+		require.Nil(t, err)
+	})
+
+	t.Run("patch half the props (all that contain 'touched')", func(t *testing.T) {
+		updateID := 28
+		md := objects.MergeDocument{
+			Class: "TestClass",
+			ID:    uuidFromInt(0),
+			PrimitiveSchema: map[string]interface{}{
+				"touched_number":       float64(updateID),
+				"touched_number_array": []interface{}{float64(updateID)},
+				"touched_int":          updateID,
+				"touched_int_array":    []interface{}{int64(updateID)},
+				"touched_string":       fmt.Sprintf("%d", updateID),
+				"touched_string_array": []string{fmt.Sprintf("%d", updateID)},
+				"touched_text":         fmt.Sprintf("%d", updateID),
+				"touched_text_array":   []string{fmt.Sprintf("%d", updateID)},
+				"touched_date":         time.Unix(0, 0).Add(time.Duration(updateID) * time.Hour),
+				"touched_date_array":   []time.Time{time.Unix(0, 0).Add(time.Duration(updateID) * time.Hour)},
+			},
+			References: nil,
+		}
+		err = repo.Merge(context.Background(), md, nil, "")
+		assert.Nil(t, err)
+	})
+
+	t.Run("retrieve by each individual prop", func(t *testing.T) {
+		retrieve := func(prefix string, id int) func(t *testing.T) {
+			return func(t *testing.T) {
+				type test struct {
+					name   string
+					filter *filters.LocalFilter
+				}
+
+				tests := []test{
+					{
+						name: "string filter",
+						filter: buildFilter(
+							fmt.Sprintf("%s_string", prefix),
+							fmt.Sprintf("%d", id),
+							eq,
+							schema.DataTypeText),
+					},
+					{
+						name: "string array filter",
+						filter: buildFilter(
+							fmt.Sprintf("%s_string_array", prefix),
+							fmt.Sprintf("%d", id),
+							eq,
+							schema.DataTypeText),
+					},
+					{
+						name: "text filter",
+						filter: buildFilter(
+							fmt.Sprintf("%s_text", prefix),
+							fmt.Sprintf("%d", id),
+							eq,
+							dtText),
+					},
+					{
+						name: "text array filter",
+						filter: buildFilter(
+							fmt.Sprintf("%s_text_array", prefix),
+							fmt.Sprintf("%d", id),
+							eq,
+							dtText),
+					},
+					{
+						name: "int filter",
+						filter: buildFilter(
+							fmt.Sprintf("%s_int", prefix), id, eq, dtInt),
+					},
+					{
+						name: "int array filter",
+						filter: buildFilter(
+							fmt.Sprintf("%s_int_array", prefix), id, eq, dtInt),
+					},
+					{
+						name: "number filter",
+						filter: buildFilter(
+							fmt.Sprintf("%s_number", prefix), float64(id), eq, dtNumber),
+					},
+					{
+						name: "number array filter",
+						filter: buildFilter(
+							fmt.Sprintf("%s_number_array", prefix), float64(id), eq, dtNumber),
+					},
+					{
+						name: "date filter",
+						filter: buildFilter(
+							fmt.Sprintf("%s_date", prefix),
+							time.Unix(0, 0).Add(time.Duration(id)*time.Hour),
+							eq, dtDate),
+					},
+					{
+						name: "date array filter",
+						filter: buildFilter(
+							fmt.Sprintf("%s_date_array", prefix),
+							time.Unix(0, 0).Add(time.Duration(id)*time.Hour),
+							eq, dtDate),
+					},
+				}
+
+				for _, tc := range tests {
+					t.Run(tc.name, func(t *testing.T) {
+						params := dto.GetParams{
+							ClassName:  "TestClass",
+							Pagination: &filters.Pagination{Limit: 5},
+							Filters:    tc.filter,
+						}
+						res, err := repo.VectorSearch(context.Background(), params)
 						require.Nil(t, err)
 						require.Len(t, res, 1)
 

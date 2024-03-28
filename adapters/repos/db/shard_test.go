@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 //go:build integrationTest
@@ -16,21 +16,21 @@ package db
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
-	"math/rand"
 	"os"
 	"path"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/semi-technologies/weaviate/adapters/repos/db/lsmkv"
-	"github.com/semi-technologies/weaviate/entities/additional"
-	"github.com/semi-technologies/weaviate/entities/storagestate"
-	"github.com/semi-technologies/weaviate/entities/storobj"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/adapters/repos/db/lsmkv"
+	"github.com/weaviate/weaviate/entities/additional"
+	"github.com/weaviate/weaviate/entities/storagestate"
+	"github.com/weaviate/weaviate/entities/storobj"
 )
 
 func TestShard_UpdateStatus(t *testing.T) {
@@ -45,34 +45,34 @@ func TestShard_UpdateStatus(t *testing.T) {
 		if err != nil {
 			fmt.Println(err)
 		}
-	}(shd.index.Config.RootPath)
+	}(shd.Index().Config.RootPath)
 
 	t.Run("insert data into shard", func(t *testing.T) {
 		for i := 0; i < amount; i++ {
 			obj := testObject(className)
 
-			err := shd.putObject(ctx, obj)
+			err := shd.PutObject(ctx, obj)
 			require.Nil(t, err)
 		}
 
-		objs, err := shd.objectList(ctx, amount, nil, additional.Properties{}, shd.index.Config.ClassName)
+		objs, err := shd.ObjectList(ctx, amount, nil, nil, additional.Properties{}, shd.Index().Config.ClassName)
 		require.Nil(t, err)
 		require.Equal(t, amount, len(objs))
 	})
 
 	t.Run("mark shard readonly and fail to insert", func(t *testing.T) {
-		err := shd.updateStatus(storagestate.StatusReadOnly.String())
+		err := shd.UpdateStatus(storagestate.StatusReadOnly.String())
 		require.Nil(t, err)
 
-		err = shd.putObject(ctx, testObject(className))
+		err = shd.PutObject(ctx, testObject(className))
 		require.EqualError(t, err, storagestate.ErrStatusReadOnly.Error())
 	})
 
 	t.Run("mark shard ready and insert successfully", func(t *testing.T) {
-		err := shd.updateStatus(storagestate.StatusReady.String())
+		err := shd.UpdateStatus(storagestate.StatusReady.String())
 		require.Nil(t, err)
 
-		err = shd.putObject(ctx, testObject(className))
+		err = shd.PutObject(ctx, testObject(className))
 		require.Nil(t, err)
 	})
 
@@ -95,15 +95,15 @@ func TestShard_ReadOnly_HaltCompaction(t *testing.T) {
 		if err != nil {
 			fmt.Println(err)
 		}
-	}(shd.index.Config.RootPath)
+	}(shd.Index().Config.RootPath)
 
-	err := shd.store.CreateOrLoadBucket(context.Background(), bucketName,
+	err := shd.Store().CreateOrLoadBucket(context.Background(), bucketName,
 		lsmkv.WithMemtableThreshold(1024))
 	require.Nil(t, err)
 
-	bucket := shd.store.Bucket(bucketName)
+	bucket := shd.Store().Bucket(bucketName)
 	require.NotNil(t, bucket)
-	dirName := path.Join(shd.DBPathLSM(), bucketName)
+	dirName := path.Join(shd.Index().path(), shd.Name(), "lsm", bucketName)
 
 	t.Run("generate random data", func(t *testing.T) {
 		for i := range keys {
@@ -127,7 +127,7 @@ func TestShard_ReadOnly_HaltCompaction(t *testing.T) {
 	})
 
 	t.Run("halt compaction with readonly status", func(t *testing.T) {
-		err := shd.updateStatus(storagestate.StatusReadOnly.String())
+		err := shd.UpdateStatus(storagestate.StatusReadOnly.String())
 		require.Nil(t, err)
 
 		// give the status time to propagate
@@ -156,7 +156,7 @@ func TestShard_ReadOnly_HaltCompaction(t *testing.T) {
 	})
 
 	t.Run("update shard status to ready", func(t *testing.T) {
-		err := shd.updateStatus(storagestate.StatusReady.String())
+		err := shd.UpdateStatus(storagestate.StatusReady.String())
 		require.Nil(t, err)
 
 		time.Sleep(time.Second)
@@ -168,9 +168,10 @@ func TestShard_ReadOnly_HaltCompaction(t *testing.T) {
 // tests adding multiple larger batches in parallel using different settings of the goroutine factor.
 // In all cases all objects should be added
 func TestShard_ParallelBatches(t *testing.T) {
+	r := getRandomSeed()
 	batches := make([][]*storobj.Object, 4)
 	for i := range batches {
-		batches[i] = createRandomObjects("TestClass", 1000)
+		batches[i] = createRandomObjects(r, "TestClass", 1000)
 	}
 	totalObjects := 1000 * len(batches)
 	ctx := testCtx()
@@ -181,12 +182,12 @@ func TestShard_ParallelBatches(t *testing.T) {
 	wg.Add(len(batches))
 	for _, batch := range batches {
 		go func(localBatch []*storobj.Object) {
-			shd.putObjectBatch(ctx, localBatch)
+			shd.PutObjectBatch(ctx, localBatch)
 			wg.Done()
 		}(batch)
 	}
 	wg.Wait()
 
-	require.Equal(t, totalObjects, int(shd.counter.Get()))
+	require.Equal(t, totalObjects, int(shd.Counter().Get()))
 	require.Nil(t, idx.drop())
 }

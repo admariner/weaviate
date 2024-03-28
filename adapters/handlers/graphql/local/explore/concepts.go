@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package explore
@@ -14,10 +14,10 @@ package explore
 import (
 	"fmt"
 
-	"github.com/semi-technologies/weaviate/adapters/handlers/graphql/descriptions"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/search"
 	"github.com/tailor-inc/graphql"
+	"github.com/weaviate/weaviate/adapters/handlers/graphql/descriptions"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/search"
 )
 
 type ModulesProvider interface {
@@ -150,6 +150,10 @@ func nearVectorFields() graphql.InputObjectConfigFieldMap {
 			Description: descriptions.Distance,
 			Type:        graphql.Float,
 		},
+		"targetVectors": &graphql.InputObjectFieldConfig{
+			Description: "Target vectors",
+			Type:        graphql.NewList(graphql.String),
+		},
 	}
 }
 
@@ -181,6 +185,10 @@ func nearObjectFields() graphql.InputObjectConfigFieldMap {
 		"distance": &graphql.InputObjectFieldConfig{
 			Description: descriptions.Distance,
 			Type:        graphql.Float,
+		},
+		"targetVectors": &graphql.InputObjectFieldConfig{
+			Description: "Target vectors",
+			Type:        graphql.NewList(graphql.String),
 		},
 	}
 }

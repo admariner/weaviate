@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package db
@@ -15,20 +15,27 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/semi-technologies/weaviate/usecases/monitoring"
 	"github.com/sirupsen/logrus"
+	"github.com/weaviate/weaviate/usecases/monitoring"
 )
 
 type Metrics struct {
-	logger           logrus.FieldLogger
-	monitoring       bool
-	batchTime        prometheus.ObserverVec
-	batchDeleteTime  prometheus.ObserverVec
-	objectTime       prometheus.ObserverVec
-	startupDurations prometheus.ObserverVec
+	logger                logrus.FieldLogger
+	monitoring            bool
+	batchTime             prometheus.ObserverVec
+	batchDeleteTime       prometheus.ObserverVec
+	objectTime            prometheus.ObserverVec
+	startupDurations      prometheus.ObserverVec
+	filteredVectorFilter  prometheus.Observer
+	filteredVectorVector  prometheus.Observer
+	filteredVectorObjects prometheus.Observer
+	filteredVectorSort    prometheus.Observer
+	grouped               bool
+	baseMetrics           *monitoring.PrometheusMetrics
 }
 
-func NewMetrics(logger logrus.FieldLogger, prom *monitoring.PrometheusMetrics,
+func NewMetrics(
+	logger logrus.FieldLogger, prom *monitoring.PrometheusMetrics,
 	className, shardName string,
 ) *Metrics {
 	m := &Metrics{
@@ -37,6 +44,14 @@ func NewMetrics(logger logrus.FieldLogger, prom *monitoring.PrometheusMetrics,
 
 	if prom == nil {
 		return m
+	}
+
+	m.baseMetrics = prom
+
+	if prom.Group {
+		className = "n/a"
+		shardName = "n/a"
+		m.grouped = true
 	}
 
 	m.monitoring = true
@@ -57,7 +72,40 @@ func NewMetrics(logger logrus.FieldLogger, prom *monitoring.PrometheusMetrics,
 		"shard_name": shardName,
 	})
 
+	m.filteredVectorFilter = prom.QueriesFilteredVectorDurations.With(prometheus.Labels{
+		"class_name": className,
+		"shard_name": shardName,
+		"operation":  "filter",
+	})
+
+	m.filteredVectorVector = prom.QueriesFilteredVectorDurations.With(prometheus.Labels{
+		"class_name": className,
+		"shard_name": shardName,
+		"operation":  "vector",
+	})
+
+	m.filteredVectorObjects = prom.QueriesFilteredVectorDurations.With(prometheus.Labels{
+		"class_name": className,
+		"shard_name": shardName,
+		"operation":  "objects",
+	})
+
+	m.filteredVectorSort = prom.QueriesFilteredVectorDurations.With(prometheus.Labels{
+		"class_name": className,
+		"shard_name": shardName,
+		"operation":  "sort",
+	})
+
 	return m
+}
+
+func (m *Metrics) DeleteShardLabels(class, shard string) {
+	if m.grouped {
+		// never delete the shared label, only individual ones
+		return
+	}
+
+	m.baseMetrics.DeleteShard(class, shard)
 }
 
 func (m *Metrics) BatchObject(start time.Time, size int) {
@@ -219,4 +267,36 @@ func (m *Metrics) BatchDelete(start time.Time, op string) {
 	m.batchDeleteTime.With(prometheus.Labels{
 		"operation": op,
 	}).Observe(float64(took) / float64(time.Millisecond))
+}
+
+func (m *Metrics) FilteredVectorFilter(dur time.Duration) {
+	if !m.monitoring {
+		return
+	}
+
+	m.filteredVectorFilter.Observe(float64(dur) / float64(time.Millisecond))
+}
+
+func (m *Metrics) FilteredVectorVector(dur time.Duration) {
+	if !m.monitoring {
+		return
+	}
+
+	m.filteredVectorVector.Observe(float64(dur) / float64(time.Millisecond))
+}
+
+func (m *Metrics) FilteredVectorObjects(dur time.Duration) {
+	if !m.monitoring {
+		return
+	}
+
+	m.filteredVectorObjects.Observe(float64(dur) / float64(time.Millisecond))
+}
+
+func (m *Metrics) FilteredVectorSort(dur time.Duration) {
+	if !m.monitoring {
+		return
+	}
+
+	m.filteredVectorSort.Observe(float64(dur) / float64(time.Millisecond))
 }

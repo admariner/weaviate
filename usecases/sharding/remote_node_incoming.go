@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package sharding
@@ -14,11 +14,11 @@ package sharding
 import (
 	"context"
 
-	"github.com/semi-technologies/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/models"
 )
 
 type RemoteNodeIncomingRepo interface {
-	IncomingGetNodeStatus(ctx context.Context) (*models.NodeStatus, error)
+	IncomingGetNodeStatus(ctx context.Context, className, output string) (*models.NodeStatus, error)
 }
 
 type RemoteNodeIncoming struct {
@@ -31,6 +31,6 @@ func NewRemoteNodeIncoming(repo RemoteNodeIncomingRepo) *RemoteNodeIncoming {
 	}
 }
 
-func (rni *RemoteNodeIncoming) GetNodeStatus(ctx context.Context) (*models.NodeStatus, error) {
-	return rni.repo.IncomingGetNodeStatus(ctx)
+func (rni *RemoteNodeIncoming) GetNodeStatus(ctx context.Context, className, output string) (*models.NodeStatus, error) {
+	return rni.repo.IncomingGetNodeStatus(ctx, className, output)
 }

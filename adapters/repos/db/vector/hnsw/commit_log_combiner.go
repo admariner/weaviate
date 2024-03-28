@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package hnsw
@@ -38,26 +38,28 @@ func NewCommitLogCombiner(rootPath, id string, threshold int64,
 	}
 }
 
-func (c *CommitLogCombiner) Do() error {
+func (c *CommitLogCombiner) Do() (bool, error) {
+	executed := false
 	for {
 		// fileNames will already be in order
 		fileNames, err := getCommitFileNames(c.rootPath, c.id)
 		if err != nil {
-			return errors.Wrap(err, "obtain files names")
+			return executed, errors.Wrap(err, "obtain files names")
 		}
 
 		ok, err := c.combineFirstMatch(fileNames)
 		if err != nil {
-			return err
+			return executed, err
 		}
 
 		if ok {
+			executed = true
 			continue
 		}
 
 		break
 	}
-	return nil
+	return executed, nil
 }
 
 func (c *CommitLogCombiner) combineFirstMatch(fileNames []string) (bool, error) {
@@ -150,11 +152,13 @@ func (c *CommitLogCombiner) mergeFiles(outName, first, second string) error {
 	if err != nil {
 		return errors.Wrapf(err, "open first source file %q", first)
 	}
+	defer source1.Close()
 
 	source2, err := os.Open(second)
 	if err != nil {
 		return errors.Wrapf(err, "open second source file %q", second)
 	}
+	defer source2.Close()
 
 	_, err = io.Copy(out, source1)
 	if err != nil {

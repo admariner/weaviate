@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 // Package aggregate provides the local aggregate graphql endpoint for Weaviate
@@ -18,14 +18,15 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/semi-technologies/weaviate/adapters/handlers/graphql/local/common_filters"
-	"github.com/semi-technologies/weaviate/entities/aggregation"
-	"github.com/semi-technologies/weaviate/entities/filters"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	"github.com/semi-technologies/weaviate/entities/searchparams"
 	"github.com/tailor-inc/graphql"
 	"github.com/tailor-inc/graphql/language/ast"
+	"github.com/weaviate/weaviate/adapters/handlers/graphql/local/common_filters"
+	"github.com/weaviate/weaviate/entities/aggregation"
+	enterrors "github.com/weaviate/weaviate/entities/errors"
+	"github.com/weaviate/weaviate/entities/filters"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/searchparams"
 )
 
 // GroupedByFieldName is a special graphQL field that appears alongside the
@@ -48,119 +49,133 @@ type RequestsLog interface {
 
 func makeResolveClass(modulesProvider ModulesProvider, class *models.Class) graphql.FieldResolveFn {
 	return func(p graphql.ResolveParams) (interface{}, error) {
-		className := schema.ClassName(p.Info.FieldName)
-		source, ok := p.Source.(map[string]interface{})
-		if !ok {
-			return nil, fmt.Errorf("expected source to be a map, but was %t", p.Source)
-		}
-
-		resolver, ok := source["Resolver"].(Resolver)
-		if !ok {
-			return nil, fmt.Errorf("expected source to contain a usable Resolver, but was %t", p.Source)
-		}
-
-		// There can only be exactly one ast.Field; it is the class name.
-		if len(p.Info.FieldASTs) != 1 {
-			panic("Only one Field expected here")
-		}
-
-		selections := p.Info.FieldASTs[0].SelectionSet
-		properties, includeMeta, err := extractProperties(selections)
+		res, err := resolveAggregate(p, modulesProvider, class)
 		if err != nil {
-			return nil, fmt.Errorf("could not extract properties for class '%s': %w", className, err)
+			return res, enterrors.NewErrGraphQLUser(err, "Aggregate", schema.ClassName(p.Info.FieldName).String())
 		}
+		return res, nil
+	}
+}
 
-		groupBy, err := extractGroupBy(p.Args, p.Info.FieldName)
+func resolveAggregate(p graphql.ResolveParams, modulesProvider ModulesProvider, class *models.Class) (interface{}, error) {
+	className := schema.ClassName(p.Info.FieldName)
+	source, ok := p.Source.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("expected source to be a map, but was %t", p.Source)
+	}
+
+	resolver, ok := source["Resolver"].(Resolver)
+	if !ok {
+		return nil, fmt.Errorf("expected source to contain a usable Resolver, but was %t", p.Source)
+	}
+
+	// There can only be exactly one ast.Field; it is the class name.
+	if len(p.Info.FieldASTs) != 1 {
+		panic("Only one Field expected here")
+	}
+
+	selections := p.Info.FieldASTs[0].SelectionSet
+	properties, includeMeta, err := extractProperties(selections)
+	if err != nil {
+		return nil, fmt.Errorf("could not extract properties for class '%s': %w", className, err)
+	}
+
+	groupBy, err := extractGroupBy(p.Args, p.Info.FieldName)
+	if err != nil {
+		return nil, fmt.Errorf("could not extract groupBy path: %w", err)
+	}
+
+	limit, err := extractLimit(p.Args)
+	if err != nil {
+		return nil, fmt.Errorf("could not extract limit: %w", err)
+	}
+
+	objectLimit, err := extractObjectLimit(p.Args)
+	if objectLimit != nil && *objectLimit <= 0 {
+		return nil, fmt.Errorf("objectLimit must be a positive integer")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("could not extract objectLimit: %w", err)
+	}
+
+	filters, err := common_filters.ExtractFilters(p.Args, p.Info.FieldName)
+	if err != nil {
+		return nil, fmt.Errorf("could not extract filters: %w", err)
+	}
+
+	var nearVectorParams *searchparams.NearVector
+	if nearVector, ok := p.Args["nearVector"]; ok {
+		p, err := common_filters.ExtractNearVector(nearVector.(map[string]interface{}))
 		if err != nil {
-			return nil, fmt.Errorf("could not extract groupBy path: %w", err)
+			return nil, fmt.Errorf("failed to extract nearVector params: %w", err)
 		}
+		nearVectorParams = &p
+	}
 
-		limit, err := extractLimit(p.Args)
+	var nearObjectParams *searchparams.NearObject
+	if nearObject, ok := p.Args["nearObject"]; ok {
+		p, err := common_filters.ExtractNearObject(nearObject.(map[string]interface{}))
 		if err != nil {
-			return nil, fmt.Errorf("could not extract limit: %w", err)
+			return nil, fmt.Errorf("failed to extract nearObject params: %w", err)
 		}
+		nearObjectParams = &p
+	}
 
-		objectLimit, err := extractObjectLimit(p.Args)
-		if objectLimit != nil && *objectLimit <= 0 {
-			return nil, fmt.Errorf("objectLimit must be a positive integer")
+	var moduleParams map[string]interface{}
+	if modulesProvider != nil {
+		extractedParams := modulesProvider.ExtractSearchParams(p.Args, class.Class)
+		if len(extractedParams) > 0 {
+			moduleParams = extractedParams
 		}
+	}
+
+	// Extract hybrid search params from the processed query
+	// Everything hybrid can go in another namespace AFTER modulesprovider is
+	// refactored
+	var hybridParams *searchparams.HybridSearch
+	if hybrid, ok := p.Args["hybrid"]; ok {
+		p, err := common_filters.ExtractHybridSearch(hybrid.(map[string]interface{}), false)
 		if err != nil {
-			return nil, fmt.Errorf("could not extract objectLimit: %w", err)
+			return nil, fmt.Errorf("failed to extract hybrid params: %w", err)
 		}
+		hybridParams = p
+	}
 
-		filters, err := common_filters.ExtractFilters(p.Args, p.Info.FieldName)
-		if err != nil {
-			return nil, fmt.Errorf("could not extract filters: %w", err)
-		}
+	var tenant string
+	if tk, ok := p.Args["tenant"]; ok {
+		tenant = tk.(string)
+	}
 
-		var nearVectorParams *searchparams.NearVector
-		if nearVector, ok := p.Args["nearVector"]; ok {
-			p, err := common_filters.ExtractNearVector(nearVector.(map[string]interface{}))
-			if err != nil {
-				return nil, fmt.Errorf("failed to extract nearVector params: %w", err)
-			}
-			nearVectorParams = &p
-		}
+	params := &aggregation.Params{
+		Filters:          filters,
+		ClassName:        className,
+		Properties:       properties,
+		GroupBy:          groupBy,
+		IncludeMetaCount: includeMeta,
+		Limit:            limit,
+		ObjectLimit:      objectLimit,
+		NearVector:       nearVectorParams,
+		NearObject:       nearObjectParams,
+		ModuleParams:     moduleParams,
+		Hybrid:           hybridParams,
+		Tenant:           tenant,
+	}
 
-		var nearObjectParams *searchparams.NearObject
-		if nearObject, ok := p.Args["nearObject"]; ok {
-			p, err := common_filters.ExtractNearObject(nearObject.(map[string]interface{}))
-			if err != nil {
-				return nil, fmt.Errorf("failed to extract nearObject params: %w", err)
-			}
-			nearObjectParams = &p
-		}
+	// we might support objectLimit without nearMedia filters later, e.g. with sort
+	if params.ObjectLimit != nil && !validateObjectLimitUsage(params) {
+		return nil, fmt.Errorf("objectLimit can only be used with a near<Media> or hybrid filter")
+	}
 
-		var moduleParams map[string]interface{}
-		if modulesProvider != nil {
-			extractedParams := modulesProvider.ExtractSearchParams(p.Args, class.Class)
-			if len(extractedParams) > 0 {
-				moduleParams = extractedParams
-			}
-		}
+	res, err := resolver.Aggregate(p.Context, principalFromContext(p.Context), params)
+	if err != nil {
+		return nil, err
+	}
 
-		// Extract hybrid search params from the processed query
-		// Everything hybrid can go in another namespace AFTER modulesprovider is
-		// refactored
-		var hybridParams *searchparams.HybridSearch
-		if hybrid, ok := p.Args["hybrid"]; ok {
-			p, err := common_filters.ExtractHybridSearch(hybrid.(map[string]interface{}))
-			if err != nil {
-				return nil, fmt.Errorf("failed to extract hybrid params: %w", err)
-			}
-			hybridParams = p
-		}
-
-		params := &aggregation.Params{
-			Filters:          filters,
-			ClassName:        className,
-			Properties:       properties,
-			GroupBy:          groupBy,
-			IncludeMetaCount: includeMeta,
-			Limit:            limit,
-			ObjectLimit:      objectLimit,
-			NearVector:       nearVectorParams,
-			NearObject:       nearObjectParams,
-			ModuleParams:     moduleParams,
-			Hybrid:           hybridParams,
-		}
-
-		// we might support objectLimit without nearMedia filters later, e.g. with sort
-		if params.ObjectLimit != nil && !validateObjectLimitUsage(params) {
-			return nil, fmt.Errorf("objectLimit can only be used with a near<Media> or hybrid filter")
-		}
-
-		res, err := resolver.Aggregate(p.Context, principalFromContext(p.Context), params)
-		if err != nil {
-			return nil, err
-		}
-
-		switch parsed := res.(type) {
-		case *aggregation.Result:
-			return parsed.Groups, nil
-		default:
-			return res, nil
-		}
+	switch parsed := res.(type) {
+	case *aggregation.Result:
+		return parsed.Groups, nil
+	default:
+		return res, nil
 	}
 }
 
@@ -174,7 +189,7 @@ func extractProperties(selections *ast.SelectionSet) ([]aggregation.ParamPropert
 		if name == GroupedByFieldName {
 			// in the graphQL API we show the "groupedBy" field alongside various
 			// properties, however, we don't have to include it here, as we don't
-			// wont to perform aggregations on it.
+			// won't to perform aggregations on it.
 			// If we didn't exclude it we'd run into errors down the line, because
 			// the connector would look for a "groupedBy" prop on the specific class
 			// which doesn't exist.
@@ -237,7 +252,7 @@ func extractAggregators(selections *ast.SelectionSet) ([]aggregation.Aggregator,
 func extractGroupBy(args map[string]interface{}, rootClass string) (*filters.Path, error) {
 	groupBy, ok := args["groupBy"]
 	if !ok {
-		// not set means the user is not intersted in grouping (former Meta)
+		// not set means the user is not interested in grouping (former Meta)
 		return nil, nil
 	}
 

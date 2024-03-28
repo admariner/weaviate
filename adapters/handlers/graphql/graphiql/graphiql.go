@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 // Based on `graphiql.go` from https://github.com/graphql-go/handler
@@ -53,7 +53,7 @@ func renderGraphiQL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	query_params := r.URL.Query()
+	queryParams := r.URL.Query()
 
 	t := template.New("GraphiQL")
 	t, err := t.Parse(graphiqlTemplate)
@@ -63,12 +63,12 @@ func renderGraphiQL(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Attempt to deserialize the 'variables' query key to something reasonable.
-	var query_vars interface{}
-	err = json.Unmarshal([]byte(query_params.Get("variables")), &query_vars)
+	var queryVars interface{}
+	err = json.Unmarshal([]byte(queryParams.Get("variables")), &queryVars)
 
 	var varsString string
 	if err == nil {
-		vars, err := json.MarshalIndent(query_vars, "", "  ")
+		vars, err := json.MarshalIndent(queryVars, "", "  ")
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -82,9 +82,9 @@ func renderGraphiQL(w http.ResponseWriter, r *http.Request) {
 	// Create result string
 	d := graphiqlData{
 		GraphiqlVersion: graphiqlVersion,
-		QueryString:     query_params.Get("query"),
+		QueryString:     queryParams.Get("query"),
 		Variables:       varsString,
-		OperationName:   query_params.Get("operationName"),
+		OperationName:   queryParams.Get("operationName"),
 		AuthKey:         user,
 		AuthToken:       password,
 	}

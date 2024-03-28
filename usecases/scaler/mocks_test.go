@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package scaler
@@ -17,11 +17,11 @@ import (
 	"io"
 	"sort"
 
-	"github.com/semi-technologies/weaviate/entities/backup"
-	"github.com/semi-technologies/weaviate/usecases/sharding"
 	"github.com/sirupsen/logrus"
 	"github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/mock"
+	"github.com/weaviate/weaviate/entities/backup"
+	"github.com/weaviate/weaviate/usecases/sharding"
 )
 
 const (
@@ -81,7 +81,7 @@ type fakeShardingState struct {
 	M         map[string][]string
 }
 
-func (f *fakeShardingState) ShardingState(class string) *sharding.State {
+func (f *fakeShardingState) CopyShardingState(class string) *sharding.State {
 	if len(f.M) == 0 {
 		return nil
 	}
@@ -121,7 +121,7 @@ func (r *fakeNodeResolver) NodeHostname(nodeName string) (string, bool) {
 	return host, ok
 }
 
-func (r *fakeNodeResolver) AllNames() []string {
+func (r *fakeNodeResolver) Candidates() []string {
 	xs := make([]string, 0, len(r.M))
 	for k := range r.M {
 		xs = append(xs, k)

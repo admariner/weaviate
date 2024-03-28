@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package modcentroid
@@ -15,11 +15,11 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/modulecapabilities"
-	"github.com/semi-technologies/weaviate/entities/moduletools"
-	"github.com/semi-technologies/weaviate/modules/ref2vec-centroid/vectorizer"
 	"github.com/sirupsen/logrus"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/modulecapabilities"
+	"github.com/weaviate/weaviate/entities/moduletools"
+	"github.com/weaviate/weaviate/modules/ref2vec-centroid/vectorizer"
 )
 
 const (
@@ -59,7 +59,7 @@ func (m *CentroidModule) MetaInfo() (map[string]interface{}, error) {
 func (m *CentroidModule) VectorizeObject(ctx context.Context,
 	obj *models.Object, cfg moduletools.ClassConfig,
 	findRefVecsFn modulecapabilities.FindObjectFn,
-) error {
+) ([]float32, error) {
 	vzr := vectorizer.New(cfg, findRefVecsFn)
 	return vzr.Object(ctx, obj)
 }

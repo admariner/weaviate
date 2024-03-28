@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 // Package descriptions provides the descriptions as used by the graphql endpoint for Weaviate
@@ -136,7 +136,19 @@ const (
 	After = "Show the results after the first x results (pagination option)"
 )
 
+// Cursor API
+const (
+	AfterID = "Show the results after a given ID"
+)
+
 const (
 	SortPath  = "Specify the path from the Objects fields to the property name (e.g. ['Get', 'City', 'population'] leads to the 'population' property of a 'City' object)"
 	SortOrder = "Specify the sort order, either ascending (asc) which is default or descending (desc)"
+)
+
+const (
+	GroupByFilter          = "Specify the property of the class to group by"
+	GroupByPath            = "Specify the path from the objects fields to the property name (e.g. ['Things', 'City', 'population'] leads to the 'population' property of a 'City' object)"
+	GroupByGroups          = "Specify the number of groups to be created"
+	GroupByObjectsPerGroup = "Specify the number of max objects in group"
 )

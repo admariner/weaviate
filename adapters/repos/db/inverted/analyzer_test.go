@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package inverted
@@ -17,264 +17,199 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/semi-technologies/weaviate/adapters/repos/db/inverted/stopwords"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/schema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/entities/models"
 )
 
 func TestAnalyzer(t *testing.T) {
-	a := NewAnalyzer(fakeStopwordDetector{})
+	a := NewAnalyzer(nil)
+
+	countable := func(data []string, freq []int) []Countable {
+		countable := make([]Countable, len(data))
+		for i := range data {
+			countable[i] = Countable{
+				Data:          []byte(data[i]),
+				TermFrequency: float32(freq[i]),
+			}
+		}
+		return countable
+	}
 
 	t.Run("with text", func(t *testing.T) {
-		t.Run("only unique words", func(t *testing.T) {
-			res := a.Text(models.PropertyTokenizationWord, "Hello, my name is John Doe")
-			assert.ElementsMatch(t, res, []Countable{
-				{
-					Data:          []byte("hello"),
-					TermFrequency: float32(1),
-				},
-				{
-					Data:          []byte("my"),
-					TermFrequency: float32(1),
-				},
-				{
-					Data:          []byte("name"),
-					TermFrequency: float32(1),
-				},
-				{
-					Data:          []byte("is"),
-					TermFrequency: float32(1),
-				},
-				{
-					Data:          []byte("john"),
-					TermFrequency: float32(1),
-				},
-				{
-					Data:          []byte("doe"),
-					TermFrequency: float32(1),
-				},
-			})
-		})
+		type testCase struct {
+			name              string
+			input             string
+			tokenization      string
+			expectedCountable []Countable
+		}
 
-		t.Run("repeated words", func(t *testing.T) {
-			res := a.Text(models.PropertyTokenizationWord, "Du. Du hast. Du hast. Du hast mich gefragt.")
-			assert.ElementsMatch(t, res, []Countable{
-				{
-					Data:          []byte("du"),
-					TermFrequency: float32(4),
-				},
-				{
-					Data:          []byte("hast"),
-					TermFrequency: float32(3),
-				},
-				{
-					Data:          []byte("mich"),
-					TermFrequency: float32(1),
-				},
-				{
-					Data:          []byte("gefragt"),
-					TermFrequency: float32(1),
-				},
-			})
-		})
+		testCases := []testCase{
+			{
+				name:         "tokenization word, unique words",
+				input:        "Hello, my name is John Doe",
+				tokenization: models.PropertyTokenizationWord,
+				expectedCountable: countable(
+					[]string{"hello", "my", "name", "is", "john", "doe"},
+					[]int{1, 1, 1, 1, 1, 1},
+				),
+			},
+			{
+				name:         "tokenization word, duplicated words",
+				input:        "Du. Du hast. Du hast. Du hast mich gefragt.",
+				tokenization: models.PropertyTokenizationWord,
+				expectedCountable: countable(
+					[]string{"du", "hast", "mich", "gefragt"},
+					[]int{4, 3, 1, 1},
+				),
+			},
+			{
+				name:         "tokenization lowercase, unique words",
+				input:        "My email is john-thats-jay.ohh.age.n+alloneword@doe.com",
+				tokenization: models.PropertyTokenizationLowercase,
+				expectedCountable: countable(
+					[]string{"my", "email", "is", "john-thats-jay.ohh.age.n+alloneword@doe.com"},
+					[]int{1, 1, 1, 1},
+				),
+			},
+			{
+				name:         "tokenization lowercase, duplicated words",
+				input:        "Du. Du hast. Du hast. Du hast mich gefragt.",
+				tokenization: models.PropertyTokenizationLowercase,
+				expectedCountable: countable(
+					[]string{"du.", "du", "hast.", "hast", "mich", "gefragt."},
+					[]int{1, 3, 2, 1, 1, 1},
+				),
+			},
+			{
+				name:         "tokenization whitespace, unique words",
+				input:        "My email is john-thats-jay.ohh.age.n+alloneword@doe.com",
+				tokenization: models.PropertyTokenizationWhitespace,
+				expectedCountable: countable(
+					[]string{"My", "email", "is", "john-thats-jay.ohh.age.n+alloneword@doe.com"},
+					[]int{1, 1, 1, 1},
+				),
+			},
+			{
+				name:         "tokenization whitespace, duplicated words",
+				input:        "Du. Du hast. Du hast. Du hast mich gefragt.",
+				tokenization: models.PropertyTokenizationWhitespace,
+				expectedCountable: countable(
+					[]string{"Du.", "Du", "hast.", "hast", "mich", "gefragt."},
+					[]int{1, 3, 2, 1, 1, 1},
+				),
+			},
+			{
+				name:         "tokenization field",
+				input:        "\n Du. Du hast. Du hast. Du hast mich gefragt.\t ",
+				tokenization: models.PropertyTokenizationField,
+				expectedCountable: countable(
+					[]string{"Du. Du hast. Du hast. Du hast mich gefragt."},
+					[]int{1},
+				),
+			},
+			{
+				name:              "non existing tokenization",
+				input:             "Du. Du hast. Du hast. Du hast mich gefragt.",
+				tokenization:      "non_existing",
+				expectedCountable: []Countable{},
+			},
+		}
 
-		t.Run("not supported tokenization", func(t *testing.T) {
-			res := a.Text("not-supported", "Du. Du hast. Du hast. Du hast mich gefragt.")
-			assert.Empty(t, res)
-		})
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				countable := a.Text(tc.tokenization, tc.input)
+				assert.ElementsMatch(t, tc.expectedCountable, countable)
+			})
+		}
 	})
 
 	t.Run("with text array", func(t *testing.T) {
-		t.Run("only unique words", func(t *testing.T) {
-			res := a.TextArray(models.PropertyTokenizationWord, []string{"Hello,", "my name is John Doe"})
-			assert.ElementsMatch(t, res, []Countable{
-				{
-					Data:          []byte("hello"),
-					TermFrequency: float32(1),
-				},
-				{
-					Data:          []byte("my"),
-					TermFrequency: float32(1),
-				},
-				{
-					Data:          []byte("name"),
-					TermFrequency: float32(1),
-				},
-				{
-					Data:          []byte("is"),
-					TermFrequency: float32(1),
-				},
-				{
-					Data:          []byte("john"),
-					TermFrequency: float32(1),
-				},
-				{
-					Data:          []byte("doe"),
-					TermFrequency: float32(1),
-				},
-			})
-		})
+		type testCase struct {
+			name              string
+			input             []string
+			tokenization      string
+			expectedCountable []Countable
+		}
 
-		t.Run("repeated words", func(t *testing.T) {
-			res := a.TextArray(models.PropertyTokenizationWord, []string{"Du. Du hast. Du hast.", "Du hast mich gefragt."})
-			assert.ElementsMatch(t, res, []Countable{
-				{
-					Data:          []byte("du"),
-					TermFrequency: float32(4),
-				},
-				{
-					Data:          []byte("hast"),
-					TermFrequency: float32(3),
-				},
-				{
-					Data:          []byte("mich"),
-					TermFrequency: float32(1),
-				},
-				{
-					Data:          []byte("gefragt"),
-					TermFrequency: float32(1),
-				},
-			})
-		})
+		testCases := []testCase{
+			{
+				name:         "tokenization word, unique words",
+				input:        []string{"Hello,", "my name is John Doe"},
+				tokenization: models.PropertyTokenizationWord,
+				expectedCountable: countable(
+					[]string{"hello", "my", "name", "is", "john", "doe"},
+					[]int{1, 1, 1, 1, 1, 1},
+				),
+			},
+			{
+				name:         "tokenization word, duplicated words",
+				input:        []string{"Du. Du hast. Du hast.", "Du hast mich gefragt."},
+				tokenization: models.PropertyTokenizationWord,
+				expectedCountable: countable(
+					[]string{"du", "hast", "mich", "gefragt"},
+					[]int{4, 3, 1, 1},
+				),
+			},
+			{
+				name:         "tokenization lowercase, unique words",
+				input:        []string{"My email", "is john-thats-jay.ohh.age.n+alloneword@doe.com"},
+				tokenization: models.PropertyTokenizationLowercase,
+				expectedCountable: countable(
+					[]string{"my", "email", "is", "john-thats-jay.ohh.age.n+alloneword@doe.com"},
+					[]int{1, 1, 1, 1},
+				),
+			},
+			{
+				name:         "tokenization lowercase, duplicated words",
+				input:        []string{"Du. Du hast. Du hast.", "Du hast mich gefragt."},
+				tokenization: models.PropertyTokenizationLowercase,
+				expectedCountable: countable(
+					[]string{"du.", "du", "hast.", "hast", "mich", "gefragt."},
+					[]int{1, 3, 2, 1, 1, 1},
+				),
+			},
+			{
+				name:         "tokenization whitespace, unique words",
+				input:        []string{"My email", "is john-thats-jay.ohh.age.n+alloneword@doe.com"},
+				tokenization: models.PropertyTokenizationWhitespace,
+				expectedCountable: countable(
+					[]string{"My", "email", "is", "john-thats-jay.ohh.age.n+alloneword@doe.com"},
+					[]int{1, 1, 1, 1},
+				),
+			},
+			{
+				name:         "tokenization whitespace, duplicated words",
+				input:        []string{"Du. Du hast. Du hast.", "Du hast mich gefragt."},
+				tokenization: models.PropertyTokenizationWhitespace,
+				expectedCountable: countable(
+					[]string{"Du.", "Du", "hast.", "hast", "mich", "gefragt."},
+					[]int{1, 3, 2, 1, 1, 1},
+				),
+			},
+			{
+				name:         "tokenization field",
+				input:        []string{"\n Du. Du hast. Du hast.", "Du hast mich gefragt.\t "},
+				tokenization: models.PropertyTokenizationField,
+				expectedCountable: countable(
+					[]string{"Du. Du hast. Du hast.", "Du hast mich gefragt."},
+					[]int{1, 1},
+				),
+			},
+			{
+				name:              "non existing tokenization",
+				input:             []string{"Du. Du hast. Du hast.", "Du hast mich gefragt."},
+				tokenization:      "non_existing",
+				expectedCountable: []Countable{},
+			},
+		}
 
-		t.Run("not supported tokenization", func(t *testing.T) {
-			res := a.TextArray("not-supported", []string{"Du. Du hast. Du hast.", "Du hast mich gefragt."})
-			assert.Empty(t, res)
-		})
-	})
-
-	t.Run("with string", func(t *testing.T) {
-		t.Run("only unique words", func(t *testing.T) {
-			res := a.String(models.PropertyTokenizationWord, "My email is john-thats-jay.ohh.age.n+alloneword@doe.com")
-			assert.ElementsMatch(t, res, []Countable{
-				{
-					Data:          []byte("john-thats-jay.ohh.age.n+alloneword@doe.com"),
-					TermFrequency: float32(1),
-				},
-				{
-					Data:          []byte("My"),
-					TermFrequency: float32(1),
-				},
-				{
-					Data:          []byte("email"),
-					TermFrequency: float32(1),
-				},
-				{
-					Data:          []byte("is"),
-					TermFrequency: float32(1),
-				},
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				countable := a.TextArray(tc.tokenization, tc.input)
+				assert.ElementsMatch(t, tc.expectedCountable, countable)
 			})
-		})
-
-		t.Run("repeated words", func(t *testing.T) {
-			res := a.String(models.PropertyTokenizationWord, "Du. Du hast. Du hast. Du hast mich gefragt.")
-			assert.ElementsMatch(t, res, []Countable{
-				{
-					Data:          []byte("Du."),
-					TermFrequency: float32(1),
-				},
-				{
-					Data:          []byte("Du"),
-					TermFrequency: float32(3),
-				},
-				{
-					Data:          []byte("hast."),
-					TermFrequency: float32(2),
-				},
-				{
-					Data:          []byte("hast"),
-					TermFrequency: float32(1),
-				},
-				{
-					Data:          []byte("mich"),
-					TermFrequency: float32(1),
-				},
-				{
-					Data:          []byte("gefragt."),
-					TermFrequency: float32(1),
-				},
-			})
-		})
-
-		t.Run("field tokenization", func(t *testing.T) {
-			res := a.String(models.PropertyTokenizationField, "\n Du. Du hast. Du hast. Du hast mich gefragt.\t ")
-			assert.ElementsMatch(t, res, []Countable{
-				{
-					Data:          []byte("Du. Du hast. Du hast. Du hast mich gefragt."),
-					TermFrequency: float32(1),
-				},
-			})
-		})
-	})
-
-	t.Run("with string array", func(t *testing.T) {
-		t.Run("only unique words", func(t *testing.T) {
-			res := a.StringArray(models.PropertyTokenizationWord, []string{"My email", "is john-thats-jay.ohh.age.n+alloneword@doe.com"})
-			assert.ElementsMatch(t, res, []Countable{
-				{
-					Data:          []byte("john-thats-jay.ohh.age.n+alloneword@doe.com"),
-					TermFrequency: float32(1),
-				},
-				{
-					Data:          []byte("My"),
-					TermFrequency: float32(1),
-				},
-				{
-					Data:          []byte("email"),
-					TermFrequency: float32(1),
-				},
-				{
-					Data:          []byte("is"),
-					TermFrequency: float32(1),
-				},
-			})
-		})
-
-		t.Run("repeated words", func(t *testing.T) {
-			res := a.StringArray(models.PropertyTokenizationWord, []string{"Du. Du hast. Du hast.", "Du hast mich gefragt."})
-			assert.ElementsMatch(t, res, []Countable{
-				{
-					Data:          []byte("Du."),
-					TermFrequency: float32(1),
-				},
-				{
-					Data:          []byte("Du"),
-					TermFrequency: float32(3),
-				},
-				{
-					Data:          []byte("hast."),
-					TermFrequency: float32(2),
-				},
-				{
-					Data:          []byte("hast"),
-					TermFrequency: float32(1),
-				},
-				{
-					Data:          []byte("mich"),
-					TermFrequency: float32(1),
-				},
-				{
-					Data:          []byte("gefragt."),
-					TermFrequency: float32(1),
-				},
-			})
-		})
-
-		t.Run("field tokenization", func(t *testing.T) {
-			res := a.StringArray(models.PropertyTokenizationField, []string{"\n Du. Du hast. Du hast.", "Du hast mich gefragt.\t "})
-			assert.ElementsMatch(t, res, []Countable{
-				{
-					Data:          []byte("Du. Du hast. Du hast."),
-					TermFrequency: float32(1),
-				},
-				{
-					Data:          []byte("Du hast mich gefragt."),
-					TermFrequency: float32(1),
-				},
-			})
-		})
+		}
 	})
 
 	t.Run("with int it stays sortable", func(t *testing.T) {
@@ -380,185 +315,218 @@ func TestAnalyzer(t *testing.T) {
 		sort.Slice(afterSort, func(a, b int) bool { return bytes.Compare(afterSort[a], afterSort[b]) == -1 })
 		assert.Equal(t, results, afterSort)
 	})
-}
 
-func TestAnalyzer_ConfigurableStopwords(t *testing.T) {
-	type testcase struct {
-		cfg               schema.StopwordConfig
-		input             string
-		expectedCountable int
-	}
+	byteTrue := []byte{0x1}
+	byteFalse := []byte{0x0}
 
-	runTest := func(t *testing.T, tests []testcase) {
-		for _, test := range tests {
-			a := newTestAnalyzer(t, test.cfg)
+	t.Run("analyze bool", func(t *testing.T) {
+		t.Run("true", func(t *testing.T) {
+			countable, err := a.Bool(true)
+			require.Nil(t, err)
+			require.Len(t, countable, 1)
 
-			textCountable := a.Text(models.PropertyTokenizationWord, test.input)
-			assert.Equal(t, test.expectedCountable, len(textCountable))
+			c := countable[0]
+			assert.Equal(t, byteTrue, c.Data)
+			assert.Equal(t, float32(0), c.TermFrequency)
+		})
 
-			stringCountable := a.String(models.PropertyTokenizationWord, test.input)
-			assert.Equal(t, test.expectedCountable, len(stringCountable))
-		}
-	}
+		t.Run("false", func(t *testing.T) {
+			countable, err := a.Bool(false)
+			require.Nil(t, err)
+			require.Len(t, countable, 1)
 
-	t.Run("with en preset, additions", func(t *testing.T) {
-		tests := []testcase{
-			{
-				cfg: schema.StopwordConfig{
-					Preset:    "en",
-					Additions: []string{"dog"},
-				},
-				input:             "dog dog dog dog",
-				expectedCountable: 0,
-			},
-			{
-				cfg: schema.StopwordConfig{
-					Preset:    "en",
-					Additions: []string{"dog"},
-				},
-				input:             "dog dog dog cat",
-				expectedCountable: 1,
-			},
-			{
-				cfg: schema.StopwordConfig{
-					Preset:    "en",
-					Additions: []string{"dog"},
-				},
-				input:             "a dog is the best",
-				expectedCountable: 1,
-			},
-		}
-
-		runTest(t, tests)
+			c := countable[0]
+			assert.Equal(t, byteFalse, c.Data)
+			assert.Equal(t, float32(0), c.TermFrequency)
+		})
 	})
 
-	t.Run("with no preset, additions", func(t *testing.T) {
-		tests := []testcase{
+	t.Run("analyze bool array", func(t *testing.T) {
+		type testCase struct {
+			name     string
+			values   []bool
+			expected [][]byte
+		}
+
+		testCases := []testCase{
 			{
-				cfg: schema.StopwordConfig{
-					Preset:    "none",
-					Additions: []string{"dog"},
-				},
-				input:             "a dog is the best",
-				expectedCountable: 4,
+				name:     "[true]",
+				values:   []bool{true},
+				expected: [][]byte{byteTrue},
+			},
+			{
+				name:     "[false]",
+				values:   []bool{false},
+				expected: [][]byte{byteFalse},
+			},
+			{
+				name:     "[true, true, true]",
+				values:   []bool{true, true, true},
+				expected: [][]byte{byteTrue, byteTrue, byteTrue},
+			},
+			{
+				name:     "[false, false, false]",
+				values:   []bool{false, false, false},
+				expected: [][]byte{byteFalse, byteFalse, byteFalse},
+			},
+			{
+				name:     "[false, true, false, true]",
+				values:   []bool{false, true, false, true},
+				expected: [][]byte{byteFalse, byteTrue, byteFalse, byteTrue},
+			},
+			{
+				name:     "[]",
+				values:   []bool{},
+				expected: [][]byte{},
 			},
 		}
 
-		runTest(t, tests)
-	})
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				countable, err := a.BoolArray(tc.values)
+				require.Nil(t, err)
+				require.Len(t, countable, len(tc.expected))
 
-	t.Run("with en preset, removals", func(t *testing.T) {
-		tests := []testcase{
-			{
-				cfg: schema.StopwordConfig{
-					Preset:   "en",
-					Removals: []string{"a"},
-				},
-				input:             "a dog is the best",
-				expectedCountable: 3,
-			},
-			{
-				cfg: schema.StopwordConfig{
-					Preset:   "en",
-					Removals: []string{"a", "is", "the"},
-				},
-				input:             "a dog is the best",
-				expectedCountable: 5,
-			},
+				for i := range countable {
+					assert.Equal(t, tc.expected[i], countable[i].Data)
+					assert.Equal(t, float32(0), countable[i].TermFrequency)
+				}
+			})
 		}
-
-		runTest(t, tests)
-	})
-
-	t.Run("with en preset, removals", func(t *testing.T) {
-		tests := []testcase{
-			{
-				cfg: schema.StopwordConfig{
-					Preset:   "en",
-					Removals: []string{"a"},
-				},
-				input:             "a dog is the best",
-				expectedCountable: 3,
-			},
-			{
-				cfg: schema.StopwordConfig{
-					Preset:   "en",
-					Removals: []string{"a", "is", "the"},
-				},
-				input:             "a dog is the best",
-				expectedCountable: 5,
-			},
-		}
-
-		runTest(t, tests)
-	})
-
-	t.Run("with en preset, additions, removals", func(t *testing.T) {
-		tests := []testcase{
-			{
-				cfg: schema.StopwordConfig{
-					Preset:    "en",
-					Additions: []string{"dog"},
-					Removals:  []string{"a"},
-				},
-				input:             "a dog is the best",
-				expectedCountable: 2,
-			},
-			{
-				cfg: schema.StopwordConfig{
-					Preset:    "en",
-					Additions: []string{"dog", "best"},
-					Removals:  []string{"a", "the", "is"},
-				},
-				input:             "a dog is the best",
-				expectedCountable: 3,
-			},
-		}
-
-		runTest(t, tests)
 	})
 }
 
 func TestAnalyzer_DefaultEngPreset(t *testing.T) {
-	a := newTestAnalyzer(t, schema.StopwordConfig{Preset: "en"})
-	input := "hello you-beautiful_world"
+	countable := func(data []string, freq []int) []Countable {
+		countable := make([]Countable, len(data))
+		for i := range data {
+			countable[i] = Countable{
+				Data:          []byte(data[i]),
+				TermFrequency: float32(freq[i]),
+			}
+		}
+		return countable
+	}
 
-	textCountableWord := a.Text(models.PropertyTokenizationWord, input)
-	assert.ElementsMatch(t, textCountableWord, []Countable{
-		{Data: []byte("hello"), TermFrequency: float32(1)},
-		{Data: []byte("you"), TermFrequency: float32(1)},
-		{Data: []byte("beautiful"), TermFrequency: float32(1)},
-		{Data: []byte("world"), TermFrequency: float32(1)},
+	a := NewAnalyzer(nil)
+	input := "Hello you-beautiful_World"
+
+	t.Run("with text", func(t *testing.T) {
+		type testCase struct {
+			name              string
+			tokenization      string
+			input             string
+			expectedCountable []Countable
+		}
+
+		testCases := []testCase{
+			{
+				name:         "tokenization word",
+				tokenization: models.PropertyTokenizationWord,
+				input:        input,
+				expectedCountable: countable(
+					[]string{"hello", "you", "beautiful", "world"},
+					[]int{1, 1, 1, 1},
+				),
+			},
+			{
+				name:         "tokenization lowercase",
+				tokenization: models.PropertyTokenizationLowercase,
+				input:        input,
+				expectedCountable: countable(
+					[]string{"hello", "you-beautiful_world"},
+					[]int{1, 1},
+				),
+			},
+			{
+				name:         "tokenization whitespace",
+				tokenization: models.PropertyTokenizationWhitespace,
+				input:        input,
+				expectedCountable: countable(
+					[]string{"Hello", "you-beautiful_World"},
+					[]int{1, 1},
+				),
+			},
+			{
+				name:         "tokenization field",
+				tokenization: models.PropertyTokenizationField,
+				input:        input,
+				expectedCountable: countable(
+					[]string{"Hello you-beautiful_World"},
+					[]int{1},
+				),
+			},
+			{
+				name:              "non existing tokenization",
+				tokenization:      "non_existing",
+				input:             input,
+				expectedCountable: []Countable{},
+			},
+		}
+
+		for _, tc := range testCases {
+			countable := a.Text(tc.tokenization, tc.input)
+			assert.ElementsMatch(t, tc.expectedCountable, countable)
+		}
 	})
 
-	textArrayCountableWord := a.TextArray(models.PropertyTokenizationWord, []string{input, input})
-	assert.ElementsMatch(t, textArrayCountableWord, []Countable{
-		{Data: []byte("hello"), TermFrequency: float32(2)},
-		{Data: []byte("you"), TermFrequency: float32(2)},
-		{Data: []byte("beautiful"), TermFrequency: float32(2)},
-		{Data: []byte("world"), TermFrequency: float32(2)},
-	})
+	t.Run("with text array", func(t *testing.T) {
+		type testCase struct {
+			name              string
+			tokenization      string
+			input             []string
+			expectedCountable []Countable
+		}
 
-	stringCountableWord := a.String(models.PropertyTokenizationWord, input)
-	assert.ElementsMatch(t, stringCountableWord, []Countable{
-		{Data: []byte("hello"), TermFrequency: float32(1)},
-		{Data: []byte("you-beautiful_world"), TermFrequency: float32(1)},
-	})
+		testCases := []testCase{
+			{
+				name:         "tokenization word",
+				tokenization: models.PropertyTokenizationWord,
+				input:        []string{input, input},
+				expectedCountable: countable(
+					[]string{"hello", "you", "beautiful", "world"},
+					[]int{2, 2, 2, 2},
+				),
+			},
+			{
+				name:         "tokenization lowercase",
+				tokenization: models.PropertyTokenizationLowercase,
+				input:        []string{input, input},
+				expectedCountable: countable(
+					[]string{"hello", "you-beautiful_world"},
+					[]int{2, 2},
+				),
+			},
+			{
+				name:         "tokenization whitespace",
+				tokenization: models.PropertyTokenizationWhitespace,
+				input:        []string{input, input},
+				expectedCountable: countable(
+					[]string{"Hello", "you-beautiful_World"},
+					[]int{2, 2},
+				),
+			},
+			{
+				name:         "tokenization field",
+				tokenization: models.PropertyTokenizationField,
+				input:        []string{input, input},
+				expectedCountable: countable(
+					[]string{"Hello you-beautiful_World"},
+					[]int{2},
+				),
+			},
+			{
+				name:              "non existing tokenization",
+				tokenization:      "non_existing",
+				input:             []string{input, input},
+				expectedCountable: []Countable{},
+			},
+		}
 
-	stringArrayCountableWord := a.StringArray(models.PropertyTokenizationWord, []string{input, input})
-	assert.ElementsMatch(t, stringArrayCountableWord, []Countable{
-		{Data: []byte("hello"), TermFrequency: float32(2)},
-		{Data: []byte("you-beautiful_world"), TermFrequency: float32(2)},
-	})
-
-	stringCountableField := a.String(models.PropertyTokenizationField, input)
-	assert.ElementsMatch(t, stringCountableField, []Countable{
-		{Data: []byte("hello you-beautiful_world"), TermFrequency: float32(1)},
-	})
-
-	stringArrayCountableField := a.StringArray(models.PropertyTokenizationField, []string{input, input})
-	assert.ElementsMatch(t, stringArrayCountableField, []Countable{
-		{Data: []byte("hello you-beautiful_world"), TermFrequency: float32(2)},
+		for _, tc := range testCases {
+			countable := a.TextArray(tc.tokenization, tc.input)
+			assert.ElementsMatch(t, tc.expectedCountable, countable)
+		}
 	})
 }
 
@@ -568,9 +536,63 @@ func (fsd fakeStopwordDetector) IsStopword(word string) bool {
 	return false
 }
 
-func newTestAnalyzer(t *testing.T, cfg schema.StopwordConfig) *Analyzer {
-	sd, err := stopwords.NewDetectorFromConfig(cfg)
-	require.Nil(t, err)
+func TestDedupItems(t *testing.T) {
+	props := []Property{
+		{
+			Name: "propNothingToDo",
+			Items: []Countable{
+				{Data: []byte("fff"), TermFrequency: 3},
+				{Data: []byte("eee"), TermFrequency: 2},
+				{Data: []byte("ddd"), TermFrequency: 1},
+			},
+		},
+		{
+			Name: "propToDedup1",
+			Items: []Countable{
+				{Data: []byte("aaa"), TermFrequency: 1},
+				{Data: []byte("bbb"), TermFrequency: 2},
+				{Data: []byte("ccc"), TermFrequency: 3},
+				{Data: []byte("aaa"), TermFrequency: 4},
+				{Data: []byte("ccc"), TermFrequency: 0},
+			},
+		},
+		{
+			Name: "propToDedup2",
+			Items: []Countable{
+				{Data: []uint8{1}, TermFrequency: 5},
+				{Data: []uint8{1}, TermFrequency: 4},
+				{Data: []uint8{1}, TermFrequency: 3},
+				{Data: []uint8{1}, TermFrequency: 2},
+				{Data: []uint8{1}, TermFrequency: 1},
+			},
+		},
+	}
 
-	return NewAnalyzer(sd)
+	expectedProps := []Property{
+		{
+			Name: "propNothingToDo",
+			Items: []Countable{
+				{Data: []byte("fff"), TermFrequency: 3},
+				{Data: []byte("eee"), TermFrequency: 2},
+				{Data: []byte("ddd"), TermFrequency: 1},
+			},
+		},
+		{
+			Name: "propToDedup1",
+			Items: []Countable{
+				{Data: []byte("bbb"), TermFrequency: 2},
+				{Data: []byte("aaa"), TermFrequency: 4},
+				{Data: []byte("ccc"), TermFrequency: 0},
+			},
+		},
+		{
+			Name: "propToDedup2",
+			Items: []Countable{
+				{Data: []uint8{1}, TermFrequency: 1},
+			},
+		},
+	}
+
+	dedupProps := DedupItems(props)
+	assert.Equal(t, expectedProps, dedupProps)
 }

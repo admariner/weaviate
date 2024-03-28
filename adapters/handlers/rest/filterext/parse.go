@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package filterext
@@ -14,8 +14,8 @@ package filterext
 import (
 	"fmt"
 
-	"github.com/semi-technologies/weaviate/entities/filters"
-	"github.com/semi-technologies/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/filters"
+	"github.com/weaviate/weaviate/entities/models"
 )
 
 // Parse Filter from REST construct to entities filter
@@ -139,10 +139,12 @@ func parseOperator(in string) (filters.Operator, error) {
 		return filters.OperatorAnd, nil
 	case models.WhereFilterOperatorOr:
 		return filters.OperatorOr, nil
-	case models.WhereFilterOperatorNot:
-		return filters.OperatorNot, nil
 	case models.WhereFilterOperatorIsNull:
 		return filters.OperatorIsNull, nil
+	case models.WhereFilterOperatorContainsAny:
+		return filters.ContainsAny, nil
+	case models.WhereFilterOperatorContainsAll:
+		return filters.ContainsAll, nil
 	default:
 		return -1, fmt.Errorf("unrecognized operator: %s", in)
 	}
@@ -168,5 +170,11 @@ func allValuesNil(in *models.WhereFilter) bool {
 		in.ValueText == nil &&
 		in.ValueInt == nil &&
 		in.ValueNumber == nil &&
-		in.ValueGeoRange == nil
+		in.ValueGeoRange == nil &&
+		len(in.ValueBooleanArray) == 0 &&
+		len(in.ValueDateArray) == 0 &&
+		len(in.ValueStringArray) == 0 &&
+		len(in.ValueTextArray) == 0 &&
+		len(in.ValueIntArray) == 0 &&
+		len(in.ValueNumberArray) == 0
 }

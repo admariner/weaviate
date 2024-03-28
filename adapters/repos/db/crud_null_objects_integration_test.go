@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 //go:build integrationTest
@@ -17,20 +17,20 @@ import (
 	"context"
 	"testing"
 
-	"github.com/semi-technologies/weaviate/entities/filters"
-	enthnsw "github.com/semi-technologies/weaviate/entities/vectorindex/hnsw"
-	"github.com/semi-technologies/weaviate/usecases/traverser"
+	"github.com/weaviate/weaviate/entities/dto"
+	"github.com/weaviate/weaviate/entities/filters"
+	enthnsw "github.com/weaviate/weaviate/entities/vectorindex/hnsw"
 
 	"github.com/go-openapi/strfmt"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/google/uuid"
-	"github.com/semi-technologies/weaviate/entities/additional"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	"github.com/semi-technologies/weaviate/usecases/objects"
 	"github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/entities/additional"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/usecases/objects"
 )
 
 // Cannot filter for null state without enabling in the InvertedIndexConfig
@@ -61,13 +61,13 @@ func TestFilterNullStateError(t *testing.T) {
 		},
 	}
 
-	params := traverser.GetParams{
+	params := dto.GetParams{
 		SearchVector: []float32{0.1, 0.1, 0.1, 1.1, 0.1},
 		ClassName:    class.Class,
 		Pagination:   &filters.Pagination{Limit: 5},
 		Filters:      nilFilter,
 	}
-	_, err = repo.ClassSearch(context.Background(), params)
+	_, err = repo.Search(context.Background(), params)
 	require.NotNil(t, err)
 }
 
@@ -117,20 +117,20 @@ func TestNullArrayClass(t *testing.T) {
 			}
 
 			if name == names[0] {
-				assert.Nil(t, repo.PutObject(context.Background(), arrayObjNil, []float32{1}))
-				assert.Nil(t, repo.PutObject(context.Background(), arrayObjEmpty, []float32{1}))
+				assert.Nil(t, repo.PutObject(context.Background(), arrayObjNil, []float32{1}, nil, nil))
+				assert.Nil(t, repo.PutObject(context.Background(), arrayObjEmpty, []float32{1}, nil, nil))
 
 			} else {
 				batch := make([]objects.BatchObject, 2)
 				batch[0] = objects.BatchObject{Object: arrayObjNil, UUID: arrayObjNil.ID}
 				batch[1] = objects.BatchObject{Object: arrayObjEmpty, UUID: arrayObjEmpty.ID}
-				_, err := repo.BatchPutObjects(context.Background(), batch)
+				_, err := repo.BatchPutObjects(context.Background(), batch, nil)
 				assert.Nil(t, err)
 			}
 
-			item1, err := repo.ObjectByID(context.Background(), arrayObjNil.ID, nil, additional.Properties{})
+			item1, err := repo.ObjectByID(context.Background(), arrayObjNil.ID, nil, additional.Properties{}, "")
 			assert.Nil(t, err)
-			item2, err := repo.ObjectByID(context.Background(), arrayObjEmpty.ID, nil, additional.Properties{})
+			item2, err := repo.ObjectByID(context.Background(), arrayObjEmpty.ID, nil, additional.Properties{}, "")
 			assert.Nil(t, err)
 
 			item1Schema := item1.Schema.(map[string]interface{})
@@ -143,18 +143,21 @@ func TestNullArrayClass(t *testing.T) {
 }
 
 func createRepo(t *testing.T) (*Migrator, *DB, *fakeSchemaGetter) {
-	schemaGetter := &fakeSchemaGetter{shardState: singleShardState()}
+	schemaGetter := &fakeSchemaGetter{
+		schema:     schema.Schema{Objects: &models.Schema{Classes: nil}},
+		shardState: singleShardState(),
+	}
 	logger, _ := test.NewNullLogger()
 	dirName := t.TempDir()
-	repo := New(logger, Config{
-		MemtablesFlushIdleAfter:   60,
+	repo, err := New(logger, Config{
+		MemtablesFlushDirtyAfter:  60,
 		RootPath:                  dirName,
 		QueryMaximumResults:       10,
 		MaxImportGoroutinesFactor: 1,
 	}, &fakeRemoteClient{}, &fakeNodeResolver{}, &fakeRemoteNodeClient{}, &fakeReplicationClient{}, nil)
-	repo.SetSchemaGetter(schemaGetter)
-	err := repo.WaitForStartup(testCtx())
 	require.Nil(t, err)
+	repo.SetSchemaGetter(schemaGetter)
+	require.Nil(t, repo.WaitForStartup(testCtx()))
 	return NewMigrator(repo, logger), repo, schemaGetter
 }
 
@@ -173,8 +176,8 @@ func createClassWithEverything(IndexNullState bool, IndexPropertyLength bool) *m
 		Properties: []*models.Property{
 			{
 				Name:         "strings",
-				DataType:     []string{"string[]"},
-				Tokenization: models.PropertyTokenizationWord,
+				DataType:     schema.DataTypeTextArray.PropString(),
+				Tokenization: models.PropertyTokenizationWhitespace,
 			},
 			{
 				Name:         "texts",
@@ -210,8 +213,9 @@ func createClassWithEverything(IndexNullState bool, IndexPropertyLength bool) *m
 				DataType: []string{"int"},
 			},
 			{
-				Name:     "string",
-				DataType: []string{"string"},
+				Name:         "string",
+				DataType:     schema.DataTypeText.PropString(),
+				Tokenization: models.PropertyTokenizationWhitespace,
 			},
 			{
 				Name:     "text",

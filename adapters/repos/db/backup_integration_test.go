@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 //go:build integrationTest
@@ -24,13 +24,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	"github.com/semi-technologies/weaviate/entities/storobj"
-	enthnsw "github.com/semi-technologies/weaviate/entities/vectorindex/hnsw"
 	"github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/storobj"
+	enthnsw "github.com/weaviate/weaviate/entities/vectorindex/hnsw"
 )
 
 func TestBackup_DBLevel(t *testing.T) {
@@ -54,31 +54,37 @@ func TestBackup_DBLevel(t *testing.T) {
 				LastUpdateTimeUnix: now.UnixNano(),
 				Vector:             []float32{1, 2, 3},
 				VectorWeights:      nil,
-			}, []float32{1, 2, 3}))
+			}, []float32{1, 2, 3}, nil, nil))
 		})
 
 		expectedNodeName := "node1"
 		expectedShardName := db.schemaGetter.
-			ShardingState(className).
+			CopyShardingState(className).
 			AllPhysicalShards()[0]
 		testShd := db.GetIndex(schema.ClassName(className)).
-			Shards[expectedShardName]
-		expectedCounterPath := path.Base(testShd.counter.FileName())
-		expectedCounter, err := os.ReadFile(testShd.counter.FileName())
+			shards.Load(expectedShardName)
+		expectedCounterPath, _ := filepath.Rel(testShd.Index().Config.RootPath, testShd.Counter().FileName())
+		expectedCounter, err := os.ReadFile(testShd.Counter().FileName())
 		require.Nil(t, err)
-		expectedPropLengthPath := path.Base(testShd.propLengths.FileName())
-		expectedShardVersionPath := path.Base(testShd.versioner.path)
-		expectedShardVersion, err := os.ReadFile(testShd.versioner.path)
+		expectedPropLengthPath, _ := filepath.Rel(testShd.Index().Config.RootPath, testShd.GetPropertyLengthTracker().FileName())
+		expectedShardVersionPath, _ := filepath.Rel(testShd.Index().Config.RootPath, testShd.Versioner().path)
+		expectedShardVersion, err := os.ReadFile(testShd.Versioner().path)
 		require.Nil(t, err)
-		expectedPropLength, err := os.ReadFile(testShd.propLengths.FileName())
+		expectedPropLength, err := os.ReadFile(testShd.GetPropertyLengthTracker().FileName())
 		require.Nil(t, err)
-		expectedShardState, err := testShd.index.getSchema.ShardingState(className).JSON()
+		expectedShardState, err := testShd.Index().getSchema.CopyShardingState(className).JSON()
 		require.Nil(t, err)
-		expectedSchema, err := testShd.index.getSchema.GetSchemaSkipAuth().
+		expectedSchema, err := testShd.Index().getSchema.GetSchemaSkipAuth().
 			Objects.Classes[0].MarshalBinary()
 		require.Nil(t, err)
 
 		classes := db.ListBackupable()
+
+		t.Run("doesn't fail on casing permutation of existing class", func(t *testing.T) {
+			err := db.Backupable(ctx, []string{"DBLeVELBackupClass"})
+			require.NotNil(t, err)
+			require.Equal(t, "class DBLeVELBackupClass doesn't exist", err.Error())
+		})
 
 		t.Run("create backup", func(t *testing.T) {
 			err := db.Backupable(ctx, classes)
@@ -116,7 +122,8 @@ func TestBackup_DBLevel(t *testing.T) {
 		})
 
 		t.Run("node names from shards", func(t *testing.T) {
-			res := db.Shards(ctx, className)
+			res, err := db.Shards(ctx, className)
+			assert.NoError(t, err)
 			assert.Len(t, res, 1)
 			assert.Equal(t, "node1", res[0])
 		})
@@ -148,7 +155,7 @@ func TestBackup_DBLevel(t *testing.T) {
 				LastUpdateTimeUnix: now.UnixNano(),
 				Vector:             []float32{1, 2, 3},
 				VectorWeights:      nil,
-			}, []float32{1, 2, 3}))
+			}, []float32{1, 2, 3}, nil, nil))
 		})
 
 		t.Run("fail with expired context", func(t *testing.T) {
@@ -175,7 +182,7 @@ func TestBackup_BucketLevel(t *testing.T) {
 	shard, _ := testShard(t, ctx, className)
 
 	t.Run("insert data", func(t *testing.T) {
-		err := shard.putObject(ctx, &storobj.Object{
+		err := shard.PutObject(ctx, &storobj.Object{
 			MarshallerVersion: 1,
 			Object: models.Object{
 				ID:    "8c29da7a-600a-43dc-85fb-83ab2b08c294",
@@ -190,16 +197,16 @@ func TestBackup_BucketLevel(t *testing.T) {
 	})
 
 	t.Run("perform backup sequence", func(t *testing.T) {
-		objBucket := shard.store.Bucket("objects")
+		objBucket := shard.Store().Bucket("objects")
 		require.NotNil(t, objBucket)
 
-		err := objBucket.PauseCompaction(ctx)
+		err := shard.Store().PauseCompaction(ctx)
 		require.Nil(t, err)
 
-		err = objBucket.FlushMemtable(ctx)
+		err = objBucket.FlushMemtable()
 		require.Nil(t, err)
 
-		files, err := objBucket.ListFiles(ctx)
+		files, err := objBucket.ListFiles(ctx, shard.Index().Config.RootPath)
 		require.Nil(t, err)
 
 		t.Run("check ListFiles, results", func(t *testing.T) {
@@ -209,7 +216,7 @@ func TestBackup_BucketLevel(t *testing.T) {
 			// contents of the ListFiles result. the only thing we can't
 			// know for sure is the actual name of the segment group, hence
 			// the `.*`
-			re := path.Clean(fmt.Sprintf("^bucketlevelbackup_%s_lsm\\/objects\\/.*\\.(wal|db|bloom|cna)", shard.name))
+			re := path.Clean(fmt.Sprintf("%s\\/.*\\.(wal|db|bloom|cna)", shard.Index().Config.RootPath))
 
 			// we expect to see only four files inside the bucket at this point:
 			//   1. a *.db file - the segment itself
@@ -236,29 +243,32 @@ func TestBackup_BucketLevel(t *testing.T) {
 			assert.Contains(t, exts, ".bloom") // matches both bloom filters (primary+secondary)
 		})
 
-		err = objBucket.ResumeCompaction(ctx)
+		err = shard.Store().ResumeCompaction(ctx)
 		require.Nil(t, err)
 	})
 
 	t.Run("cleanup", func(t *testing.T) {
-		require.Nil(t, shard.shutdown(ctx))
-		require.Nil(t, os.RemoveAll(shard.index.Config.RootPath))
+		require.Nil(t, shard.Shutdown(ctx))
+		require.Nil(t, os.RemoveAll(shard.Index().Config.RootPath))
 	})
 }
 
 func setupTestDB(t *testing.T, rootDir string, classes ...*models.Class) *DB {
 	logger, _ := test.NewNullLogger()
 
-	schemaGetter := &fakeSchemaGetter{shardState: singleShardState()}
-	db := New(logger, Config{
-		MemtablesFlushIdleAfter:   60,
+	schemaGetter := &fakeSchemaGetter{
+		schema:     schema.Schema{Objects: &models.Schema{Classes: nil}},
+		shardState: singleShardState(),
+	}
+	db, err := New(logger, Config{
+		MemtablesFlushDirtyAfter:  60,
 		RootPath:                  rootDir,
 		QueryMaximumResults:       10,
 		MaxImportGoroutinesFactor: 1,
 	}, &fakeRemoteClient{}, &fakeNodeResolver{}, &fakeRemoteNodeClient{}, &fakeReplicationClient{}, nil)
-	db.SetSchemaGetter(schemaGetter)
-	err := db.WaitForStartup(testCtx())
 	require.Nil(t, err)
+	db.SetSchemaGetter(schemaGetter)
+	require.Nil(t, db.WaitForStartup(testCtx()))
 	migrator := NewMigrator(db, logger)
 
 	for _, class := range classes {
@@ -283,8 +293,9 @@ func makeTestClass(className string) *models.Class {
 		Class:               className,
 		Properties: []*models.Property{
 			{
-				Name:     "stringProp",
-				DataType: []string{string(schema.DataTypeString)},
+				Name:         "stringProp",
+				DataType:     schema.DataTypeText.PropString(),
+				Tokenization: models.PropertyTokenizationWhitespace,
 			},
 		},
 	}

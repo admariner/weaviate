@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package classification
@@ -17,19 +17,22 @@ import (
 	"fmt"
 	"time"
 
+	enterrors "github.com/weaviate/weaviate/entities/errors"
+
 	"github.com/go-openapi/strfmt"
 	"github.com/google/uuid"
 	"github.com/pkg/errors"
-	"github.com/semi-technologies/weaviate/adapters/handlers/rest/filterext"
-	libfilters "github.com/semi-technologies/weaviate/entities/filters"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/modulecapabilities"
-	"github.com/semi-technologies/weaviate/entities/search"
-	"github.com/semi-technologies/weaviate/usecases/objects"
-	schemaUC "github.com/semi-technologies/weaviate/usecases/schema"
-	"github.com/semi-technologies/weaviate/usecases/traverser"
-	libvectorizer "github.com/semi-technologies/weaviate/usecases/vectorizer"
 	"github.com/sirupsen/logrus"
+	"github.com/weaviate/weaviate/adapters/handlers/rest/filterext"
+	"github.com/weaviate/weaviate/entities/additional"
+	"github.com/weaviate/weaviate/entities/dto"
+	libfilters "github.com/weaviate/weaviate/entities/filters"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/modulecapabilities"
+	"github.com/weaviate/weaviate/entities/search"
+	"github.com/weaviate/weaviate/usecases/objects"
+	schemaUC "github.com/weaviate/weaviate/usecases/schema"
+	libvectorizer "github.com/weaviate/weaviate/usecases/vectorizer"
 )
 
 type classificationFilters struct {
@@ -90,7 +93,7 @@ func New(sg schemaUC.SchemaGetter, cr Repo, vr vectorRepo, authorizer authorizer
 }
 
 // Repo to manage classification state, should be consistent, not used to store
-// acutal data object vectors, see VectorRepo
+// actual data object vectors, see VectorRepo
 type Repo interface {
 	Put(ctx context.Context, classification models.Classification) error
 	Get(ctx context.Context, id strfmt.UUID) (*models.Classification, error)
@@ -102,7 +105,7 @@ type VectorRepo interface {
 	AggregateNeighbors(ctx context.Context, vector []float32,
 		class string, properties []string, k int,
 		filter *libfilters.LocalFilter) ([]NeighborRef, error)
-	VectorClassSearch(ctx context.Context, params traverser.GetParams) ([]search.Result, error)
+	VectorSearch(ctx context.Context, params dto.GetParams) ([]search.Result, error)
 	ZeroShotSearch(ctx context.Context, vector []float32,
 		class string, properties []string,
 		filter *libfilters.LocalFilter) ([]search.Result, error)
@@ -110,7 +113,8 @@ type VectorRepo interface {
 
 type vectorRepo interface {
 	VectorRepo
-	BatchPutObjects(ctx context.Context, things objects.BatchObjects) (objects.BatchObjects, error)
+	BatchPutObjects(ctx context.Context, objects objects.BatchObjects,
+		repl *additional.ReplicationProperties) (objects.BatchObjects, error)
 }
 
 // NeighborRef is the result of an aggregation of the ref properties of k
@@ -164,7 +168,7 @@ func (c *Classifier) Schedule(ctx context.Context, principal *models.Principal, 
 		return nil, err
 	}
 
-	go c.run(params, filters)
+	enterrors.GoWrapper(func() { c.run(params, filters) }, c.logger)
 
 	return &params, nil
 }

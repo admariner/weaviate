@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package objects
@@ -16,8 +16,8 @@ import (
 	"fmt"
 
 	"github.com/go-openapi/strfmt"
-	"github.com/semi-technologies/weaviate/entities/additional"
-	"github.com/semi-technologies/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/additional"
+	"github.com/weaviate/weaviate/entities/models"
 )
 
 // UpdateObject updates object of class.
@@ -25,6 +25,7 @@ import (
 // include this particular network ref class.
 func (m *Manager) UpdateObject(ctx context.Context, principal *models.Principal,
 	class string, id strfmt.UUID, updates *models.Object,
+	repl *additional.ReplicationProperties,
 ) (*models.Object, error) {
 	path := fmt.Sprintf("objects/%s/%s", class, id)
 	if class == "" {
@@ -44,19 +45,25 @@ func (m *Manager) UpdateObject(ctx context.Context, principal *models.Principal,
 	}
 	defer unlock()
 
-	return m.updateObjectToConnectorAndSchema(ctx, principal, class, id, updates)
+	return m.updateObjectToConnectorAndSchema(ctx, principal, class, id, updates, repl)
 }
 
-func (m *Manager) updateObjectToConnectorAndSchema(ctx context.Context, principal *models.Principal,
-	className string, id strfmt.UUID, updates *models.Object,
+func (m *Manager) updateObjectToConnectorAndSchema(ctx context.Context,
+	principal *models.Principal, className string, id strfmt.UUID, updates *models.Object,
+	repl *additional.ReplicationProperties,
 ) (*models.Object, error) {
 	if id != updates.ID {
 		return nil, NewErrInvalidUserInput("invalid update: field 'id' is immutable")
 	}
 
-	obj, err := m.getObjectFromRepo(ctx, className, id, additional.Properties{}, nil)
+	obj, err := m.getObjectFromRepo(ctx, className, id, additional.Properties{}, repl, updates.Tenant)
 	if err != nil {
 		return nil, err
+	}
+
+	err = m.autoSchemaManager.autoSchema(ctx, principal, updates, false)
+	if err != nil {
+		return nil, NewErrInvalidUserInput("invalid object: %v", err)
 	}
 
 	m.logger.
@@ -66,13 +73,15 @@ func (m *Manager) updateObjectToConnectorAndSchema(ctx context.Context, principa
 		WithField("id", id).
 		Debug("received update kind request")
 
-	err = m.validateObject(ctx, principal, updates)
+	prevObj := obj.Object()
+	err = m.validateObjectAndNormalizeNames(
+		ctx, principal, repl, updates, prevObj)
 	if err != nil {
 		return nil, NewErrInvalidUserInput("invalid object: %v", err)
 	}
 
 	// Set the original creation timestamp before call to put,
-	// otherwise it is lost. This is because `class` is unmarshaled
+	// otherwise it is lost. This is because `class` is unmarshalled
 	// directly from the request body, therefore `CreationTimeUnix`
 	// inherits the zero value.
 	updates.CreationTimeUnix = obj.Created
@@ -82,14 +91,15 @@ func (m *Manager) updateObjectToConnectorAndSchema(ctx context.Context, principa
 	if err != nil {
 		return nil, err
 	}
-	err = m.modulesProvider.UpdateVector(ctx, updates, class, nil, m.findObject, m.logger)
+
+	err = m.modulesProvider.UpdateVector(ctx, updates, class, m.findObject, m.logger)
 	if err != nil {
 		return nil, NewErrInternal("update object: %v", err)
 	}
 
-	err = m.vectorRepo.PutObject(ctx, updates, updates.Vector)
+	err = m.vectorRepo.PutObject(ctx, updates, updates.Vector, updates.Vectors, repl)
 	if err != nil {
-		return nil, NewErrInternal("put object: %v", err)
+		return nil, fmt.Errorf("put object: %w", err)
 	}
 
 	return updates, nil

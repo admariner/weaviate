@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 //go:build ignore
@@ -27,7 +27,7 @@ import (
 	"time"
 
 	"github.com/go-openapi/strfmt"
-	"github.com/semi-technologies/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/models"
 	"gopkg.in/yaml.v2"
 )
 
@@ -36,6 +36,7 @@ func main() {
 
 	fd, err := os.Open("deprecations.yml")
 	fatal(err)
+	defer fd.Close()
 
 	var deprecations struct {
 		// yaml tags not working on the go-swagger model, so we need to do the
@@ -124,7 +125,7 @@ import (
 	"time"
 
 	"github.com/go-openapi/strfmt"
-	"github.com/semi-technologies/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/models"
 )
 
 func timeMust(t time.Time, err error) strfmt.DateTime {
@@ -150,7 +151,7 @@ func ptString(in string) *string {
 
 var ByID = map[string]models.Deprecation{
 {{- range .Deprecations }}
-	{{ printf "%q" .ID }}: { 
+	{{ printf "%q" .ID }}: {
 		ID: {{ printf "%q" .ID }},
 		Locations: []string{
 		{{- range $index, $element := .Locations }}

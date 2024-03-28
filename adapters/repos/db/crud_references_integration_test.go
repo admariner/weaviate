@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 //go:build integrationTest
@@ -18,24 +18,21 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"math/rand"
-	"sync"
 	"testing"
-	"time"
 
 	"github.com/go-openapi/strfmt"
-	"github.com/semi-technologies/weaviate/entities/additional"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	"github.com/semi-technologies/weaviate/entities/search"
-	enthnsw "github.com/semi-technologies/weaviate/entities/vectorindex/hnsw"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/entities/additional"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/schema/crossref"
+	"github.com/weaviate/weaviate/entities/search"
+	enthnsw "github.com/weaviate/weaviate/entities/vectorindex/hnsw"
 )
 
 func TestNestedReferences(t *testing.T) {
-	rand.Seed(time.Now().UnixNano())
 	dirName := t.TempDir()
 
 	refSchema := schema.Schema{
@@ -47,8 +44,9 @@ func TestNestedReferences(t *testing.T) {
 					InvertedIndexConfig: invertedConfig(),
 					Properties: []*models.Property{
 						{
-							Name:     "name",
-							DataType: []string{string(schema.DataTypeString)},
+							Name:         "name",
+							DataType:     schema.DataTypeText.PropString(),
+							Tokenization: models.PropertyTokenizationWhitespace,
 						},
 					},
 				},
@@ -58,8 +56,9 @@ func TestNestedReferences(t *testing.T) {
 					InvertedIndexConfig: invertedConfig(),
 					Properties: []*models.Property{
 						{
-							Name:     "name",
-							DataType: []string{string(schema.DataTypeString)},
+							Name:         "name",
+							DataType:     schema.DataTypeText.PropString(),
+							Tokenization: models.PropertyTokenizationWhitespace,
 						},
 						{
 							Name:     "onPlanet",
@@ -73,8 +72,9 @@ func TestNestedReferences(t *testing.T) {
 					InvertedIndexConfig: invertedConfig(),
 					Properties: []*models.Property{
 						{
-							Name:     "name",
-							DataType: []string{string(schema.DataTypeString)},
+							Name:         "name",
+							DataType:     schema.DataTypeText.PropString(),
+							Tokenization: models.PropertyTokenizationWhitespace,
 						},
 						{
 							Name:     "onContinent",
@@ -88,8 +88,9 @@ func TestNestedReferences(t *testing.T) {
 					InvertedIndexConfig: invertedConfig(),
 					Properties: []*models.Property{
 						{
-							Name:     "name",
-							DataType: []string{string(schema.DataTypeString)},
+							Name:         "name",
+							DataType:     schema.DataTypeText.PropString(),
+							Tokenization: models.PropertyTokenizationWhitespace,
 						},
 						{
 							Name:     "inCountry",
@@ -103,8 +104,9 @@ func TestNestedReferences(t *testing.T) {
 					InvertedIndexConfig: invertedConfig(),
 					Properties: []*models.Property{
 						{
-							Name:     "name",
-							DataType: []string{string(schema.DataTypeString)},
+							Name:         "name",
+							DataType:     schema.DataTypeText.PropString(),
+							Tokenization: models.PropertyTokenizationWhitespace,
 						},
 						{
 							Name:     "inCity",
@@ -116,15 +118,18 @@ func TestNestedReferences(t *testing.T) {
 		},
 	}
 	logger := logrus.New()
-	schemaGetter := &fakeSchemaGetter{shardState: singleShardState()}
-	repo := New(logger, Config{
-		MemtablesFlushIdleAfter:   60,
+	schemaGetter := &fakeSchemaGetter{
+		schema:     schema.Schema{Objects: &models.Schema{Classes: nil}},
+		shardState: singleShardState(),
+	}
+	repo, err := New(logger, Config{
+		MemtablesFlushDirtyAfter:  60,
 		RootPath:                  dirName,
 		MaxImportGoroutinesFactor: 1,
 	}, &fakeRemoteClient{}, &fakeNodeResolver{}, &fakeRemoteNodeClient{}, &fakeReplicationClient{}, nil)
-	repo.SetSchemaGetter(schemaGetter)
-	err := repo.WaitForStartup(testCtx())
 	require.Nil(t, err)
+	repo.SetSchemaGetter(schemaGetter)
+	require.Nil(t, repo.WaitForStartup(testCtx()))
 	defer repo.Shutdown(context.Background())
 	migrator := NewMigrator(repo, logger)
 
@@ -206,8 +211,7 @@ func TestNestedReferences(t *testing.T) {
 
 		for _, thing := range objects {
 			t.Run(fmt.Sprintf("add %s", thing.ID), func(t *testing.T) {
-				err := repo.PutObject(context.Background(), &thing,
-					[]float32{1, 2, 3, 4, 5, 6, 7})
+				err := repo.PutObject(context.Background(), &thing, []float32{1, 2, 3, 4, 5, 6, 7}, nil, nil)
 				require.Nil(t, err)
 			})
 		}
@@ -255,8 +259,7 @@ func TestNestedReferences(t *testing.T) {
 			"id":   strfmt.UUID("4ef47fb0-3cf5-44fc-b378-9e217dff13ac"),
 		}
 
-		res, err := repo.ObjectByID(context.Background(), "4ef47fb0-3cf5-44fc-b378-9e217dff13ac",
-			fullyNestedSelectProperties(), additional.Properties{})
+		res, err := repo.ObjectByID(context.Background(), "4ef47fb0-3cf5-44fc-b378-9e217dff13ac", fullyNestedSelectProperties(), additional.Properties{}, "")
 		require.Nil(t, err)
 		assert.Equal(t, expectedSchema, res.Schema)
 	})
@@ -307,8 +310,7 @@ func TestNestedReferences(t *testing.T) {
 			"id":   strfmt.UUID("4ef47fb0-3cf5-44fc-b378-9e217dff13ac"),
 		}
 
-		res, err := repo.ObjectByID(context.Background(), "4ef47fb0-3cf5-44fc-b378-9e217dff13ac",
-			fullyNestedSelectPropertiesWithVector(), additional.Properties{})
+		res, err := repo.ObjectByID(context.Background(), "4ef47fb0-3cf5-44fc-b378-9e217dff13ac", fullyNestedSelectPropertiesWithVector(), additional.Properties{}, "")
 		require.Nil(t, err)
 		assert.Equal(t, expectedSchema, res.Schema)
 	})
@@ -341,15 +343,13 @@ func TestNestedReferences(t *testing.T) {
 			"id":   strfmt.UUID("4ef47fb0-3cf5-44fc-b378-9e217dff13ac"),
 		}
 
-		res, err := repo.ObjectByID(context.Background(), "4ef47fb0-3cf5-44fc-b378-9e217dff13ac",
-			partiallyNestedSelectProperties(), additional.Properties{})
+		res, err := repo.ObjectByID(context.Background(), "4ef47fb0-3cf5-44fc-b378-9e217dff13ac", partiallyNestedSelectProperties(), additional.Properties{}, "")
 		require.Nil(t, err)
 		assert.Equal(t, expectedSchema, res.Schema)
 	})
 
 	t.Run("resolving without any refs", func(t *testing.T) {
-		res, err := repo.ObjectByID(context.Background(), "4ef47fb0-3cf5-44fc-b378-9e217dff13ac",
-			search.SelectProperties{}, additional.Properties{})
+		res, err := repo.ObjectByID(context.Background(), "4ef47fb0-3cf5-44fc-b378-9e217dff13ac", search.SelectProperties{}, additional.Properties{}, "")
 
 		expectedSchema := map[string]interface{}{
 			"id": strfmt.UUID("4ef47fb0-3cf5-44fc-b378-9e217dff13ac"),
@@ -381,7 +381,7 @@ func TestNestedReferences(t *testing.T) {
 			CreationTimeUnix: 1566464912,
 		}
 
-		err := repo.PutObject(context.Background(), &newPlace, []float32{1, 2, 3, 4, 5, 6, 7})
+		err := repo.PutObject(context.Background(), &newPlace, []float32{1, 2, 3, 4, 5, 6, 7}, nil, nil)
 		require.Nil(t, err)
 	})
 }
@@ -509,44 +509,38 @@ func partiallyNestedSelectProperties() search.SelectProperties {
 	}
 }
 
-type testCounter struct {
-	sync.Mutex
-	count int
-}
-
-func (c *testCounter) Inc() {
-	c.Lock()
-	defer c.Unlock()
-
-	c.count = c.count + 1
-}
-
-func (c *testCounter) reset() {
-	c.Lock()
-	defer c.Unlock()
-
-	c.count = 0
-}
-
 func GetDimensionsFromRepo(repo *DB, className string) int {
 	if !repo.config.TrackVectorDimensions {
 		log.Printf("Vector dimensions tracking is disabled, returning 0")
 		return 0
 	}
-	repoClassName := schema.ClassName(className)
-	shards := repo.GetIndex(repoClassName).Shards
+	index := repo.GetIndex(schema.ClassName(className))
 	sum := 0
-	for _, shard := range shards {
+	index.ForEachShard(func(name string, shard ShardLike) error {
 		sum += shard.Dimensions()
+		return nil
+	})
+	return sum
+}
+
+func GetQuantizedDimensionsFromRepo(repo *DB, className string, segments int) int {
+	if !repo.config.TrackVectorDimensions {
+		log.Printf("Vector dimensions tracking is disabled, returning 0")
+		return 0
 	}
+	index := repo.GetIndex(schema.ClassName(className))
+	sum := 0
+	index.ForEachShard(func(name string, shard ShardLike) error {
+		sum += shard.QuantizedDimensions(segments)
+		return nil
+	})
 	return sum
 }
 
 func Test_AddingReferenceOneByOne(t *testing.T) {
-	rand.Seed(time.Now().UnixNano())
 	dirName := t.TempDir()
 
-	schema := schema.Schema{
+	sch := schema.Schema{
 		Objects: &models.Schema{
 			Classes: []*models.Class{
 				{
@@ -555,8 +549,9 @@ func Test_AddingReferenceOneByOne(t *testing.T) {
 					InvertedIndexConfig: invertedConfig(),
 					Properties: []*models.Property{
 						{
-							Name:     "name",
-							DataType: []string{"string"},
+							Name:         "name",
+							DataType:     schema.DataTypeText.PropString(),
+							Tokenization: models.PropertyTokenizationWhitespace,
 						},
 					},
 				},
@@ -566,8 +561,9 @@ func Test_AddingReferenceOneByOne(t *testing.T) {
 					InvertedIndexConfig: invertedConfig(),
 					Properties: []*models.Property{
 						{
-							Name:     "name",
-							DataType: []string{"string"},
+							Name:         "name",
+							DataType:     schema.DataTypeText.PropString(),
+							Tokenization: models.PropertyTokenizationWhitespace,
 						},
 						{
 							Name:     "toTarget",
@@ -579,21 +575,24 @@ func Test_AddingReferenceOneByOne(t *testing.T) {
 		},
 	}
 	logger := logrus.New()
-	schemaGetter := &fakeSchemaGetter{shardState: singleShardState()}
-	repo := New(logger, Config{
-		MemtablesFlushIdleAfter:   60,
+	schemaGetter := &fakeSchemaGetter{
+		schema:     schema.Schema{Objects: &models.Schema{Classes: nil}},
+		shardState: singleShardState(),
+	}
+	repo, err := New(logger, Config{
+		MemtablesFlushDirtyAfter:  60,
 		RootPath:                  dirName,
 		MaxImportGoroutinesFactor: 1,
 		TrackVectorDimensions:     true,
 	}, &fakeRemoteClient{}, &fakeNodeResolver{}, &fakeRemoteNodeClient{}, &fakeReplicationClient{}, nil)
-	repo.SetSchemaGetter(schemaGetter)
-	err := repo.WaitForStartup(testCtx())
 	require.Nil(t, err)
+	repo.SetSchemaGetter(schemaGetter)
+	require.Nil(t, repo.WaitForStartup(testCtx()))
 	defer repo.Shutdown(context.Background())
 	migrator := NewMigrator(repo, logger)
 
 	t.Run("add required classes", func(t *testing.T) {
-		for _, class := range schema.Objects.Classes {
+		for _, class := range sch.Objects.Classes {
 			t.Run(fmt.Sprintf("add %s", class.Class), func(t *testing.T) {
 				err := migrator.AddClass(context.Background(), class, schemaGetter.shardState)
 				require.Nil(t, err)
@@ -601,7 +600,7 @@ func Test_AddingReferenceOneByOne(t *testing.T) {
 		}
 	})
 
-	schemaGetter.schema = schema
+	schemaGetter.schema = sch
 	targetID := strfmt.UUID("a4a92239-e748-4e55-bbbd-f606926619a7")
 	target2ID := strfmt.UUID("325084e7-4faa-43a5-b2b1-56e207be169a")
 	sourceID := strfmt.UUID("0826c61b-85c1-44ac-aebb-cfd07ace6a57")
@@ -613,7 +612,7 @@ func Test_AddingReferenceOneByOne(t *testing.T) {
 			Properties: map[string]interface{}{
 				"name": "source item",
 			},
-		}, []float32{0.5})
+		}, []float32{0.5}, nil, nil)
 		require.Nil(t, err)
 
 		err = repo.PutObject(context.Background(), &models.Object{
@@ -622,7 +621,8 @@ func Test_AddingReferenceOneByOne(t *testing.T) {
 			Properties: map[string]interface{}{
 				"name": "target item",
 			},
-		}, []float32{0.5})
+		}, []float32{0.5}, nil, nil)
+		require.Nil(t, err)
 
 		err = repo.PutObject(context.Background(), &models.Object{
 			ID:    target2ID,
@@ -630,7 +630,7 @@ func Test_AddingReferenceOneByOne(t *testing.T) {
 			Properties: map[string]interface{}{
 				"name": "another target item",
 			},
-		}, []float32{0.5})
+		}, []float32{0.5}, nil, nil)
 		require.Nil(t, err)
 	})
 
@@ -639,10 +639,10 @@ func Test_AddingReferenceOneByOne(t *testing.T) {
 		sourceShardDimension := GetDimensionsFromRepo(repo, "AddingReferencesTestSource")
 		targetShardDimension := GetDimensionsFromRepo(repo, "AddingReferencesTestTarget")
 
-		err := repo.AddReference(context.Background(),
-			"AddingReferencesTestSource", sourceID, "toTarget", &models.SingleRef{
-				Beacon: strfmt.URI(fmt.Sprintf("weaviate://localhost/%s", targetID)),
-			})
+		source := crossref.NewSource("AddingReferencesTestSource", "toTarget", sourceID)
+		target := crossref.New("localhost", "", targetID)
+
+		err := repo.AddReference(context.Background(), source, target, nil, "")
 		assert.Nil(t, err)
 
 		// Check dimensions after adding reference
@@ -654,8 +654,7 @@ func Test_AddingReferenceOneByOne(t *testing.T) {
 	})
 
 	t.Run("check reference was added", func(t *testing.T) {
-		source, err := repo.ObjectByID(context.Background(), sourceID, nil,
-			additional.Properties{})
+		source, err := repo.ObjectByID(context.Background(), sourceID, nil, additional.Properties{}, "")
 		require.Nil(t, err)
 		require.NotNil(t, source)
 		require.NotNil(t, source.Object())
@@ -678,16 +677,15 @@ func Test_AddingReferenceOneByOne(t *testing.T) {
 	})
 
 	t.Run("reference a second target", func(t *testing.T) {
-		err := repo.AddReference(context.Background(),
-			"AddingReferencesTestSource", sourceID, "toTarget", &models.SingleRef{
-				Beacon: strfmt.URI(fmt.Sprintf("weaviate://localhost/%s", target2ID)),
-			})
+		source := crossref.NewSource("AddingReferencesTestSource", "toTarget", sourceID)
+		target := crossref.New("localhost", "", target2ID)
+
+		err := repo.AddReference(context.Background(), source, target, nil, "")
 		assert.Nil(t, err)
 	})
 
 	t.Run("check both references are now present", func(t *testing.T) {
-		source, err := repo.ObjectByID(context.Background(), sourceID, nil,
-			additional.Properties{})
+		source, err := repo.ObjectByID(context.Background(), sourceID, nil, additional.Properties{}, "")
 		require.Nil(t, err)
 		require.NotNil(t, source)
 		require.NotNil(t, source.Object())

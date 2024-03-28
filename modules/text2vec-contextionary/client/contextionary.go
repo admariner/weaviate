@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package client
@@ -18,17 +18,19 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
-	pb "github.com/semi-technologies/contextionary/contextionary"
-	"github.com/semi-technologies/weaviate/entities/models"
-	txt2vecmodels "github.com/semi-technologies/weaviate/modules/text2vec-contextionary/additional/models"
-	"github.com/semi-technologies/weaviate/modules/text2vec-contextionary/vectorizer"
-	"github.com/semi-technologies/weaviate/usecases/traverser"
 	"github.com/sirupsen/logrus"
+	pb "github.com/weaviate/contextionary/contextionary"
+	"github.com/weaviate/weaviate/entities/models"
+	txt2vecmodels "github.com/weaviate/weaviate/modules/text2vec-contextionary/additional/models"
+	"github.com/weaviate/weaviate/modules/text2vec-contextionary/vectorizer"
+	"github.com/weaviate/weaviate/usecases/traverser"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 )
+
+const ModelUncontactable = "module uncontactable"
 
 // Client establishes a gRPC connection to a remote contextionary service
 type Client struct {
@@ -56,6 +58,7 @@ func NewClient(uri string, logger logrus.FieldLogger) (*Client, error) {
 func (c *Client) IsStopWord(ctx context.Context, word string) (bool, error) {
 	res, err := c.grpcClient.IsWordStopword(ctx, &pb.Word{Word: word})
 	if err != nil {
+		logConnectionRefused(c.logger, err)
 		return false, err
 	}
 
@@ -66,6 +69,7 @@ func (c *Client) IsStopWord(ctx context.Context, word string) (bool, error) {
 func (c *Client) IsWordPresent(ctx context.Context, word string) (bool, error) {
 	res, err := c.grpcClient.IsWordPresent(ctx, &pb.Word{Word: word})
 	if err != nil {
+		logConnectionRefused(c.logger, err)
 		return false, err
 	}
 
@@ -76,6 +80,7 @@ func (c *Client) IsWordPresent(ctx context.Context, word string) (bool, error) {
 func (c *Client) SafeGetSimilarWordsWithCertainty(ctx context.Context, word string, certainty float32) ([]string, error) {
 	res, err := c.grpcClient.SafeGetSimilarWordsWithCertainty(ctx, &pb.SimilarWordsParams{Word: word, Certainty: certainty})
 	if err != nil {
+		logConnectionRefused(c.logger, err)
 		return nil, err
 	}
 
@@ -98,6 +103,7 @@ func (c *Client) SchemaSearch(ctx context.Context, params traverser.SearchParams
 
 	res, err := c.grpcClient.SchemaSearch(ctx, pbParams)
 	if err != nil {
+		logConnectionRefused(c.logger, err)
 		return traverser.SearchResults{}, err
 	}
 
@@ -148,10 +154,19 @@ func searchResultsFromProto(input []*pb.SchemaSearchResult) []traverser.SearchRe
 func (c *Client) VectorForWord(ctx context.Context, word string) ([]float32, error) {
 	res, err := c.grpcClient.VectorForWord(ctx, &pb.Word{Word: word})
 	if err != nil {
+		logConnectionRefused(c.logger, err)
 		return nil, fmt.Errorf("could not get vector from remote: %v", err)
 	}
 	v, _, _ := vectorFromProto(res)
 	return v, nil
+}
+
+func logConnectionRefused(logger logrus.FieldLogger, err error) {
+	if strings.Contains(fmt.Sprintf("%v", err), "connect: connection refused") {
+		logger.WithError(err).WithField("module", "contextionary").Warnf(ModelUncontactable)
+	} else if strings.Contains(err.Error(), "connectex: No connection could be made because the target machine actively refused it.") {
+		logger.WithError(err).WithField("module", "contextionary").Warnf(ModelUncontactable)
+	}
 }
 
 func (c *Client) MultiVectorForWord(ctx context.Context, words []string) ([][]float32, error) {
@@ -164,6 +179,7 @@ func (c *Client) MultiVectorForWord(ctx context.Context, words []string) ([][]fl
 
 	res, err := c.grpcClient.MultiVectorForWord(ctx, &pb.WordList{Words: wordParams})
 	if err != nil {
+		logConnectionRefused(c.logger, err)
 		return nil, err
 	}
 
@@ -193,6 +209,7 @@ func (c *Client) MultiNearestWordsByVector(ctx context.Context, vectors [][]floa
 
 	res, err := c.grpcClient.MultiNearestWordsByVector(ctx, &pb.VectorNNParamsList{Params: searchParams})
 	if err != nil {
+		logConnectionRefused(c.logger, err)
 		return nil, err
 	}
 
@@ -239,6 +256,11 @@ func (c *Client) VectorForCorpi(ctx context.Context, corpi []string, overridesMa
 	overrides := overridesFromMap(overridesMap)
 	res, err := c.grpcClient.VectorForCorpi(ctx, &pb.Corpi{Corpi: corpi, Overrides: overrides})
 	if err != nil {
+		if strings.Contains(err.Error(), "connect: connection refused") {
+			c.logger.WithError(err).WithField("module", "contextionary").Warnf(ModelUncontactable)
+		} else if strings.Contains(err.Error(), "connectex: No connection could be made because the target machine actively refused it.") {
+			c.logger.WithError(err).WithField("module", "contextionary").Warnf(ModelUncontactable)
+		}
 		st, ok := status.FromError(err)
 		if !ok || st.Code() != codes.InvalidArgument {
 			return nil, nil, fmt.Errorf("could not get vector from remote: %v", err)
@@ -262,6 +284,7 @@ func (c *Client) NearestWordsByVector(ctx context.Context, vector []float32, n i
 		Vector: vectorToProto(vector),
 	})
 	if err != nil {
+		logConnectionRefused(c.logger, err)
 		return nil, nil, fmt.Errorf("could not get nearest words by vector: %v", err)
 	}
 

@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package traverser
@@ -36,7 +36,7 @@ type SearchParams struct {
 	// Name is the string-representation of the class or property name
 	Name string
 
-	// Certaintiy must be a value between 0 and 1. The higher it is the narrower
+	// Certainty must be a value between 0 and 1. The higher it is the narrower
 	// is the search, the lower it is, the wider the search is
 	Certainty float32
 }

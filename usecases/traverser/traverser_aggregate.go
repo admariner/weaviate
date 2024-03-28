@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package traverser
@@ -15,8 +15,11 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/semi-technologies/weaviate/entities/aggregation"
-	"github.com/semi-technologies/weaviate/entities/models"
+	"github.com/pkg/errors"
+	"github.com/weaviate/weaviate/entities/aggregation"
+	enterrors "github.com/weaviate/weaviate/entities/errors"
+	"github.com/weaviate/weaviate/entities/filters"
+	"github.com/weaviate/weaviate/entities/models"
 )
 
 // Aggregate resolves meta queries
@@ -33,7 +36,7 @@ func (t *Traverser) Aggregate(ctx context.Context, principal *models.Principal,
 
 	unlock, err := t.locks.LockConnector()
 	if err != nil {
-		return nil, fmt.Errorf("could not acquire lock: %v", err)
+		return nil, enterrors.NewErrLockConnector(err)
 	}
 	defer unlock()
 
@@ -46,12 +49,20 @@ func (t *Traverser) Aggregate(ctx context.Context, principal *models.Principal,
 		if err != nil {
 			return nil, err
 		}
-		searchVector, err := t.nearParamsVector.vectorFromParams(ctx,
-			params.NearVector, params.NearObject, params.ModuleParams, className)
+		searchVector, targetVector, err := t.nearParamsVector.vectorFromParams(ctx,
+			params.NearVector, params.NearObject, params.ModuleParams, className, params.Tenant)
 		if err != nil {
 			return nil, err
 		}
+
+		targetVector, err = t.targetVectorParamHelper.GetTargetVectorOrDefault(t.schemaGetter.GetSchemaSkipAuth(),
+			className, targetVector)
+		if err != nil {
+			return nil, err
+		}
+		params.TargetVector = targetVector
 		params.SearchVector = searchVector
+
 		certainty := t.nearParamsVector.extractCertaintyFromParams(params.NearVector,
 			params.NearObject, params.ModuleParams)
 
@@ -61,8 +72,32 @@ func (t *Traverser) Aggregate(ctx context.Context, principal *models.Principal,
 		params.Certainty = certainty
 	}
 
+	if params.Hybrid != nil && params.Hybrid.Vector == nil && params.Hybrid.Query != "" {
+		targetVector := ""
+		if len(params.Hybrid.TargetVectors) == 1 {
+			targetVector = params.Hybrid.TargetVectors[0]
+		}
+		targetVector, err = t.targetVectorParamHelper.GetTargetVectorOrDefault(t.schemaGetter.GetSchemaSkipAuth(),
+			params.ClassName.String(), targetVector)
+		if err != nil {
+			return nil, err
+		}
+		vec, err := t.nearParamsVector.modulesProvider.
+			VectorFromInput(ctx, params.ClassName.String(), params.Hybrid.Query, targetVector)
+		if err != nil {
+			return nil, err
+		}
+		params.Hybrid.Vector = vec
+	}
+
+	if params.Filters != nil {
+		if err := filters.ValidateFilters(t.schemaGetter.GetSchemaSkipAuth(), params.Filters); err != nil {
+			return nil, errors.Wrap(err, "invalid 'where' filter")
+		}
+	}
+
 	res, err := t.vectorSearcher.Aggregate(ctx, *params)
-	if err != nil {
+	if err != nil || res == nil {
 		return nil, err
 	}
 

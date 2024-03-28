@@ -4,17 +4,17 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package common_filters
 
-import "github.com/semi-technologies/weaviate/entities/searchparams"
+import "github.com/weaviate/weaviate/entities/searchparams"
 
 // ExtractBM25
-func ExtractBM25(source map[string]interface{}) searchparams.KeywordRanking {
+func ExtractBM25(source map[string]interface{}, explainScore bool) searchparams.KeywordRanking {
 	var args searchparams.KeywordRanking
 
 	p, ok := source["properties"]
@@ -31,6 +31,7 @@ func ExtractBM25(source map[string]interface{}) searchparams.KeywordRanking {
 		args.Query = query.(string)
 	}
 
+	args.AdditionalExplanations = explainScore
 	args.Type = "bm25"
 
 	return args

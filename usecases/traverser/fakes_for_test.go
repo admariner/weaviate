@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package traverser
@@ -18,21 +18,23 @@ import (
 
 	"github.com/go-openapi/strfmt"
 	"github.com/pkg/errors"
-	"github.com/semi-technologies/weaviate/adapters/handlers/graphql/descriptions"
-	"github.com/semi-technologies/weaviate/entities/additional"
-	"github.com/semi-technologies/weaviate/entities/aggregation"
-	"github.com/semi-technologies/weaviate/entities/filters"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/modulecapabilities"
-	"github.com/semi-technologies/weaviate/entities/moduletools"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	"github.com/semi-technologies/weaviate/entities/search"
-	"github.com/semi-technologies/weaviate/entities/storobj"
-	"github.com/semi-technologies/weaviate/entities/vectorindex/hnsw"
-	"github.com/semi-technologies/weaviate/usecases/sharding"
 	"github.com/stretchr/testify/mock"
 	"github.com/tailor-inc/graphql"
 	"github.com/tailor-inc/graphql/language/ast"
+	"github.com/weaviate/weaviate/adapters/handlers/graphql/descriptions"
+	"github.com/weaviate/weaviate/entities/additional"
+	"github.com/weaviate/weaviate/entities/aggregation"
+	"github.com/weaviate/weaviate/entities/dto"
+	"github.com/weaviate/weaviate/entities/filters"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/modulecapabilities"
+	"github.com/weaviate/weaviate/entities/moduletools"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/search"
+	"github.com/weaviate/weaviate/entities/searchparams"
+	"github.com/weaviate/weaviate/entities/storobj"
+	"github.com/weaviate/weaviate/entities/vectorindex/hnsw"
+	"github.com/weaviate/weaviate/usecases/sharding"
 )
 
 type fakeLocks struct{}
@@ -85,14 +87,8 @@ type fakeVectorSearcher struct {
 	results          []search.Result
 }
 
-func (f *fakeVectorSearcher) ClassVectorSearch(ctx context.Context, class string, vector []float32, offset, limit int,
-	filters *filters.LocalFilter,
-) ([]search.Result, error) {
-	panic("not implemented")
-}
-
-func (f *fakeVectorSearcher) VectorSearch(ctx context.Context,
-	vector []float32, offset, limit int, filters *filters.LocalFilter,
+func (f *fakeVectorSearcher) CrossClassVectorSearch(ctx context.Context,
+	vector []float32, targetVector string, offset, limit int, filters *filters.LocalFilter,
 ) ([]search.Result, error) {
 	f.calledWithVector = vector
 	f.calledWithLimit = limit
@@ -107,46 +103,53 @@ func (f *fakeVectorSearcher) Aggregate(ctx context.Context,
 	return args.Get(0).(*aggregation.Result), args.Error(1)
 }
 
-func (f *fakeVectorSearcher) VectorClassSearch(ctx context.Context,
-	params GetParams,
+func (f *fakeVectorSearcher) VectorSearch(ctx context.Context,
+	params dto.GetParams,
 ) ([]search.Result, error) {
 	args := f.Called(params)
 	return args.Get(0).([]search.Result), args.Error(1)
 }
 
-func (f *fakeVectorSearcher) ClassSearch(ctx context.Context,
-	params GetParams,
+func (f *fakeVectorSearcher) Search(ctx context.Context,
+	params dto.GetParams,
 ) ([]search.Result, error) {
 	args := f.Called(params)
 	return args.Get(0).([]search.Result), args.Error(1)
 }
 
 func (f *fakeVectorSearcher) Object(ctx context.Context,
-	className string, id strfmt.UUID,
-	props search.SelectProperties, additional additional.Properties,
-	_ *additional.ReplicationProperties,
+	className string, id strfmt.UUID, props search.SelectProperties,
+	additional additional.Properties, repl *additional.ReplicationProperties,
+	tenant string,
 ) (*search.Result, error) {
 	args := f.Called(className, id)
 	return args.Get(0).(*search.Result), args.Error(1)
 }
 
 func (f *fakeVectorSearcher) ObjectsByID(ctx context.Context, id strfmt.UUID,
-	props search.SelectProperties, additional additional.Properties,
+	props search.SelectProperties, additional additional.Properties, tenant string,
 ) (search.Results, error) {
 	args := f.Called(id)
 	return args.Get(0).(search.Results), args.Error(1)
 }
 
-func (f *fakeVectorSearcher) ClassObjectSearch(ctx context.Context,
-	params GetParams,
+func (f *fakeVectorSearcher) SparseObjectSearch(ctx context.Context,
+	params dto.GetParams,
 ) ([]*storobj.Object, []float32, error) {
 	return nil, nil, nil
 }
 
-func (f *fakeVectorSearcher) ClassObjectVectorSearch(context.Context,
-	string, []float32, int, int, *filters.LocalFilter,
+func (f *fakeVectorSearcher) DenseObjectSearch(context.Context, string,
+	[]float32, string, int, int, *filters.LocalFilter, additional.Properties, string,
 ) ([]*storobj.Object, []float32, error) {
 	return nil, nil, nil
+}
+
+func (f *fakeVectorSearcher) ResolveReferences(ctx context.Context, objs search.Results,
+	props search.SelectProperties, groupBy *searchparams.GroupBy,
+	additional additional.Properties, tenant string,
+) (search.Results, error) {
+	return nil, nil
 }
 
 type fakeAuthorizer struct{}
@@ -159,28 +162,17 @@ type fakeVectorRepo struct {
 	mock.Mock
 }
 
-func (f *fakeVectorRepo) ObjectsByID(ctx context.Context, id strfmt.UUID,
-	props search.SelectProperties, additional additional.Properties,
+func (f *fakeVectorRepo) ObjectsByID(ctx context.Context,
+	id strfmt.UUID, props search.SelectProperties,
+	additional additional.Properties, tenant string,
 ) (search.Results, error) {
 	return nil, nil
 }
 
 func (f *fakeVectorRepo) Object(ctx context.Context, className string, id strfmt.UUID,
 	props search.SelectProperties, additional additional.Properties,
-	repl *additional.ReplicationProperties,
+	repl *additional.ReplicationProperties, tenant string,
 ) (*search.Result, error) {
-	return nil, nil
-}
-
-func (f *fakeVectorRepo) PutObject(ctx context.Context, index string,
-	concept *models.Object, vector []float32,
-) error {
-	return nil
-}
-
-func (f *fakeVectorRepo) VectorSearch(ctx context.Context,
-	vector []float32, offset, limit int, filters *filters.LocalFilter,
-) ([]search.Result, error) {
 	return nil, nil
 }
 
@@ -201,7 +193,7 @@ func (f *fakeVectorRepo) GetObject(ctx context.Context, uuid strfmt.UUID,
 
 type fakeExplorer struct{}
 
-func (f *fakeExplorer) GetClass(ctx context.Context, p GetParams) ([]interface{}, error) {
+func (f *fakeExplorer) GetClass(ctx context.Context, p dto.GetParams) ([]interface{}, error) {
 	return nil, nil
 }
 
@@ -235,9 +227,22 @@ func (f *fakeSchemaGetter) GetSchemaSkipAuth() schema.Schema {
 	return f.schema
 }
 
-func (f *fakeSchemaGetter) ShardingState(class string) *sharding.State {
+func (f *fakeSchemaGetter) CopyShardingState(class string) *sharding.State {
 	panic("not implemented")
 }
+
+func (f *fakeSchemaGetter) ShardOwner(class, shard string) (string, error) {
+	return shard, nil
+}
+
+func (f *fakeSchemaGetter) ShardReplicas(class, shard string) ([]string, error) {
+	return []string{shard}, nil
+}
+
+func (f *fakeSchemaGetter) TenantShard(class, tenant string) (string, string) {
+	return tenant, models.TenantActivityStatusHOT
+}
+func (f *fakeSchemaGetter) ShardFromUUID(class string, uuid []byte) string { return string(uuid) }
 
 func (f *fakeSchemaGetter) Nodes() []string {
 	panic("not implemented")
@@ -248,6 +253,11 @@ func (f *fakeSchemaGetter) NodeName() string {
 }
 
 func (f *fakeSchemaGetter) ClusterHealthScore() int {
+	panic("not implemented")
+}
+
+func (f *fakeSchemaGetter) ResolveParentNodes(string, string,
+) (map[string]string, error) {
 	panic("not implemented")
 }
 
@@ -264,7 +274,7 @@ func (f *fakeInterpretation) ExtractAdditionalFn(param []*ast.Argument) interfac
 	return true
 }
 
-func (f *fakeInterpretation) AdditonalPropertyDefaultValue() interface{} {
+func (f *fakeInterpretation) AdditionalPropertyDefaultValue() interface{} {
 	return true
 }
 
@@ -283,7 +293,7 @@ func (f *fakeExtender) ExtractAdditionalFn(param []*ast.Argument) interface{} {
 	return nil
 }
 
-func (f *fakeExtender) AdditonalPropertyDefaultValue() interface{} {
+func (f *fakeExtender) AdditionalPropertyDefaultValue() interface{} {
 	return true
 }
 
@@ -312,7 +322,7 @@ func (f *fakeProjector) ExtractAdditionalFn(param []*ast.Argument) interface{} {
 	return nil
 }
 
-func (f *fakeProjector) AdditonalPropertyDefaultValue() interface{} {
+func (f *fakeProjector) AdditionalPropertyDefaultValue() interface{} {
 	return &fakeProjectorParams{}
 }
 
@@ -333,7 +343,7 @@ func (f *fakePathBuilder) ExtractAdditionalFn(param []*ast.Argument) interface{}
 	return nil
 }
 
-func (f *fakePathBuilder) AdditonalPropertyDefaultValue() interface{} {
+func (f *fakePathBuilder) AdditionalPropertyDefaultValue() interface{} {
 	return &pathBuilderParams{}
 }
 
@@ -406,12 +416,13 @@ func (m *fakeText2vecContextionaryModule) getInterpretation() *fakeInterpretatio
 }
 
 type nearCustomTextParams struct {
-	Values       []string
-	MoveTo       nearExploreMove
-	MoveAwayFrom nearExploreMove
-	Certainty    float64
-	Distance     float64
-	WithDistance bool
+	Values        []string
+	MoveTo        nearExploreMove
+	MoveAwayFrom  nearExploreMove
+	Certainty     float64
+	Distance      float64
+	WithDistance  bool
+	TargetVectors []string
 }
 
 func (p nearCustomTextParams) GetCertainty() float64 {
@@ -424,6 +435,10 @@ func (p nearCustomTextParams) GetDistance() float64 {
 
 func (p nearCustomTextParams) SimilarityMetricProvided() bool {
 	return p.Certainty != 0 || p.WithDistance
+}
+
+func (p nearCustomTextParams) GetTargetVectors() []string {
+	return p.TargetVectors
 }
 
 type nearExploreMove struct {
@@ -683,7 +698,7 @@ func (m *nearCustomTextModule) AdditionalProperties() map[string]modulecapabilit
 
 func (m *nearCustomTextModule) getFeatureProjection() modulecapabilities.AdditionalProperty {
 	return modulecapabilities.AdditionalProperty{
-		DefaultValue: m.fakeProjector.AdditonalPropertyDefaultValue(),
+		DefaultValue: m.fakeProjector.AdditionalPropertyDefaultValue(),
 		GraphQLNames: []string{"featureProjection"},
 		GraphQLFieldFunction: func(classname string) *graphql.Field {
 			return &graphql.Field{
@@ -728,7 +743,7 @@ func (m *nearCustomTextModule) getFeatureProjection() modulecapabilities.Additio
 
 func (m *nearCustomTextModule) getNearestNeighbors() modulecapabilities.AdditionalProperty {
 	return modulecapabilities.AdditionalProperty{
-		DefaultValue: m.fakeExtender.AdditonalPropertyDefaultValue(),
+		DefaultValue: m.fakeExtender.AdditionalPropertyDefaultValue(),
 		GraphQLNames: []string{"nearestNeighbors"},
 		GraphQLFieldFunction: func(classname string) *graphql.Field {
 			return &graphql.Field{
@@ -758,7 +773,7 @@ func (m *nearCustomTextModule) getNearestNeighbors() modulecapabilities.Addition
 
 func (m *nearCustomTextModule) getSemanticPath() modulecapabilities.AdditionalProperty {
 	return modulecapabilities.AdditionalProperty{
-		DefaultValue: m.fakePathBuilder.AdditonalPropertyDefaultValue(),
+		DefaultValue: m.fakePathBuilder.AdditionalPropertyDefaultValue(),
 		GraphQLNames: []string{"semanticPath"},
 		GraphQLFieldFunction: func(classname string) *graphql.Field {
 			return &graphql.Field{
@@ -788,7 +803,7 @@ func (m *nearCustomTextModule) getSemanticPath() modulecapabilities.AdditionalPr
 
 func (m *nearCustomTextModule) getInterpretation() modulecapabilities.AdditionalProperty {
 	return modulecapabilities.AdditionalProperty{
-		DefaultValue: m.fakeInterpretation.AdditonalPropertyDefaultValue(),
+		DefaultValue: m.fakeInterpretation.AdditionalPropertyDefaultValue(),
 		GraphQLNames: []string{"interpretation"},
 		GraphQLFieldFunction: func(classname string) *graphql.Field {
 			return &graphql.Field{

@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package hnsw
@@ -14,34 +14,37 @@ package hnsw
 import (
 	"sync"
 
-	"github.com/semi-technologies/weaviate/adapters/repos/db/vector/hnsw/priorityqueue"
-	"github.com/semi-technologies/weaviate/adapters/repos/db/vector/hnsw/visited"
+	"github.com/weaviate/weaviate/adapters/repos/db/priorityqueue"
+	"github.com/weaviate/weaviate/adapters/repos/db/vector/cache"
+	"github.com/weaviate/weaviate/adapters/repos/db/vector/common"
+	"github.com/weaviate/weaviate/adapters/repos/db/vector/hnsw/visited"
 )
 
 type pools struct {
 	visitedLists     *visited.Pool
-	visitedListsLock *sync.Mutex
+	visitedListsLock *sync.RWMutex
 
 	pqItemSlice  *sync.Pool
 	pqHeuristic  *pqMinWithIndexPool
-	pqResults    *pqMaxPool
+	pqResults    *common.PqMaxPool
 	pqCandidates *pqMinPool
-	connList     *connList
+
+	tempVectors *common.TempVectorsPool
 }
 
 func newPools(maxConnectionsLayerZero int) *pools {
 	return &pools{
-		visitedLists:     visited.NewPool(1, initialSize+500),
-		visitedListsLock: &sync.Mutex{},
+		visitedLists:     visited.NewPool(1, cache.InitialSize+500),
+		visitedListsLock: &sync.RWMutex{},
 		pqItemSlice: &sync.Pool{
 			New: func() interface{} {
-				return make([]priorityqueue.ItemWithIndex, 0, maxConnectionsLayerZero)
+				return make([]priorityqueue.Item[uint64], 0, maxConnectionsLayerZero)
 			},
 		},
 		pqHeuristic:  newPqMinWithIndexPool(maxConnectionsLayerZero),
-		pqResults:    newPqMaxPool(maxConnectionsLayerZero),
+		pqResults:    common.NewPqMaxPool(maxConnectionsLayerZero),
 		pqCandidates: newPqMinPool(maxConnectionsLayerZero),
-		connList:     newConnList(maxConnectionsLayerZero),
+		tempVectors:  common.NewTempVectorsPool(),
 	}
 }
 
@@ -53,14 +56,14 @@ func newPqMinPool(defaultCap int) *pqMinPool {
 	return &pqMinPool{
 		pool: &sync.Pool{
 			New: func() interface{} {
-				return priorityqueue.NewMin(defaultCap)
+				return priorityqueue.NewMin[any](defaultCap)
 			},
 		},
 	}
 }
 
-func (pqh *pqMinPool) GetMin(capacity int) *priorityqueue.Queue {
-	pq := pqh.pool.Get().(*priorityqueue.Queue)
+func (pqh *pqMinPool) GetMin(capacity int) *priorityqueue.Queue[any] {
+	pq := pqh.pool.Get().(*priorityqueue.Queue[any])
 	if pq.Cap() < capacity {
 		pq.ResetCap(capacity)
 	} else {
@@ -70,7 +73,7 @@ func (pqh *pqMinPool) GetMin(capacity int) *priorityqueue.Queue {
 	return pq
 }
 
-func (pqh *pqMinPool) Put(pq *priorityqueue.Queue) {
+func (pqh *pqMinPool) Put(pq *priorityqueue.Queue[any]) {
 	pqh.pool.Put(pq)
 }
 
@@ -82,14 +85,14 @@ func newPqMinWithIndexPool(defaultCap int) *pqMinWithIndexPool {
 	return &pqMinWithIndexPool{
 		pool: &sync.Pool{
 			New: func() interface{} {
-				return priorityqueue.NewMinWithIndex(defaultCap)
+				return priorityqueue.NewMin[uint64](defaultCap)
 			},
 		},
 	}
 }
 
-func (pqh *pqMinWithIndexPool) GetMin(capacity int) *priorityqueue.QueueWithIndex {
-	pq := pqh.pool.Get().(*priorityqueue.QueueWithIndex)
+func (pqh *pqMinWithIndexPool) GetMin(capacity int) *priorityqueue.Queue[uint64] {
+	pq := pqh.pool.Get().(*priorityqueue.Queue[uint64])
 	if pq.Cap() < capacity {
 		pq.ResetCap(capacity)
 	} else {
@@ -99,60 +102,6 @@ func (pqh *pqMinWithIndexPool) GetMin(capacity int) *priorityqueue.QueueWithInde
 	return pq
 }
 
-func (pqh *pqMinWithIndexPool) Put(pq *priorityqueue.QueueWithIndex) {
+func (pqh *pqMinWithIndexPool) Put(pq *priorityqueue.Queue[uint64]) {
 	pqh.pool.Put(pq)
-}
-
-type pqMaxPool struct {
-	pool *sync.Pool
-}
-
-func newPqMaxPool(defaultCap int) *pqMaxPool {
-	return &pqMaxPool{
-		pool: &sync.Pool{
-			New: func() interface{} {
-				return priorityqueue.NewMax(defaultCap)
-			},
-		},
-	}
-}
-
-func (pqh *pqMaxPool) GetMax(capacity int) *priorityqueue.Queue {
-	pq := pqh.pool.Get().(*priorityqueue.Queue)
-	if pq.Cap() < capacity {
-		pq.ResetCap(capacity)
-	} else {
-		pq.Reset()
-	}
-
-	return pq
-}
-
-func (pqh *pqMaxPool) Put(pq *priorityqueue.Queue) {
-	pqh.pool.Put(pq)
-}
-
-func newConnList(capacity int) *connList {
-	return &connList{
-		pool: &sync.Pool{
-			New: func() interface{} {
-				l := make([]uint64, 0, capacity)
-				return &l
-			},
-		},
-	}
-}
-
-type connList struct {
-	pool *sync.Pool
-}
-
-func (cl *connList) Get(length int) *[]uint64 {
-	list := cl.pool.Get().(*[]uint64)
-	*list = (*list)[:length]
-	return list
-}
-
-func (cl *connList) Put(list *[]uint64) {
-	cl.pool.Put(list)
 }

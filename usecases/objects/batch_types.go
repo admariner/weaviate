@@ -4,19 +4,19 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package objects
 
 import (
 	"github.com/go-openapi/strfmt"
-	"github.com/semi-technologies/weaviate/entities/filters"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	"github.com/semi-technologies/weaviate/entities/schema/crossref"
+	"github.com/weaviate/weaviate/entities/filters"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/schema/crossref"
 )
 
 // BatchObject is a helper type that groups all the info about one object in a
@@ -33,7 +33,6 @@ type BatchObject struct {
 	Err           error
 	Object        *models.Object
 	UUID          strfmt.UUID
-	Vector        []float32
 }
 
 // BatchObjects groups many Object items together. The order matches the
@@ -55,6 +54,7 @@ type BatchReference struct {
 	Err           error               `json:"err"`
 	From          *crossref.RefSource `json:"from"`
 	To            *crossref.Ref       `json:"to"`
+	Tenant        string              `json:"tenant"`
 }
 
 // BatchReferences groups many Reference items together. The order matches the

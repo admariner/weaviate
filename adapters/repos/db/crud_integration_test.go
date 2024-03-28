@@ -4,13 +4,12 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 //go:build integrationTest
-// +build integrationTest
 
 package db
 
@@ -23,24 +22,24 @@ import (
 
 	"github.com/go-openapi/strfmt"
 	"github.com/google/uuid"
-	"github.com/semi-technologies/weaviate/entities/additional"
-	"github.com/semi-technologies/weaviate/entities/filters"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/multi"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	"github.com/semi-technologies/weaviate/entities/schema/crossref"
-	"github.com/semi-technologies/weaviate/entities/search"
-	"github.com/semi-technologies/weaviate/entities/searchparams"
-	enthnsw "github.com/semi-technologies/weaviate/entities/vectorindex/hnsw"
-	"github.com/semi-technologies/weaviate/usecases/objects"
-	"github.com/semi-technologies/weaviate/usecases/traverser"
 	"github.com/sirupsen/logrus/hooks/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/entities/additional"
+	"github.com/weaviate/weaviate/entities/dto"
+	"github.com/weaviate/weaviate/entities/filters"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/multi"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/schema/crossref"
+	"github.com/weaviate/weaviate/entities/search"
+	"github.com/weaviate/weaviate/entities/searchparams"
+	enthnsw "github.com/weaviate/weaviate/entities/vectorindex/hnsw"
+	"github.com/weaviate/weaviate/usecases/objects"
+	"github.com/weaviate/weaviate/usecases/replica"
 )
 
 func TestCRUD(t *testing.T) {
-	rand.Seed(time.Now().UnixNano())
 	dirName := t.TempDir()
 
 	logger, _ := test.NewNullLogger()
@@ -51,8 +50,8 @@ func TestCRUD(t *testing.T) {
 		Properties: []*models.Property{
 			{
 				Name:         "stringProp",
-				DataType:     []string{string(schema.DataTypeString)},
-				Tokenization: "word",
+				DataType:     schema.DataTypeText.PropString(),
+				Tokenization: models.PropertyTokenizationWhitespace,
 			},
 			{
 				Name:     "location",
@@ -71,8 +70,8 @@ func TestCRUD(t *testing.T) {
 		Properties: []*models.Property{
 			{
 				Name:         "stringProp",
-				DataType:     []string{string(schema.DataTypeString)},
-				Tokenization: "word",
+				DataType:     schema.DataTypeText.PropString(),
+				Tokenization: models.PropertyTokenizationWhitespace,
 			},
 			{
 				Name:     "refProp",
@@ -84,16 +83,19 @@ func TestCRUD(t *testing.T) {
 			},
 		},
 	}
-	schemaGetter := &fakeSchemaGetter{shardState: singleShardState()}
-	repo := New(logger, Config{
-		MemtablesFlushIdleAfter:   60,
+	schemaGetter := &fakeSchemaGetter{
+		schema:     schema.Schema{Objects: &models.Schema{Classes: nil}},
+		shardState: singleShardState(),
+	}
+	repo, err := New(logger, Config{
+		MemtablesFlushDirtyAfter:  60,
 		RootPath:                  dirName,
 		QueryMaximumResults:       10,
 		MaxImportGoroutinesFactor: 1,
 	}, &fakeRemoteClient{}, &fakeNodeResolver{}, &fakeRemoteNodeClient{}, &fakeReplicationClient{}, nil)
-	repo.SetSchemaGetter(schemaGetter)
-	err := repo.WaitForStartup(testCtx())
 	require.Nil(t, err)
+	repo.SetSchemaGetter(schemaGetter)
+	require.Nil(t, repo.WaitForStartup(testCtx()))
 	defer repo.Shutdown(context.Background())
 	migrator := NewMigrator(repo, logger)
 
@@ -117,7 +119,7 @@ func TestCRUD(t *testing.T) {
 	thingID := strfmt.UUID("a0b55b05-bc5b-4cc9-b646-1452d1390a62")
 
 	t.Run("validating that the thing doesn't exist prior", func(t *testing.T) {
-		ok, err := repo.Exists(context.Background(), "TheBestThingClass", thingID)
+		ok, err := repo.Exists(context.Background(), "TheBestThingClass", thingID, nil, "")
 		require.Nil(t, err)
 		assert.False(t, ok)
 	})
@@ -163,13 +165,13 @@ func TestCRUD(t *testing.T) {
 		}
 		vector := []float32{1, 3, 5, 0.4}
 
-		err := repo.PutObject(context.Background(), thing, vector)
+		err := repo.PutObject(context.Background(), thing, vector, nil, nil)
 
 		assert.Nil(t, err)
 	})
 
 	t.Run("validating that the thing exists now", func(t *testing.T) {
-		ok, err := repo.Exists(context.Background(), "TheBestThingClass", thingID)
+		ok, err := repo.Exists(context.Background(), "TheBestThingClass", thingID, nil, "")
 		require.Nil(t, err)
 		assert.True(t, ok)
 	})
@@ -186,7 +188,7 @@ func TestCRUD(t *testing.T) {
 		}
 		vector := []float32{1, 3, 5, 0.4}
 
-		err := repo.PutObject(context.Background(), thing, vector)
+		err := repo.PutObject(context.Background(), thing, vector, nil, nil)
 		assert.Equal(t,
 			fmt.Errorf("import into non-existing index for WrongClass"), err)
 	})
@@ -224,7 +226,7 @@ func TestCRUD(t *testing.T) {
 		}
 		vector := []float32{1, 3, 5, 0.4}
 
-		err := repo.PutObject(context.Background(), thing, vector)
+		err := repo.PutObject(context.Background(), thing, vector, nil, nil)
 		assert.Nil(t, err)
 	})
 
@@ -253,21 +255,20 @@ func TestCRUD(t *testing.T) {
 			},
 			Additional: models.AdditionalProperties{},
 		}
-		res, err := repo.ObjectByID(context.Background(), thingID, nil,
-			additional.Properties{})
+		res, err := repo.ObjectByID(context.Background(), thingID, nil, additional.Properties{}, "")
 		require.Nil(t, err)
+		assert.Equal(t, expected, res.ObjectWithVector(false))
 
 		res, err = repo.Object(context.Background(), expected.Class, thingID, nil,
-			additional.Properties{}, nil)
+			additional.Properties{}, nil, "")
 		require.Nil(t, err)
-
 		assert.Equal(t, expected, res.ObjectWithVector(false))
 	})
 
 	t.Run("finding the updated object by querying for an updated value",
 		func(t *testing.T) {
 			// This is to verify the inverted index was updated correctly
-			res, err := repo.ClassSearch(context.Background(), traverser.GetParams{
+			res, err := repo.Search(context.Background(), dto.GetParams{
 				ClassName:  "TheBestThingClass",
 				Pagination: &filters.Pagination{Limit: 10},
 				Filters: &filters.LocalFilter{
@@ -281,7 +282,7 @@ func TestCRUD(t *testing.T) {
 							// we would not have found this object before using "updated", as
 							// this string was only introduced as part of the update
 							Value: "updated",
-							Type:  dtString,
+							Type:  schema.DataTypeText,
 						},
 					},
 				},
@@ -294,7 +295,7 @@ func TestCRUD(t *testing.T) {
 	t.Run("NOT finding the previous version by querying for an outdated value",
 		func(t *testing.T) {
 			// This is to verify the inverted index was cleaned up correctly
-			res, err := repo.ClassSearch(context.Background(), traverser.GetParams{
+			res, err := repo.Search(context.Background(), dto.GetParams{
 				ClassName:  "TheBestThingClass",
 				Pagination: &filters.Pagination{Limit: 10},
 				Filters: &filters.LocalFilter{
@@ -306,7 +307,7 @@ func TestCRUD(t *testing.T) {
 						},
 						Value: &filters.Value{
 							Value: "some",
-							Type:  dtString,
+							Type:  schema.DataTypeText,
 						},
 					},
 				},
@@ -320,7 +321,7 @@ func TestCRUD(t *testing.T) {
 			// This is to verify that while we're adding new links and cleaning up
 			// old ones, we don't actually touch those that were present and still
 			// should be
-			res, err := repo.ClassSearch(context.Background(), traverser.GetParams{
+			res, err := repo.Search(context.Background(), dto.GetParams{
 				ClassName:  "TheBestThingClass",
 				Pagination: &filters.Pagination{Limit: 10},
 				Filters: &filters.LocalFilter{
@@ -334,7 +335,7 @@ func TestCRUD(t *testing.T) {
 							// we would not have found this object before using "updated", as
 							// this string was only introduced as part of the update
 							Value: "value",
-							Type:  dtString,
+							Type:  schema.DataTypeText,
 						},
 					},
 				},
@@ -369,7 +370,7 @@ func TestCRUD(t *testing.T) {
 		}
 		vector := []float32{1, 3, 5, 0.4}
 
-		err := repo.PutObject(context.Background(), thing, vector)
+		err := repo.PutObject(context.Background(), thing, vector, nil, nil)
 		assert.Nil(t, err)
 	})
 
@@ -412,7 +413,7 @@ func TestCRUD(t *testing.T) {
 		}
 		vector := []float32{3, 1, 0.3, 12}
 
-		err := repo.PutObject(context.Background(), action, vector)
+		err := repo.PutObject(context.Background(), action, vector, nil, nil)
 
 		assert.Nil(t, err)
 	})
@@ -422,7 +423,7 @@ func TestCRUD(t *testing.T) {
 		// somewhat far from the thing. So it should match the action closer
 		searchVector := []float32{2.9, 1.1, 0.5, 8.01}
 
-		res, err := repo.VectorSearch(context.Background(), searchVector, 0, 10, nil)
+		res, err := repo.CrossClassVectorSearch(context.Background(), searchVector, "", 0, 10, nil)
 
 		require.Nil(t, err)
 		require.Equal(t, true, len(res) >= 2)
@@ -443,13 +444,13 @@ func TestCRUD(t *testing.T) {
 		// somewhat far from the thing. So it should match the action closer
 		searchVector := []float32{2.9, 1.1, 0.5, 8.01}
 
-		params := traverser.GetParams{
+		params := dto.GetParams{
 			SearchVector: searchVector,
 			ClassName:    "TheBestThingClass",
 			Pagination:   &filters.Pagination{Limit: 10},
 			Filters:      nil,
 		}
-		res, err := repo.VectorClassSearch(context.Background(), params)
+		res, err := repo.VectorSearch(context.Background(), params)
 
 		require.Nil(t, err)
 		require.Len(t, res, 1, "got exactly one result")
@@ -472,13 +473,13 @@ func TestCRUD(t *testing.T) {
 	})
 
 	t.Run("searching by class type", func(t *testing.T) {
-		params := traverser.GetParams{
+		params := dto.GetParams{
 			SearchVector: nil,
 			ClassName:    "TheBestThingClass",
 			Pagination:   &filters.Pagination{Limit: 10},
 			Filters:      nil,
 		}
-		res, err := repo.ClassSearch(context.Background(), params)
+		res, err := repo.Search(context.Background(), params)
 
 		require.Nil(t, err)
 		require.Len(t, res, 1, "got exactly one result")
@@ -531,14 +532,14 @@ func TestCRUD(t *testing.T) {
 		}
 		vector := []float32{1, 3, 5, 0.4}
 
-		err := repo.PutObject(context.Background(), thing, vector)
+		err := repo.PutObject(context.Background(), thing, vector, nil, nil)
 
 		assert.Nil(t, err)
 	})
 
 	t.Run("searching all things", func(t *testing.T) {
 		// as the test suits grow we might have to extend the limit
-		res, err := repo.ObjectSearch(context.Background(), 0, 100, nil, nil, additional.Properties{})
+		res, err := repo.ObjectSearch(context.Background(), 0, 100, nil, nil, additional.Properties{}, "")
 		require.Nil(t, err)
 
 		item, ok := findID(res, thingID)
@@ -555,7 +556,7 @@ func TestCRUD(t *testing.T) {
 
 	t.Run("searching all things with Vector additional props", func(t *testing.T) {
 		// as the test suits grow we might have to extend the limit
-		res, err := repo.ObjectSearch(context.Background(), 0, 100, nil, nil, additional.Properties{Vector: true})
+		res, err := repo.ObjectSearch(context.Background(), 0, 100, nil, nil, additional.Properties{Vector: true}, "")
 		require.Nil(t, err)
 
 		item, ok := findID(res, thingID)
@@ -578,7 +579,7 @@ func TestCRUD(t *testing.T) {
 				"interpretation": true,
 			},
 		}
-		res, err := repo.ObjectSearch(context.Background(), 0, 100, nil, nil, params)
+		res, err := repo.ObjectSearch(context.Background(), 0, 100, nil, nil, params, "")
 		require.Nil(t, err)
 
 		item, ok := findID(res, thingID)
@@ -610,7 +611,7 @@ func TestCRUD(t *testing.T) {
 	})
 
 	t.Run("searching a thing by ID", func(t *testing.T) {
-		item, err := repo.ObjectByID(context.Background(), thingID, search.SelectProperties{}, additional.Properties{})
+		item, err := repo.ObjectByID(context.Background(), thingID, search.SelectProperties{}, additional.Properties{}, "")
 		require.Nil(t, err)
 		require.NotNil(t, item, "must have a result")
 
@@ -625,7 +626,7 @@ func TestCRUD(t *testing.T) {
 	// Check the same, but with Object()
 	t.Run("searching a thing by ID", func(t *testing.T) {
 		item, err := repo.Object(context.Background(), "TheBestThingClass",
-			thingID, search.SelectProperties{}, additional.Properties{}, nil)
+			thingID, search.SelectProperties{}, additional.Properties{}, nil, "")
 		require.Nil(t, err)
 		require.NotNil(t, item, "must have a result")
 
@@ -648,7 +649,7 @@ func TestCRUD(t *testing.T) {
 				ClassName: "TheBestThingClass",
 			},
 		}
-		res, err := repo.MultiGet(context.Background(), query, additional.Properties{})
+		res, err := repo.MultiGet(context.Background(), query, additional.Properties{}, "")
 		require.Nil(t, err)
 		require.Len(t, res, 2, "length must match even with nil-items")
 
@@ -664,7 +665,7 @@ func TestCRUD(t *testing.T) {
 	})
 
 	t.Run("searching an action by ID without meta", func(t *testing.T) {
-		item, err := repo.ObjectByID(context.Background(), actionID, search.SelectProperties{}, additional.Properties{})
+		item, err := repo.ObjectByID(context.Background(), actionID, search.SelectProperties{}, additional.Properties{}, "")
 		require.Nil(t, err)
 		require.NotNil(t, item, "must have a result")
 
@@ -683,8 +684,7 @@ func TestCRUD(t *testing.T) {
 	})
 
 	t.Run("searching an action by ID with Classification and Vector additional properties", func(t *testing.T) {
-		item, err := repo.ObjectByID(context.Background(), actionID, search.SelectProperties{},
-			additional.Properties{Classification: true, Vector: true, RefMeta: true})
+		item, err := repo.ObjectByID(context.Background(), actionID, search.SelectProperties{}, additional.Properties{Classification: true, Vector: true, RefMeta: true}, "")
 		require.Nil(t, err)
 		require.NotNil(t, item, "must have a result")
 
@@ -724,7 +724,7 @@ func TestCRUD(t *testing.T) {
 	})
 
 	t.Run("searching an action by ID with only Vector additional property", func(t *testing.T) {
-		item, err := repo.ObjectByID(context.Background(), actionID, search.SelectProperties{}, additional.Properties{Vector: true})
+		item, err := repo.ObjectByID(context.Background(), actionID, search.SelectProperties{}, additional.Properties{Vector: true}, "")
 		require.Nil(t, err)
 		require.NotNil(t, item, "must have a result")
 
@@ -736,7 +736,7 @@ func TestCRUD(t *testing.T) {
 	})
 
 	t.Run("searching all actions", func(t *testing.T) {
-		res, err := repo.ObjectSearch(context.Background(), 0, 10, nil, nil, additional.Properties{})
+		res, err := repo.ObjectSearch(context.Background(), 0, 10, nil, nil, additional.Properties{}, "")
 		require.Nil(t, err)
 
 		item, ok := findID(res, actionID)
@@ -838,7 +838,7 @@ func TestCRUD(t *testing.T) {
 				},
 			}
 			vector := []float32{1.1, 1.3, 1.5, 1.4}
-			err := repo.PutObject(context.Background(), object, vector)
+			err := repo.PutObject(context.Background(), object, vector, nil, nil)
 			assert.Nil(t, err)
 		}
 		// run sorting tests
@@ -892,7 +892,7 @@ func TestCRUD(t *testing.T) {
 		}
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
-				res, err := repo.ObjectSearch(context.Background(), 0, 100, nil, tt.sort, additional.Properties{Vector: true})
+				res, err := repo.ObjectSearch(context.Background(), 0, 100, nil, tt.sort, additional.Properties{Vector: true}, "")
 				if len(tt.constainsErrorMsgs) > 0 {
 					require.NotNil(t, err)
 					for _, errorMsg := range tt.constainsErrorMsgs {
@@ -910,14 +910,14 @@ func TestCRUD(t *testing.T) {
 							actionIds = append(actionIds, res[i].ID)
 						}
 					}
-					assert.EqualValues(t, thingIds, tt.expectedThingIDs, "thing ids dont match")
-					assert.EqualValues(t, actionIds, tt.expectedActionIDs, "action ids dont match")
+					assert.EqualValues(t, thingIds, tt.expectedThingIDs, "thing ids don't match")
+					assert.EqualValues(t, actionIds, tt.expectedActionIDs, "action ids don't match")
 				}
 			})
 		}
 		// clean up
 		for _, td := range testData {
-			err := repo.DeleteObject(context.Background(), td.className, td.id)
+			err := repo.DeleteObject(context.Background(), td.className, td.id, nil, "")
 			assert.Nil(t, err)
 		}
 	})
@@ -925,7 +925,7 @@ func TestCRUD(t *testing.T) {
 	t.Run("verifying the thing is indexed in the inverted index", func(t *testing.T) {
 		// This is a control for the upcoming deletion, after the deletion it should not
 		// be indexed anymore.
-		res, err := repo.ClassSearch(context.Background(), traverser.GetParams{
+		res, err := repo.Search(context.Background(), dto.GetParams{
 			ClassName:  "TheBestThingClass",
 			Pagination: &filters.Pagination{Limit: 10},
 			Filters: &filters.LocalFilter{
@@ -937,7 +937,7 @@ func TestCRUD(t *testing.T) {
 					},
 					Value: &filters.Value{
 						Value: "some",
-						Type:  dtString,
+						Type:  schema.DataTypeText,
 					},
 				},
 			},
@@ -949,7 +949,7 @@ func TestCRUD(t *testing.T) {
 	t.Run("verifying the action is indexed in the inverted index", func(t *testing.T) {
 		// This is a control for the upcoming deletion, after the deletion it should not
 		// be indexed anymore.
-		res, err := repo.ClassSearch(context.Background(), traverser.GetParams{
+		res, err := repo.Search(context.Background(), dto.GetParams{
 			ClassName:  "TheBestActionClass",
 			Pagination: &filters.Pagination{Limit: 10},
 			Filters: &filters.LocalFilter{
@@ -961,7 +961,7 @@ func TestCRUD(t *testing.T) {
 					},
 					Value: &filters.Value{
 						Value: "some",
-						Type:  dtString,
+						Type:  schema.DataTypeText,
 					},
 				},
 			},
@@ -971,22 +971,19 @@ func TestCRUD(t *testing.T) {
 	})
 
 	t.Run("deleting a thing again", func(t *testing.T) {
-		err := repo.DeleteObject(context.Background(),
-			"TheBestThingClass", thingID)
+		err := repo.DeleteObject(context.Background(), "TheBestThingClass", thingID, nil, "")
 
 		assert.Nil(t, err)
 	})
 
 	t.Run("deleting a action again", func(t *testing.T) {
-		err := repo.DeleteObject(context.Background(),
-			"TheBestActionClass", actionID)
+		err := repo.DeleteObject(context.Background(), "TheBestActionClass", actionID, nil, "")
 
 		assert.Nil(t, err)
 	})
 
 	t.Run("trying to delete from a non-existing class", func(t *testing.T) {
-		err := repo.DeleteObject(context.Background(),
-			"WrongClass", thingID)
+		err := repo.DeleteObject(context.Background(), "WrongClass", thingID, nil, "")
 
 		assert.Equal(t, fmt.Errorf(
 			"delete from non-existing index for WrongClass"), err)
@@ -994,7 +991,7 @@ func TestCRUD(t *testing.T) {
 
 	t.Run("verifying the thing is NOT indexed in the inverted index",
 		func(t *testing.T) {
-			res, err := repo.ClassSearch(context.Background(), traverser.GetParams{
+			res, err := repo.Search(context.Background(), dto.GetParams{
 				ClassName:  "TheBestThingClass",
 				Pagination: &filters.Pagination{Limit: 10},
 				Filters: &filters.LocalFilter{
@@ -1006,7 +1003,7 @@ func TestCRUD(t *testing.T) {
 						},
 						Value: &filters.Value{
 							Value: "some",
-							Type:  dtString,
+							Type:  schema.DataTypeText,
 						},
 					},
 				},
@@ -1017,7 +1014,7 @@ func TestCRUD(t *testing.T) {
 
 	t.Run("verifying the action is NOT indexed in the inverted index",
 		func(t *testing.T) {
-			res, err := repo.ClassSearch(context.Background(), traverser.GetParams{
+			res, err := repo.Search(context.Background(), dto.GetParams{
 				ClassName:  "TheBestActionClass",
 				Pagination: &filters.Pagination{Limit: 10},
 				Filters: &filters.LocalFilter{
@@ -1029,7 +1026,7 @@ func TestCRUD(t *testing.T) {
 						},
 						Value: &filters.Value{
 							Value: "some",
-							Type:  dtString,
+							Type:  schema.DataTypeText,
 						},
 					},
 				},
@@ -1039,15 +1036,13 @@ func TestCRUD(t *testing.T) {
 		})
 
 	t.Run("trying to get the deleted thing by ID", func(t *testing.T) {
-		item, err := repo.ObjectByID(context.Background(), thingID,
-			search.SelectProperties{}, additional.Properties{})
+		item, err := repo.ObjectByID(context.Background(), thingID, search.SelectProperties{}, additional.Properties{}, "")
 		require.Nil(t, err)
 		require.Nil(t, item, "must not have a result")
 	})
 
 	t.Run("trying to get the deleted action by ID", func(t *testing.T) {
-		item, err := repo.ObjectByID(context.Background(), actionID,
-			search.SelectProperties{}, additional.Properties{})
+		item, err := repo.ObjectByID(context.Background(), actionID, search.SelectProperties{}, additional.Properties{}, "")
 		require.Nil(t, err)
 		require.Nil(t, item, "must not have a result")
 	})
@@ -1055,14 +1050,14 @@ func TestCRUD(t *testing.T) {
 	t.Run("searching by vector for a single thing class again after deletion",
 		func(t *testing.T) {
 			searchVector := []float32{2.9, 1.1, 0.5, 8.01}
-			params := traverser.GetParams{
+			params := dto.GetParams{
 				SearchVector: searchVector,
 				ClassName:    "TheBestThingClass",
 				Pagination:   &filters.Pagination{Limit: 10},
 				Filters:      nil,
 			}
 
-			res, err := repo.VectorClassSearch(context.Background(), params)
+			res, err := repo.VectorSearch(context.Background(), params)
 
 			require.Nil(t, err)
 			assert.Len(t, res, 0)
@@ -1070,14 +1065,14 @@ func TestCRUD(t *testing.T) {
 
 	t.Run("searching by vector for a single action class again after deletion", func(t *testing.T) {
 		searchVector := []float32{2.9, 1.1, 0.5, 8.01}
-		params := traverser.GetParams{
+		params := dto.GetParams{
 			SearchVector: searchVector,
 			ClassName:    "TheBestActionClass",
 			Pagination:   &filters.Pagination{Limit: 10},
 			Filters:      nil,
 		}
 
-		res, err := repo.VectorClassSearch(context.Background(), params)
+		res, err := repo.VectorSearch(context.Background(), params)
 
 		require.Nil(t, err)
 		assert.Len(t, res, 0)
@@ -1104,7 +1099,7 @@ func TestCRUD(t *testing.T) {
 				}
 				createdActionIDs[i] = newID
 			}
-			batchObjResp, err := repo.BatchPutObjects(context.Background(), actionBatch)
+			batchObjResp, err := repo.BatchPutObjects(context.Background(), actionBatch, nil)
 			require.Len(t, batchObjResp, numThings)
 			require.Nil(t, err)
 			for _, r := range batchObjResp {
@@ -1128,7 +1123,7 @@ func TestCRUD(t *testing.T) {
 				}
 				createdThingIDs[i] = newID
 			}
-			batchObjResp, err := repo.BatchPutObjects(context.Background(), thingBatch)
+			batchObjResp, err := repo.BatchPutObjects(context.Background(), thingBatch, nil)
 			require.Len(t, batchObjResp, numThings)
 			require.Nil(t, err)
 			for _, r := range batchObjResp {
@@ -1155,7 +1150,7 @@ func TestCRUD(t *testing.T) {
 				}
 				refBatch[i] = ref
 			}
-			batchRefResp, err := repo.AddBatchReferences(context.Background(), refBatch)
+			batchRefResp, err := repo.AddBatchReferences(context.Background(), refBatch, nil)
 			require.Nil(t, err)
 			require.Len(t, batchRefResp, numThings)
 			for _, r := range batchRefResp {
@@ -1165,7 +1160,7 @@ func TestCRUD(t *testing.T) {
 
 		t.Run("query every action for its referenced thing", func(t *testing.T) {
 			for i := range createdActionIDs {
-				resp, err := repo.ClassSearch(context.Background(), traverser.GetParams{
+				resp, err := repo.Search(context.Background(), dto.GetParams{
 					ClassName:            "TheBestActionClass",
 					Pagination:           &filters.Pagination{Limit: 5},
 					AdditionalProperties: additional.Properties{ID: true},
@@ -1197,7 +1192,7 @@ func TestCRUD(t *testing.T) {
 									},
 									Value: &filters.Value{
 										Value: fmt.Sprintf("action#%d", i),
-										Type:  dtString,
+										Type:  schema.DataTypeText,
 									},
 								},
 								{
@@ -1212,7 +1207,7 @@ func TestCRUD(t *testing.T) {
 									},
 									Value: &filters.Value{
 										Value: "thing#*",
-										Type:  dtString,
+										Type:  schema.DataTypeText,
 									},
 								},
 							},
@@ -1232,16 +1227,17 @@ func TestCRUD(t *testing.T) {
 
 		t.Run("insert test obj", func(t *testing.T) {
 			vec := []float32{0.1, 0.2, 0.3, 0.4}
+
 			obj := &models.Object{
 				ID:     id,
 				Class:  "TheBestActionClass",
 				Vector: vec,
 			}
-			require.Nil(t, repo.PutObject(context.Background(), obj, vec))
+			require.Nil(t, repo.PutObject(context.Background(), obj, vec, nil, nil))
 		})
 
 		t.Run("perform search with id filter", func(t *testing.T) {
-			res, err := repo.ClassSearch(context.Background(), traverser.GetParams{
+			res, err := repo.Search(context.Background(), dto.GetParams{
 				Pagination: &filters.Pagination{Limit: 10},
 				ClassName:  "TheBestActionClass",
 				Filters: &filters.LocalFilter{
@@ -1253,7 +1249,7 @@ func TestCRUD(t *testing.T) {
 						},
 						Value: &filters.Value{
 							Value: id.String(),
-							Type:  dtString,
+							Type:  schema.DataTypeText,
 						},
 					},
 				},
@@ -1274,32 +1270,283 @@ func TestCRUD(t *testing.T) {
 				},
 			}
 
+			for i := range expected {
+				expected[i].DocID = res[i].DocID
+			}
+
 			assert.Equal(t, expected, res)
 		})
 	})
 }
 
+func TestCRUD_Query(t *testing.T) {
+	dirName := t.TempDir()
+
+	logger, _ := test.NewNullLogger()
+	thingclass := &models.Class{
+		VectorIndexConfig:   enthnsw.NewDefaultUserConfig(),
+		InvertedIndexConfig: invertedConfig(),
+		Class:               "TheBestThingClass",
+		Properties: []*models.Property{
+			{
+				Name:         "stringProp",
+				DataType:     schema.DataTypeText.PropString(),
+				Tokenization: models.PropertyTokenizationWhitespace,
+			},
+		},
+	}
+	schemaGetter := &fakeSchemaGetter{
+		schema:     schema.Schema{Objects: &models.Schema{Classes: nil}},
+		shardState: singleShardState(),
+	}
+	repo, err := New(logger, Config{
+		MemtablesFlushDirtyAfter:  60,
+		RootPath:                  dirName,
+		QueryMaximumResults:       10,
+		MaxImportGoroutinesFactor: 1,
+	}, &fakeRemoteClient{}, &fakeNodeResolver{}, &fakeRemoteNodeClient{}, &fakeReplicationClient{}, nil)
+	require.Nil(t, err)
+	repo.SetSchemaGetter(schemaGetter)
+	require.Nil(t, repo.WaitForStartup(testCtx()))
+	defer repo.Shutdown(context.Background())
+	migrator := NewMigrator(repo, logger)
+
+	t.Run("creating the thing class", func(t *testing.T) {
+		require.Nil(t,
+			migrator.AddClass(context.Background(), thingclass, schemaGetter.shardState))
+	})
+
+	// update schema getter so it's in sync with class
+	schemaGetter.schema = schema.Schema{
+		Objects: &models.Schema{
+			Classes: []*models.Class{thingclass},
+		},
+	}
+
+	t.Run("scroll through all objects", func(t *testing.T) {
+		// prepare
+		className := "TheBestThingClass"
+		thingID1 := strfmt.UUID("7c8183ae-150d-433f-92b6-ed095b000001")
+		thingID2 := strfmt.UUID("7c8183ae-150d-433f-92b6-ed095b000002")
+		thingID3 := strfmt.UUID("7c8183ae-150d-433f-92b6-ed095b000003")
+		thingID4 := strfmt.UUID("7c8183ae-150d-433f-92b6-ed095b000004")
+		thingID5 := strfmt.UUID("7c8183ae-150d-433f-92b6-ed095b000005")
+		thingID6 := strfmt.UUID("7c8183ae-150d-433f-92b6-ed095b000006")
+		thingID7 := strfmt.UUID("7c8183ae-150d-433f-92b6-ed095b000007")
+		testData := []struct {
+			id         strfmt.UUID
+			className  string
+			stringProp string
+			phone      uint64
+			longitude  float32
+		}{
+			{
+				id:         thingID1,
+				className:  className,
+				stringProp: "a very short text",
+			},
+			{
+				id:         thingID2,
+				className:  className,
+				stringProp: "zebra lives in Zoo",
+			},
+			{
+				id:         thingID3,
+				className:  className,
+				stringProp: "the best thing class",
+			},
+			{
+				id:         thingID4,
+				className:  className,
+				stringProp: "car",
+			},
+			{
+				id:         thingID5,
+				className:  className,
+				stringProp: "a very short text",
+			},
+			{
+				id:         thingID6,
+				className:  className,
+				stringProp: "zebra lives in Zoo",
+			},
+			{
+				id:         thingID7,
+				className:  className,
+				stringProp: "fossil fuels",
+			},
+		}
+		for _, td := range testData {
+			object := &models.Object{
+				CreationTimeUnix:   1565612833990,
+				LastUpdateTimeUnix: 1000001,
+				ID:                 td.id,
+				Class:              td.className,
+				Properties: map[string]interface{}{
+					"stringProp": td.stringProp,
+				},
+			}
+			vector := []float32{1.1, 1.3, 1.5, 1.4}
+			err := repo.PutObject(context.Background(), object, vector, nil, nil)
+			assert.Nil(t, err)
+		}
+		// toParams helper method
+		toParams := func(className string, offset, limit int,
+			cursor *filters.Cursor, filters *filters.LocalFilter, sort []filters.Sort,
+		) *objects.QueryInput {
+			return &objects.QueryInput{
+				Class:      className,
+				Offset:     offset,
+				Limit:      limit,
+				Cursor:     cursor,
+				Filters:    filters,
+				Sort:       sort,
+				Additional: additional.Properties{},
+			}
+		}
+		// run scrolling through all results
+		tests := []struct {
+			name               string
+			className          string
+			cursor             *filters.Cursor
+			query              *objects.QueryInput
+			expectedThingIDs   []strfmt.UUID
+			constainsErrorMsgs []string
+		}{
+			{
+				name:             "all results with step limit: 100",
+				query:            toParams(className, 0, 100, &filters.Cursor{After: "", Limit: 100}, nil, nil),
+				expectedThingIDs: []strfmt.UUID{thingID1, thingID2, thingID3, thingID4, thingID5, thingID6, thingID7},
+			},
+			{
+				name:             "all results with step limit: 1",
+				query:            toParams(className, 0, 1, &filters.Cursor{After: "", Limit: 1}, nil, nil),
+				expectedThingIDs: []strfmt.UUID{thingID1, thingID2, thingID3, thingID4, thingID5, thingID6, thingID7},
+			},
+			{
+				name:             "all results with step limit: 1 after: thingID4",
+				query:            toParams(className, 0, 1, &filters.Cursor{After: thingID4.String(), Limit: 1}, nil, nil),
+				expectedThingIDs: []strfmt.UUID{thingID5, thingID6, thingID7},
+			},
+			{
+				name:             "all results with step limit: 1 after: thingID7",
+				query:            toParams(className, 0, 1, &filters.Cursor{After: thingID7.String(), Limit: 1}, nil, nil),
+				expectedThingIDs: []strfmt.UUID{},
+			},
+			{
+				name:             "all results with step limit: 3",
+				query:            toParams(className, 0, 3, &filters.Cursor{After: "", Limit: 3}, nil, nil),
+				expectedThingIDs: []strfmt.UUID{thingID1, thingID2, thingID3, thingID4, thingID5, thingID6, thingID7},
+			},
+			{
+				name:             "all results with step limit: 7",
+				query:            toParams(className, 0, 7, &filters.Cursor{After: "", Limit: 7}, nil, nil),
+				expectedThingIDs: []strfmt.UUID{thingID1, thingID2, thingID3, thingID4, thingID5, thingID6, thingID7},
+			},
+			{
+				name:               "error on empty class",
+				query:              toParams("", 0, 7, &filters.Cursor{After: "", Limit: 7}, nil, nil),
+				constainsErrorMsgs: []string{"class not found"},
+			},
+			{
+				name: "error on sort parameter",
+				query: toParams(className, 0, 7,
+					&filters.Cursor{After: "", Limit: 7}, nil,
+					[]filters.Sort{{Path: []string{"stringProp"}, Order: "asc"}},
+				),
+				cursor:             &filters.Cursor{After: "", Limit: 7},
+				constainsErrorMsgs: []string{"sort cannot be set with after and limit parameters"},
+			},
+			{
+				name: "error on offset parameter",
+				query: toParams(className, 10, 7,
+					&filters.Cursor{After: "", Limit: 7}, nil,
+					nil,
+				),
+				cursor:             &filters.Cursor{After: "", Limit: 7},
+				constainsErrorMsgs: []string{"offset cannot be set with after and limit parameters"},
+			},
+			{
+				name: "error on offset and sort parameter",
+				query: toParams(className, 10, 7,
+					&filters.Cursor{After: "", Limit: 7}, nil,
+					[]filters.Sort{{Path: []string{"stringProp"}, Order: "asc"}},
+				),
+				cursor:             &filters.Cursor{After: "", Limit: 7},
+				constainsErrorMsgs: []string{"offset,sort cannot be set with after and limit parameters"},
+			},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				if len(tt.constainsErrorMsgs) > 0 {
+					res, err := repo.Query(context.Background(), tt.query)
+					require.NotNil(t, err)
+					assert.Nil(t, res)
+					for _, errorMsg := range tt.constainsErrorMsgs {
+						assert.Contains(t, err.Error(), errorMsg)
+					}
+				} else {
+					cursorSearch := func(t *testing.T, className string, cursor *filters.Cursor) []strfmt.UUID {
+						res, err := repo.Query(context.Background(), toParams(className, 0, cursor.Limit, cursor, nil, nil))
+						require.Nil(t, err)
+						var ids []strfmt.UUID
+						for i := range res {
+							ids = append(ids, res[i].ID)
+						}
+						return ids
+					}
+
+					var thingIds []strfmt.UUID
+					cursor := tt.query.Cursor
+					for {
+						result := cursorSearch(t, tt.query.Class, cursor)
+						thingIds = append(thingIds, result...)
+						if len(result) == 0 {
+							break
+						}
+						after := result[len(result)-1]
+						cursor = &filters.Cursor{After: after.String(), Limit: cursor.Limit}
+					}
+
+					require.Equal(t, len(tt.expectedThingIDs), len(thingIds))
+					for i := range tt.expectedThingIDs {
+						assert.Equal(t, tt.expectedThingIDs[i], thingIds[i])
+					}
+				}
+			})
+		}
+		// clean up
+		for _, td := range testData {
+			err := repo.DeleteObject(context.Background(), td.className, td.id, nil, "")
+			assert.Nil(t, err)
+		}
+	})
+}
+
 func Test_ImportWithoutVector_UpdateWithVectorLater(t *testing.T) {
+	r := getRandomSeed()
 	total := 100
 	individual := total / 4
 	className := "DeferredVector"
 	var data []*models.Object
 	var class *models.Class
 
-	rand.Seed(time.Now().UnixNano())
 	dirName := t.TempDir()
 	logger, _ := test.NewNullLogger()
 
-	schemaGetter := &fakeSchemaGetter{shardState: singleShardState()}
-	repo := New(logger, Config{
-		MemtablesFlushIdleAfter:   60,
+	schemaGetter := &fakeSchemaGetter{
+		schema:     schema.Schema{Objects: &models.Schema{Classes: nil}},
+		shardState: singleShardState(),
+	}
+	repo, err := New(logger, Config{
+		MemtablesFlushDirtyAfter:  60,
 		RootPath:                  dirName,
 		QueryMaximumResults:       10000,
 		MaxImportGoroutinesFactor: 1,
 	}, &fakeRemoteClient{}, &fakeNodeResolver{}, &fakeRemoteNodeClient{}, &fakeReplicationClient{}, nil)
-	repo.SetSchemaGetter(schemaGetter)
-	err := repo.WaitForStartup(testCtx())
 	require.Nil(t, err)
+	repo.SetSchemaGetter(schemaGetter)
+	require.Nil(t, repo.WaitForStartup(testCtx()))
 	defer repo.Shutdown(context.Background())
 	migrator := NewMigrator(repo, logger)
 
@@ -1342,7 +1589,7 @@ func Test_ImportWithoutVector_UpdateWithVectorLater(t *testing.T) {
 
 	t.Run("import individual objects without vector", func(t *testing.T) {
 		for i := 0; i < individual; i++ {
-			err := repo.PutObject(context.Background(), data[i], nil) // nil vector !
+			err := repo.PutObject(context.Background(), data[i], nil, nil, nil) // nil vector !
 			require.Nil(t, err)
 		}
 	})
@@ -1354,13 +1601,12 @@ func Test_ImportWithoutVector_UpdateWithVectorLater(t *testing.T) {
 			batch[i] = objects.BatchObject{
 				OriginalIndex: i,
 				Err:           nil,
-				Vector:        nil,
 				Object:        data[i+individual],
 				UUID:          data[i+individual].ID,
 			}
 		}
 
-		res, err := repo.BatchPutObjects(context.Background(), batch)
+		res, err := repo.BatchPutObjects(context.Background(), batch, nil)
 		require.Nil(t, err)
 
 		for _, obj := range res {
@@ -1369,7 +1615,7 @@ func Test_ImportWithoutVector_UpdateWithVectorLater(t *testing.T) {
 	})
 
 	t.Run("verify inverted index works correctly", func(t *testing.T) {
-		res, err := repo.ClassSearch(context.Background(), traverser.GetParams{
+		res, err := repo.Search(context.Background(), dto.GetParams{
 			Filters:   buildFilter("int_prop", total+1, lte, dtInt),
 			ClassName: className,
 			Pagination: &filters.Pagination{
@@ -1382,14 +1628,14 @@ func Test_ImportWithoutVector_UpdateWithVectorLater(t *testing.T) {
 	})
 
 	t.Run("perform unfiltered vector search and verify there are no matches", func(t *testing.T) {
-		res, err := repo.VectorClassSearch(context.Background(), traverser.GetParams{
+		res, err := repo.VectorSearch(context.Background(), dto.GetParams{
 			Filters:   nil,
 			ClassName: className,
 			Pagination: &filters.Pagination{
 				Offset: 0,
 				Limit:  total,
 			},
-			SearchVector: randomVector(7),
+			SearchVector: randomVector(r, 7),
 		})
 		require.Nil(t, err)
 		assert.Len(t, res, 0) // we skipped the vector on half the elements, so we should now match half
@@ -1401,35 +1647,35 @@ func Test_ImportWithoutVector_UpdateWithVectorLater(t *testing.T) {
 				continue
 			}
 
-			data[i].Vector = randomVector(7)
-			err := repo.PutObject(context.Background(), data[i], data[i].Vector)
+			data[i].Vector = randomVector(r, 7)
+			err := repo.PutObject(context.Background(), data[i], data[i].Vector, nil, nil)
 			require.Nil(t, err)
 		}
 	})
 
 	t.Run("perform unfiltered vector search and verify correct matches", func(t *testing.T) {
-		res, err := repo.VectorClassSearch(context.Background(), traverser.GetParams{
+		res, err := repo.VectorSearch(context.Background(), dto.GetParams{
 			Filters:   nil,
 			ClassName: className,
 			Pagination: &filters.Pagination{
 				Offset: 0,
 				Limit:  total,
 			},
-			SearchVector: randomVector(7),
+			SearchVector: randomVector(r, 7),
 		})
 		require.Nil(t, err)
 		assert.Len(t, res, total/2) // we skipped the vector on half the elements, so we should now match half
 	})
 
 	t.Run("perform filtered vector search and verify correct matches", func(t *testing.T) {
-		res, err := repo.VectorClassSearch(context.Background(), traverser.GetParams{
+		res, err := repo.VectorSearch(context.Background(), dto.GetParams{
 			Filters:   buildFilter("int_prop", 50, lt, dtInt),
 			ClassName: className,
 			Pagination: &filters.Pagination{
 				Offset: 0,
 				Limit:  total,
 			},
-			SearchVector: randomVector(7),
+			SearchVector: randomVector(r, 7),
 		})
 		require.Nil(t, err)
 		// we skipped the vector on half the elements, and cut the list in half with
@@ -1442,23 +1688,25 @@ func TestVectorSearch_ByDistance(t *testing.T) {
 	className := "SomeClass"
 	var class *models.Class
 
-	rand.Seed(time.Now().UnixNano())
 	dirName := t.TempDir()
 	logger, _ := test.NewNullLogger()
 
-	schemaGetter := &fakeSchemaGetter{shardState: singleShardState()}
-	repo := New(logger, Config{
-		MemtablesFlushIdleAfter: 60,
-		RootPath:                dirName,
+	schemaGetter := &fakeSchemaGetter{
+		schema:     schema.Schema{Objects: &models.Schema{Classes: nil}},
+		shardState: singleShardState(),
+	}
+	repo, err := New(logger, Config{
+		MemtablesFlushDirtyAfter: 60,
+		RootPath:                 dirName,
 		// this is set really low to ensure that search
 		// by distance is conducted, which executes
 		// without regard to this value
 		QueryMaximumResults:       1,
 		MaxImportGoroutinesFactor: 1,
 	}, &fakeRemoteClient{}, &fakeNodeResolver{}, &fakeRemoteNodeClient{}, &fakeReplicationClient{}, nil)
-	repo.SetSchemaGetter(schemaGetter)
-	err := repo.WaitForStartup(testCtx())
 	require.Nil(t, err)
+	repo.SetSchemaGetter(schemaGetter)
+	require.Nil(t, repo.WaitForStartup(testCtx()))
 	defer repo.Shutdown(context.Background())
 	migrator := NewMigrator(repo, logger)
 
@@ -1516,13 +1764,13 @@ func TestVectorSearch_ByDistance(t *testing.T) {
 
 	t.Run("insert test objects", func(t *testing.T) {
 		for id, props := range tests {
-			err := repo.PutObject(context.Background(), &models.Object{Class: className, ID: id}, props.inputVec)
+			err := repo.PutObject(context.Background(), &models.Object{Class: className, ID: id}, props.inputVec, nil, nil)
 			require.Nil(t, err)
 		}
 	})
 
 	t.Run("perform nearVector search by distance", func(t *testing.T) {
-		results, err := repo.VectorClassSearch(context.Background(), traverser.GetParams{
+		results, err := repo.VectorSearch(context.Background(), dto.GetParams{
 			ClassName:  className,
 			Pagination: &filters.Pagination{Limit: filters.LimitFlagSearchByDist},
 			NearVector: &searchparams.NearVector{
@@ -1548,7 +1796,7 @@ func TestVectorSearch_ByDistance(t *testing.T) {
 	})
 
 	t.Run("perform nearObject search by distance", func(t *testing.T) {
-		results, err := repo.VectorClassSearch(context.Background(), traverser.GetParams{
+		results, err := repo.VectorSearch(context.Background(), dto.GetParams{
 			ClassName:  className,
 			Pagination: &filters.Pagination{Limit: filters.LimitFlagSearchByDist},
 			NearObject: &searchparams.NearObject{
@@ -1579,23 +1827,25 @@ func TestVectorSearch_ByCertainty(t *testing.T) {
 	className := "SomeClass"
 	var class *models.Class
 
-	rand.Seed(time.Now().UnixNano())
 	dirName := t.TempDir()
 	logger, _ := test.NewNullLogger()
 
-	schemaGetter := &fakeSchemaGetter{shardState: singleShardState()}
-	repo := New(logger, Config{
-		MemtablesFlushIdleAfter: 60,
-		RootPath:                dirName,
+	schemaGetter := &fakeSchemaGetter{
+		schema:     schema.Schema{Objects: &models.Schema{Classes: nil}},
+		shardState: singleShardState(),
+	}
+	repo, err := New(logger, Config{
+		MemtablesFlushDirtyAfter: 60,
+		RootPath:                 dirName,
 		// this is set really low to ensure that search
 		// by distance is conducted, which executes
 		// without regard to this value
 		QueryMaximumResults:       1,
 		MaxImportGoroutinesFactor: 1,
 	}, &fakeRemoteClient{}, &fakeNodeResolver{}, &fakeRemoteNodeClient{}, &fakeReplicationClient{}, nil)
-	repo.SetSchemaGetter(schemaGetter)
-	err := repo.WaitForStartup(testCtx())
 	require.Nil(t, err)
+	repo.SetSchemaGetter(schemaGetter)
+	require.Nil(t, repo.WaitForStartup(testCtx()))
 	defer repo.Shutdown(context.Background())
 	migrator := NewMigrator(repo, logger)
 
@@ -1653,13 +1903,13 @@ func TestVectorSearch_ByCertainty(t *testing.T) {
 
 	t.Run("insert test objects", func(t *testing.T) {
 		for id, props := range tests {
-			err := repo.PutObject(context.Background(), &models.Object{Class: className, ID: id}, props.inputVec)
+			err := repo.PutObject(context.Background(), &models.Object{Class: className, ID: id}, props.inputVec, nil, nil)
 			require.Nil(t, err)
 		}
 	})
 
 	t.Run("perform nearVector search by distance", func(t *testing.T) {
-		results, err := repo.VectorClassSearch(context.Background(), traverser.GetParams{
+		results, err := repo.VectorSearch(context.Background(), dto.GetParams{
 			ClassName:  className,
 			Pagination: &filters.Pagination{Limit: filters.LimitFlagSearchByDist},
 			NearVector: &searchparams.NearVector{
@@ -1685,7 +1935,7 @@ func TestVectorSearch_ByCertainty(t *testing.T) {
 	})
 
 	t.Run("perform nearObject search by distance", func(t *testing.T) {
-		results, err := repo.VectorClassSearch(context.Background(), traverser.GetParams{
+		results, err := repo.VectorSearch(context.Background(), dto.GetParams{
 			ClassName:  className,
 			Pagination: &filters.Pagination{Limit: filters.LimitFlagSearchByDist},
 			NearObject: &searchparams.NearObject{
@@ -1713,10 +1963,10 @@ func TestVectorSearch_ByCertainty(t *testing.T) {
 }
 
 func Test_PutPatchRestart(t *testing.T) {
-	rand.Seed(time.Now().UnixNano())
 	dirName := t.TempDir()
 	logger, _ := test.NewNullLogger()
-	ctx, _ := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
 
 	testClass := &models.Class{
 		VectorIndexConfig:   enthnsw.NewDefaultUserConfig(),
@@ -1725,23 +1975,26 @@ func Test_PutPatchRestart(t *testing.T) {
 		Properties: []*models.Property{
 			{
 				Name:         "description",
-				DataType:     []string{string(schema.DataTypeString)},
-				Tokenization: "word",
+				DataType:     schema.DataTypeText.PropString(),
+				Tokenization: models.PropertyTokenizationWhitespace,
 			},
 		},
 	}
 
-	schemaGetter := &fakeSchemaGetter{shardState: singleShardState()}
-	repo := New(logger, Config{
-		MemtablesFlushIdleAfter:   60,
+	schemaGetter := &fakeSchemaGetter{
+		schema:     schema.Schema{Objects: &models.Schema{Classes: nil}},
+		shardState: singleShardState(),
+	}
+	repo, err := New(logger, Config{
+		MemtablesFlushDirtyAfter:  60,
 		RootPath:                  dirName,
 		QueryMaximumResults:       100,
 		MaxImportGoroutinesFactor: 1,
 	}, &fakeRemoteClient{}, &fakeNodeResolver{}, &fakeRemoteNodeClient{}, &fakeReplicationClient{}, nil)
-	repo.SetSchemaGetter(schemaGetter)
-	err := repo.WaitForStartup(ctx)
-	defer repo.Shutdown(context.Background())
 	require.Nil(t, err)
+	repo.SetSchemaGetter(schemaGetter)
+	defer repo.Shutdown(context.Background())
+	require.Nil(t, repo.WaitForStartup(ctx))
 	migrator := NewMigrator(repo, logger)
 
 	require.Nil(t,
@@ -1762,7 +2015,7 @@ func Test_PutPatchRestart(t *testing.T) {
 			ID:         testID,
 			Class:      testClass.Class,
 			Properties: map[string]interface{}{"description": "test object init"},
-		}, testVec)
+		}, testVec, nil, nil)
 		require.Nil(t, err)
 	})
 
@@ -1774,7 +2027,7 @@ func Test_PutPatchRestart(t *testing.T) {
 				Properties: map[string]interface{}{
 					"description": fmt.Sprintf("test object, put #%d", i+1),
 				},
-			}, nil)
+			}, nil, nil, nil)
 			require.Nil(t, err)
 
 			err = repo.Merge(ctx, objects.MergeDocument{
@@ -1785,7 +2038,7 @@ func Test_PutPatchRestart(t *testing.T) {
 				},
 				Vector:     testVec,
 				UpdateTime: time.Now().UnixNano() / int64(time.Millisecond),
-			})
+			}, nil, "")
 			require.Nil(t, err)
 
 			require.Nil(t, repo.Shutdown(ctx))
@@ -1803,12 +2056,12 @@ func Test_PutPatchRestart(t *testing.T) {
 				},
 				Value: &filters.Value{
 					Value: testID.String(),
-					Type:  dtString,
+					Type:  schema.DataTypeText,
 				},
 			},
 		}
 		res, err := repo.ObjectSearch(ctx, 0, 10, findByIDFilter,
-			nil, additional.Properties{})
+			nil, additional.Properties{}, "")
 		require.Nil(t, err)
 		assert.Len(t, res, 1)
 
@@ -1819,7 +2072,6 @@ func Test_PutPatchRestart(t *testing.T) {
 }
 
 func TestCRUDWithEmptyArrays(t *testing.T) {
-	rand.Seed(time.Now().UnixNano())
 	dirName := t.TempDir()
 
 	logger, _ := test.NewNullLogger()
@@ -1830,15 +2082,15 @@ func TestCRUDWithEmptyArrays(t *testing.T) {
 		InvertedIndexConfig: invertedConfig(),
 		Properties: []*models.Property{
 			{
-				Name:     "stringArray",
-				DataType: []string{string(schema.DataTypeStringArray)},
+				Name:     "textArray",
+				DataType: schema.DataTypeTextArray.PropString(),
 			},
 			{
-				Name:     "NumberArray",
+				Name:     "numberArray",
 				DataType: []string{string(schema.DataTypeNumberArray)},
 			},
 			{
-				Name:     "BoolArray",
+				Name:     "boolArray",
 				DataType: []string{string(schema.DataTypeBooleanArray)},
 			},
 		},
@@ -1850,8 +2102,9 @@ func TestCRUDWithEmptyArrays(t *testing.T) {
 		InvertedIndexConfig: invertedConfig(),
 		Properties: []*models.Property{
 			{
-				Name:     "stringProp",
-				DataType: []string{string(schema.DataTypeString)},
+				Name:         "stringProp",
+				DataType:     schema.DataTypeText.PropString(),
+				Tokenization: models.PropertyTokenizationWhitespace,
 			},
 		},
 	}
@@ -1862,8 +2115,9 @@ func TestCRUDWithEmptyArrays(t *testing.T) {
 		InvertedIndexConfig: invertedConfig(),
 		Properties: []*models.Property{
 			{
-				Name:     "stringProp",
-				DataType: []string{string(schema.DataTypeString)},
+				Name:         "stringProp",
+				DataType:     schema.DataTypeText.PropString(),
+				Tokenization: models.PropertyTokenizationWhitespace,
 			},
 			{
 				Name:     "refProp",
@@ -1871,16 +2125,19 @@ func TestCRUDWithEmptyArrays(t *testing.T) {
 			},
 		},
 	}
-	schemaGetter := &fakeSchemaGetter{shardState: singleShardState()}
-	repo := New(logger, Config{
-		MemtablesFlushIdleAfter:   60,
+	schemaGetter := &fakeSchemaGetter{
+		schema:     schema.Schema{Objects: &models.Schema{Classes: nil}},
+		shardState: singleShardState(),
+	}
+	repo, err := New(logger, Config{
+		MemtablesFlushDirtyAfter:  60,
 		RootPath:                  dirName,
 		QueryMaximumResults:       100,
 		MaxImportGoroutinesFactor: 1,
 	}, &fakeRemoteClient{}, &fakeNodeResolver{}, &fakeRemoteNodeClient{}, &fakeReplicationClient{}, nil)
-	repo.SetSchemaGetter(schemaGetter)
-	err := repo.WaitForStartup(testCtx())
 	require.Nil(t, err)
+	repo.SetSchemaGetter(schemaGetter)
+	require.Nil(t, repo.WaitForStartup(testCtx()))
 	defer repo.Shutdown(context.Background())
 	migrator := NewMigrator(repo, logger)
 	require.Nil(t,
@@ -1902,26 +2159,25 @@ func TestCRUDWithEmptyArrays(t *testing.T) {
 			ID:    objID,
 			Class: "TestClass",
 			Properties: map[string]interface{}{
-				"stringArray": []string{},
-				"NumberArray": []float64{},
-				"BoolArray":   []bool{},
+				"textArray":   []string{},
+				"numberArray": []float64{},
+				"boolArray":   []bool{},
 			},
 		}
 		obj2 := &models.Object{
 			ID:    objID,
 			Class: "TestClass",
 			Properties: map[string]interface{}{
-				"stringArray": []string{"value"},
-				"NumberArray": []float64{0.5},
-				"BoolArray":   []bool{true},
+				"textArray":   []string{"value"},
+				"numberArray": []float64{0.5},
+				"boolArray":   []bool{true},
 			},
 		}
 
-		assert.Nil(t, repo.PutObject(context.Background(), obj1, []float32{1, 3, 5, 0.4}))
-		assert.Nil(t, repo.PutObject(context.Background(), obj2, []float32{1, 3, 5, 0.4}))
+		assert.Nil(t, repo.PutObject(context.Background(), obj1, []float32{1, 3, 5, 0.4}, nil, nil))
+		assert.Nil(t, repo.PutObject(context.Background(), obj2, []float32{1, 3, 5, 0.4}, nil, nil))
 
-		res, err := repo.ObjectByID(context.Background(), objID, nil,
-			additional.Properties{})
+		res, err := repo.ObjectByID(context.Background(), objID, nil, additional.Properties{}, "")
 		require.Nil(t, err)
 		assert.Equal(t, obj2.Properties, res.ObjectWithVector(false).Properties)
 	})
@@ -1935,7 +2191,7 @@ func TestCRUDWithEmptyArrays(t *testing.T) {
 				"stringProp": "string prop value",
 			},
 		}
-		assert.Nil(t, repo.PutObject(context.Background(), objRef, []float32{1, 3, 5, 0.4}))
+		assert.Nil(t, repo.PutObject(context.Background(), objRef, []float32{1, 3, 5, 0.4}, nil, nil))
 
 		obj1ID := strfmt.UUID("a0b55b05-bc5b-4cc9-b646-1452d1390a62")
 		obj1 := &models.Object{
@@ -1943,7 +2199,7 @@ func TestCRUDWithEmptyArrays(t *testing.T) {
 			Class: classNameWithRefs,
 			Properties: map[string]interface{}{
 				"stringProp": "some prop",
-				// due to the fix introduced in https://github.com/semi-technologies/weaviate/pull/2320,
+				// due to the fix introduced in https://github.com/weaviate/weaviate/pull/2320,
 				// MultipleRef's can appear as empty []interface{} when no actual refs are provided for
 				// an object's reference property.
 				//
@@ -1970,20 +2226,223 @@ func TestCRUDWithEmptyArrays(t *testing.T) {
 			},
 		}
 
-		assert.Nil(t, repo.PutObject(context.Background(), obj1, []float32{1, 3, 5, 0.4}))
-		assert.Nil(t, repo.PutObject(context.Background(), obj2, []float32{1, 3, 5, 0.4}))
+		assert.Nil(t, repo.PutObject(context.Background(), obj1, []float32{1, 3, 5, 0.4}, nil, nil))
+		assert.Nil(t, repo.PutObject(context.Background(), obj2, []float32{1, 3, 5, 0.4}, nil, nil))
 
 		res, err := repo.Object(context.Background(), classNameWithRefs, obj1ID, nil,
-			additional.Properties{}, nil)
+			additional.Properties{}, nil, "")
 		require.Nil(t, err)
 		assert.NotNil(t, res)
 		assert.Equal(t, obj1.Properties, res.ObjectWithVector(false).Properties)
 
 		res, err = repo.Object(context.Background(), classNameWithRefs, obj2ID, nil,
-			additional.Properties{}, nil)
+			additional.Properties{}, nil, "")
 		require.Nil(t, err)
 		assert.NotNil(t, res)
 		assert.Equal(t, obj2.Properties, res.ObjectWithVector(false).Properties)
+	})
+}
+
+func TestOverwriteObjects(t *testing.T) {
+	dirName := t.TempDir()
+	logger, _ := test.NewNullLogger()
+	class := &models.Class{
+		VectorIndexConfig:   enthnsw.NewDefaultUserConfig(),
+		InvertedIndexConfig: invertedConfig(),
+		Class:               "SomeClass",
+		Properties: []*models.Property{
+			{
+				Name:         "stringProp",
+				DataType:     schema.DataTypeText.PropString(),
+				Tokenization: models.PropertyTokenizationWhitespace,
+			},
+		},
+	}
+	schemaGetter := &fakeSchemaGetter{
+		schema:     schema.Schema{Objects: &models.Schema{Classes: nil}},
+		shardState: singleShardState(),
+	}
+	repo, err := New(logger, Config{
+		MemtablesFlushDirtyAfter:  60,
+		RootPath:                  dirName,
+		QueryMaximumResults:       10,
+		MaxImportGoroutinesFactor: 1,
+	}, &fakeRemoteClient{}, &fakeNodeResolver{},
+		&fakeRemoteNodeClient{}, &fakeReplicationClient{}, nil)
+	require.Nil(t, err)
+	repo.SetSchemaGetter(schemaGetter)
+	require.Nil(t, repo.WaitForStartup(testCtx()))
+	defer repo.Shutdown(context.Background())
+	migrator := NewMigrator(repo, logger)
+	t.Run("create the class", func(t *testing.T) {
+		require.Nil(t,
+			migrator.AddClass(context.Background(), class, schemaGetter.shardState))
+	})
+	// update schema getter so it's in sync with class
+	schemaGetter.schema = schema.Schema{
+		Objects: &models.Schema{
+			Classes: []*models.Class{class},
+		},
+	}
+
+	now := time.Now()
+	later := now.Add(time.Hour) // time-traveling ;)
+	stale := &models.Object{
+		ID:                 "981c09f9-67f3-4e6e-a988-c53eaefbd58e",
+		Class:              class.Class,
+		CreationTimeUnix:   now.UnixMilli(),
+		LastUpdateTimeUnix: now.UnixMilli(),
+		Properties: map[string]interface{}{
+			"oldValue": "how things used to be",
+		},
+		Vector:        []float32{1, 2, 3},
+		VectorWeights: (map[string]string)(nil),
+		Additional:    models.AdditionalProperties{},
+	}
+
+	fresh := &models.Object{
+		ID:                 "981c09f9-67f3-4e6e-a988-c53eaefbd58e",
+		Class:              class.Class,
+		CreationTimeUnix:   now.UnixMilli(),
+		LastUpdateTimeUnix: later.UnixMilli(),
+		Properties: map[string]interface{}{
+			"oldValue": "how things used to be",
+			"newValue": "how they are now",
+		},
+		Vector:        []float32{4, 5, 6},
+		VectorWeights: (map[string]string)(nil),
+		Additional:    models.AdditionalProperties{},
+	}
+
+	t.Run("insert stale object", func(t *testing.T) {
+		err := repo.PutObject(context.Background(), stale, stale.Vector, nil, nil)
+		require.Nil(t, err)
+	})
+
+	t.Run("overwrite with fresh object", func(t *testing.T) {
+		input := []*objects.VObject{
+			{
+				LatestObject:    fresh,
+				Vector:          []float32{4, 5, 6},
+				StaleUpdateTime: stale.LastUpdateTimeUnix,
+			},
+		}
+
+		idx := repo.GetIndex(schema.ClassName(class.Class))
+		shd, err := idx.determineObjectShard(fresh.ID, "")
+		require.Nil(t, err)
+
+		received, err := idx.overwriteObjects(context.Background(), shd, input)
+		assert.Nil(t, err)
+		assert.ElementsMatch(t, nil, received)
+	})
+
+	t.Run("assert data was overwritten", func(t *testing.T) {
+		found, err := repo.Object(context.Background(), stale.Class,
+			stale.ID, nil, additional.Properties{}, nil, "")
+		assert.Nil(t, err)
+		assert.EqualValues(t, fresh, found.Object())
+	})
+}
+
+func TestIndexDigestObjects(t *testing.T) {
+	dirName := t.TempDir()
+	logger, _ := test.NewNullLogger()
+	class := &models.Class{
+		VectorIndexConfig:   enthnsw.NewDefaultUserConfig(),
+		InvertedIndexConfig: invertedConfig(),
+		Class:               "SomeClass",
+		Properties: []*models.Property{
+			{
+				Name:         "stringProp",
+				DataType:     schema.DataTypeText.PropString(),
+				Tokenization: models.PropertyTokenizationWhitespace,
+			},
+		},
+	}
+	schemaGetter := &fakeSchemaGetter{
+		schema:     schema.Schema{Objects: &models.Schema{Classes: nil}},
+		shardState: singleShardState(),
+	}
+	repo, err := New(logger, Config{
+		MemtablesFlushDirtyAfter:  60,
+		RootPath:                  dirName,
+		QueryMaximumResults:       10,
+		MaxImportGoroutinesFactor: 1,
+	}, &fakeRemoteClient{}, &fakeNodeResolver{},
+		&fakeRemoteNodeClient{}, &fakeReplicationClient{}, nil)
+	require.Nil(t, err)
+	repo.SetSchemaGetter(schemaGetter)
+	require.Nil(t, repo.WaitForStartup(testCtx()))
+	defer repo.Shutdown(context.Background())
+	migrator := NewMigrator(repo, logger)
+	t.Run("create the class", func(t *testing.T) {
+		require.Nil(t,
+			migrator.AddClass(context.Background(), class, schemaGetter.shardState))
+	})
+	// update schema getter so it's in sync with class
+	schemaGetter.schema = schema.Schema{
+		Objects: &models.Schema{
+			Classes: []*models.Class{class},
+		},
+	}
+
+	now := time.Now()
+	later := now.Add(time.Hour) // time-traveling ;)
+	obj1 := &models.Object{
+		ID:                 "ae48fda2-866a-4c90-94fc-fce40d5f3767",
+		Class:              class.Class,
+		CreationTimeUnix:   now.UnixMilli(),
+		LastUpdateTimeUnix: now.UnixMilli(),
+		Properties: map[string]interface{}{
+			"oldValue": "how things used to be",
+		},
+		Vector:        []float32{1, 2, 3},
+		VectorWeights: (map[string]string)(nil),
+		Additional:    models.AdditionalProperties{},
+	}
+
+	obj2 := &models.Object{
+		ID:                 "b71ffac8-6534-4368-9718-5410ca89ce16",
+		Class:              class.Class,
+		CreationTimeUnix:   later.UnixMilli(),
+		LastUpdateTimeUnix: later.UnixMilli(),
+		Properties: map[string]interface{}{
+			"oldValue": "how things used to be",
+		},
+		Vector:        []float32{1, 2, 3},
+		VectorWeights: (map[string]string)(nil),
+		Additional:    models.AdditionalProperties{},
+	}
+
+	t.Run("insert test objects", func(t *testing.T) {
+		err := repo.PutObject(context.Background(), obj1, obj1.Vector, nil, nil)
+		require.Nil(t, err)
+		err = repo.PutObject(context.Background(), obj2, obj2.Vector, nil, nil)
+		require.Nil(t, err)
+	})
+
+	t.Run("get digest object", func(t *testing.T) {
+		idx := repo.GetIndex(schema.ClassName(class.Class))
+		shd, err := idx.determineObjectShard(obj1.ID, "")
+		require.Nil(t, err)
+
+		input := []strfmt.UUID{obj1.ID, obj2.ID}
+
+		expected := []replica.RepairResponse{
+			{
+				ID:         obj1.ID.String(),
+				UpdateTime: obj1.LastUpdateTimeUnix,
+			},
+			{
+				ID:         obj2.ID.String(),
+				UpdateTime: obj2.LastUpdateTimeUnix,
+			},
+		}
+
+		res, err := idx.digestObjects(context.Background(), shd, input)
+		require.Nil(t, err)
+		assert.Equal(t, expected, res)
 	})
 }
 
@@ -2005,11 +2464,133 @@ func ptFloat64(in float64) *float64 {
 	return &in
 }
 
-func randomVector(dim int) []float32 {
+func randomVector(r *rand.Rand, dim int) []float32 {
 	out := make([]float32, dim)
 	for i := range out {
-		out[i] = rand.Float32()
+		out[i] = r.Float32()
 	}
 
 	return out
+}
+
+func TestIndexDifferentVectorLength(t *testing.T) {
+	logger, _ := test.NewNullLogger()
+	class := &models.Class{
+		VectorIndexConfig:   enthnsw.NewDefaultUserConfig(),
+		InvertedIndexConfig: invertedConfig(),
+		Class:               "SomeClass",
+		Properties: []*models.Property{
+			{
+				Name:         "stringProp",
+				DataType:     schema.DataTypeText.PropString(),
+				Tokenization: models.PropertyTokenizationWhitespace,
+			},
+		},
+	}
+	schemaGetter := &fakeSchemaGetter{
+		schema:     schema.Schema{Objects: &models.Schema{Classes: nil}},
+		shardState: singleShardState(),
+	}
+	repo, err := New(logger, Config{
+		MemtablesFlushDirtyAfter:  60,
+		RootPath:                  t.TempDir(),
+		QueryMaximumResults:       10,
+		MaxImportGoroutinesFactor: 1,
+	}, &fakeRemoteClient{}, &fakeNodeResolver{},
+		&fakeRemoteNodeClient{}, &fakeReplicationClient{}, nil)
+	require.Nil(t, err)
+	repo.SetSchemaGetter(schemaGetter)
+	require.Nil(t, repo.WaitForStartup(testCtx()))
+	defer repo.Shutdown(context.Background())
+	migrator := NewMigrator(repo, logger)
+	require.Nil(t, migrator.AddClass(context.Background(), class, schemaGetter.shardState))
+	// update schema getter so it's in sync with class
+	schemaGetter.schema = schema.Schema{
+		Objects: &models.Schema{
+			Classes: []*models.Class{class},
+		},
+	}
+
+	obj1ID := strfmt.UUID("ae48fda2-866a-4c90-94fc-fce40d5f3767")
+	objNilID := strfmt.UUID("b71ffac9-6534-4368-9718-5410ca89ce16")
+
+	t.Run("Add object with nil vector", func(t *testing.T) {
+		objNil := &models.Object{
+			ID:     objNilID,
+			Class:  class.Class,
+			Vector: nil,
+		}
+		require.Nil(t, repo.PutObject(context.Background(), objNil, objNil.Vector, nil, nil))
+		found, err := repo.Object(context.Background(), class.Class, objNil.ID, nil,
+			additional.Properties{}, nil, "")
+		require.Nil(t, err)
+		require.Equal(t, found.Vector, []float32{})
+		require.Equal(t, objNil.ID, found.ID)
+	})
+
+	t.Run("Add object with non-nil vector after nil vector", func(t *testing.T) {
+		obj1 := &models.Object{
+			ID:     obj1ID,
+			Class:  class.Class,
+			Vector: []float32{1, 2, 3},
+		}
+		require.Nil(t, repo.PutObject(context.Background(), obj1, obj1.Vector, nil, nil))
+	})
+
+	t.Run("Add object with different vector length", func(t *testing.T) {
+		obj2 := &models.Object{
+			ID:     "b71ffac8-6534-4368-9718-5410ca89ce16",
+			Class:  class.Class,
+			Vector: []float32{1, 2, 3, 4},
+		}
+		require.NotNil(t, repo.PutObject(context.Background(), obj2, obj2.Vector, nil, nil))
+		found, err := repo.Object(context.Background(), class.Class, obj2.ID, nil,
+			additional.Properties{}, nil, "")
+		require.Nil(t, err)
+		require.Nil(t, found)
+	})
+
+	t.Run("Update object with different vector length", func(t *testing.T) {
+		err = repo.Merge(context.Background(), objects.MergeDocument{
+			ID:              obj1ID,
+			Class:           class.Class,
+			PrimitiveSchema: map[string]interface{}{},
+			Vector:          []float32{1, 2, 3, 4},
+			UpdateTime:      time.Now().UnixNano() / int64(time.Millisecond),
+		}, nil, "")
+		require.NotNil(t, err)
+		found, err := repo.Object(context.Background(), class.Class,
+			obj1ID, nil, additional.Properties{}, nil, "")
+		require.Nil(t, err)
+		require.Len(t, found.Vector, 3)
+	})
+
+	t.Run("Update nil object with fitting vector", func(t *testing.T) {
+		err = repo.Merge(context.Background(), objects.MergeDocument{
+			ID:              objNilID,
+			Class:           class.Class,
+			PrimitiveSchema: map[string]interface{}{},
+			Vector:          []float32{1, 2, 3},
+			UpdateTime:      time.Now().UnixNano() / int64(time.Millisecond),
+		}, nil, "")
+		require.Nil(t, err)
+		found, err := repo.Object(context.Background(), class.Class, objNilID, nil,
+			additional.Properties{}, nil, "")
+		require.Nil(t, err)
+		require.Len(t, found.Vector, 3)
+	})
+
+	t.Run("Add nil object after objects with vector", func(t *testing.T) {
+		obj2Nil := &models.Object{
+			ID:     "b71ffac8-6534-4368-9718-5410ca89ce16",
+			Class:  class.Class,
+			Vector: nil,
+		}
+		require.Nil(t, repo.PutObject(context.Background(), obj2Nil, obj2Nil.Vector, nil, nil))
+		found, err := repo.Object(context.Background(), class.Class, obj2Nil.ID, nil,
+			additional.Properties{}, nil, "")
+		require.Nil(t, err)
+		require.Equal(t, obj2Nil.ID, found.ID)
+		require.Equal(t, []float32{}, found.Vector)
+	})
 }

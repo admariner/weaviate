@@ -4,24 +4,23 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package test
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
-	"github.com/semi-technologies/weaviate/test/docker"
-	"github.com/semi-technologies/weaviate/test/helper"
-	"github.com/semi-technologies/weaviate/test/helper/journey"
-	moduleshelper "github.com/semi-technologies/weaviate/test/helper/modules"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/test/docker"
+	"github.com/weaviate/weaviate/test/helper"
+	"github.com/weaviate/weaviate/test/helper/journey"
+	moduleshelper "github.com/weaviate/weaviate/test/helper/modules"
 )
 
 const (
@@ -30,6 +29,7 @@ const (
 	envGCSCredentials         = "GOOGLE_APPLICATION_CREDENTIALS"
 	envGCSProjectID           = "GOOGLE_CLOUD_PROJECT"
 	envGCSBucket              = "BACKUP_GCS_BUCKET"
+	envGCSUseAuth             = "BACKUP_GCS_USE_AUTH"
 
 	gcsBackupJourneyClassName          = "GcsBackup"
 	gcsBackupJourneyBackupIDSingleNode = "gcs-backup-single-node"
@@ -43,11 +43,10 @@ func Test_BackupJourney(t *testing.T) {
 	defer cancel()
 
 	t.Run("single node", func(t *testing.T) {
-		t.Run("pre-instance env setup", func(t *testing.T) {
-			require.Nil(t, os.Setenv(envGCSCredentials, ""))
-			require.Nil(t, os.Setenv(envGCSProjectID, gcsBackupJourneyProjectID))
-			require.Nil(t, os.Setenv(envGCSBucket, gcsBackupJourneyBucketName))
-		})
+		t.Log("pre-instance env setup")
+		t.Setenv(envGCSCredentials, "")
+		t.Setenv(envGCSProjectID, gcsBackupJourneyProjectID)
+		t.Setenv(envGCSBucket, gcsBackupJourneyBucketName)
 
 		compose, err := docker.New().
 			WithBackendGCS(gcsBackupJourneyBucketName).
@@ -57,30 +56,27 @@ func Test_BackupJourney(t *testing.T) {
 		require.Nil(t, err)
 		defer func() {
 			if err := compose.Terminate(ctx); err != nil {
-				t.Fatalf("failed to terminte test containers: %s", err.Error())
+				t.Fatalf("failed to terminate test containers: %s", err.Error())
 			}
 		}()
 
-		t.Run("post-instance env setup", func(t *testing.T) {
-			require.Nil(t, os.Setenv(envGCSEndpoint, compose.GetGCS().URI()))
-			require.Nil(t, os.Setenv(envGCSStorageEmulatorHost, compose.GetGCS().URI()))
-
-			moduleshelper.CreateGCSBucket(ctx, t, gcsBackupJourneyProjectID, gcsBackupJourneyBucketName)
-			helper.SetupClient(compose.GetWeaviate().URI())
-		})
+		t.Log("post-instance env setup")
+		t.Setenv(envGCSEndpoint, compose.GetGCS().URI())
+		t.Setenv(envGCSStorageEmulatorHost, compose.GetGCS().URI())
+		moduleshelper.CreateGCSBucket(ctx, t, gcsBackupJourneyProjectID, gcsBackupJourneyBucketName)
+		helper.SetupClient(compose.GetWeaviate().URI())
 
 		t.Run("backup-gcs", func(t *testing.T) {
 			journey.BackupJourneyTests_SingleNode(t, compose.GetWeaviate().URI(),
-				"gcs", gcsBackupJourneyClassName, gcsBackupJourneyBackupIDSingleNode)
+				"gcs", gcsBackupJourneyClassName, gcsBackupJourneyBackupIDSingleNode, nil)
 		})
 	})
 
 	t.Run("multiple node", func(t *testing.T) {
-		t.Run("pre-instance env setup", func(t *testing.T) {
-			require.Nil(t, os.Setenv(envGCSCredentials, ""))
-			require.Nil(t, os.Setenv(envGCSProjectID, gcsBackupJourneyProjectID))
-			require.Nil(t, os.Setenv(envGCSBucket, gcsBackupJourneyBucketName))
-		})
+		t.Log("pre-instance env setup")
+		t.Setenv(envGCSCredentials, "")
+		t.Setenv(envGCSProjectID, gcsBackupJourneyProjectID)
+		t.Setenv(envGCSBucket, gcsBackupJourneyBucketName)
 
 		compose, err := docker.New().
 			WithBackendGCS(gcsBackupJourneyBucketName).
@@ -90,21 +86,19 @@ func Test_BackupJourney(t *testing.T) {
 		require.Nil(t, err)
 		defer func() {
 			if err := compose.Terminate(ctx); err != nil {
-				t.Fatalf("failed to terminte test containers: %s", err.Error())
+				t.Fatalf("failed to terminate test containers: %s", err.Error())
 			}
 		}()
 
-		t.Run("post-instance env setup", func(t *testing.T) {
-			require.Nil(t, os.Setenv(envGCSEndpoint, compose.GetGCS().URI()))
-			require.Nil(t, os.Setenv(envGCSStorageEmulatorHost, compose.GetGCS().URI()))
-
-			moduleshelper.CreateGCSBucket(ctx, t, gcsBackupJourneyProjectID, gcsBackupJourneyBucketName)
-			helper.SetupClient(compose.GetWeaviate().URI())
-		})
+		t.Log("post-instance env setup")
+		t.Setenv(envGCSEndpoint, compose.GetGCS().URI())
+		t.Setenv(envGCSStorageEmulatorHost, compose.GetGCS().URI())
+		moduleshelper.CreateGCSBucket(ctx, t, gcsBackupJourneyProjectID, gcsBackupJourneyBucketName)
+		helper.SetupClient(compose.GetWeaviate().URI())
 
 		t.Run("backup-gcs", func(t *testing.T) {
 			journey.BackupJourneyTests_Cluster(t, "gcs", gcsBackupJourneyClassName,
-				gcsBackupJourneyBackupIDCluster, compose.GetWeaviate().URI(), compose.GetWeaviateNode2().URI())
+				gcsBackupJourneyBackupIDCluster, nil, compose.GetWeaviate().URI(), compose.GetWeaviateNode2().URI())
 		})
 	})
 }

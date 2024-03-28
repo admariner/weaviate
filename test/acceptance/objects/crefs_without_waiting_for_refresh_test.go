@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package test
@@ -16,21 +16,22 @@ import (
 	"testing"
 
 	"github.com/go-openapi/strfmt"
-	"github.com/semi-technologies/weaviate/client/schema"
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/test/helper"
-	testhelper "github.com/semi-technologies/weaviate/test/helper"
+	clschema "github.com/weaviate/weaviate/client/schema"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/test/helper"
+	testhelper "github.com/weaviate/weaviate/test/helper"
 )
 
-// See https://github.com/semi-technologies/weaviate/issues/980
+// See https://github.com/weaviate/weaviate/issues/980
 func Test_AddingReferenceWithoutWaiting_UsingPostObjects(t *testing.T) {
 	defer func() {
 		// clean up so we can run this test multiple times in a row
-		delCityParams := schema.NewSchemaObjectsDeleteParams().WithClassName("ReferenceWaitingTestCity")
+		delCityParams := clschema.NewSchemaObjectsDeleteParams().WithClassName("ReferenceWaitingTestCity")
 		dresp, err := helper.Client(t).Schema.SchemaObjectsDelete(delCityParams, nil)
 		t.Logf("clean up - delete city \n%v\n %v", dresp, err)
 
-		delPlaceParams := schema.NewSchemaObjectsDeleteParams().WithClassName("ReferenceWaitingTestPlace")
+		delPlaceParams := clschema.NewSchemaObjectsDeleteParams().WithClassName("ReferenceWaitingTestPlace")
 		dresp, err = helper.Client(t).Schema.SchemaObjectsDelete(delPlaceParams, nil)
 		t.Logf("clean up - delete place \n%v\n %v", dresp, err)
 	}()
@@ -40,12 +41,13 @@ func Test_AddingReferenceWithoutWaiting_UsingPostObjects(t *testing.T) {
 		Class: "ReferenceWaitingTestPlace",
 		Properties: []*models.Property{
 			{
-				DataType: []string{"string"},
-				Name:     "name",
+				DataType:     schema.DataTypeText.PropString(),
+				Tokenization: models.PropertyTokenizationWhitespace,
+				Name:         "name",
 			},
 		},
 	}
-	params := schema.NewSchemaObjectsCreateParams().WithObjectClass(placeClass)
+	params := clschema.NewSchemaObjectsCreateParams().WithObjectClass(placeClass)
 	resp, err := helper.Client(t).Schema.SchemaObjectsCreate(params, nil)
 	helper.AssertRequestOk(t, resp, err, nil)
 
@@ -54,8 +56,9 @@ func Test_AddingReferenceWithoutWaiting_UsingPostObjects(t *testing.T) {
 		Class: "ReferenceWaitingTestCity",
 		Properties: []*models.Property{
 			{
-				DataType: []string{"string"},
-				Name:     "name",
+				DataType:     schema.DataTypeText.PropString(),
+				Tokenization: models.PropertyTokenizationWhitespace,
+				Name:         "name",
 			},
 			{
 				DataType: []string{"ReferenceWaitingTestPlace"},
@@ -63,7 +66,7 @@ func Test_AddingReferenceWithoutWaiting_UsingPostObjects(t *testing.T) {
 			},
 		},
 	}
-	params = schema.NewSchemaObjectsCreateParams().WithObjectClass(cityClass)
+	params = clschema.NewSchemaObjectsCreateParams().WithObjectClass(cityClass)
 	resp, err = helper.Client(t).Schema.SchemaObjectsCreate(params, nil)
 	helper.AssertRequestOk(t, resp, err, nil)
 
@@ -93,8 +96,8 @@ func Test_AddingReferenceWithoutWaiting_UsingPostObjects(t *testing.T) {
 		"name": "My City",
 		"hasPlace": []interface{}{
 			map[string]interface{}{
-				"beacon": fmt.Sprintf("weaviate://localhost/%s", placeID.String()),
-				"href":   fmt.Sprintf("/v1/objects/%s", placeID.String()),
+				"beacon": fmt.Sprintf("weaviate://localhost/%s/%s", "ReferenceWaitingTestPlace", placeID.String()),
+				"href":   fmt.Sprintf("/v1/objects/%s/%s", "ReferenceWaitingTestPlace", placeID.String()),
 			},
 		},
 	}, actualThunk)

@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package test
@@ -17,14 +17,15 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/semi-technologies/weaviate/test/helper"
-	graphqlhelper "github.com/semi-technologies/weaviate/test/helper/graphql"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/test/helper"
+	graphqlhelper "github.com/weaviate/weaviate/test/helper/graphql"
 )
 
 // This test prevents a regression on the fix for
-// https://github.com/semi-technologies/weaviate/issues/824
+// https://github.com/weaviate/weaviate/issues/824
 func localMeta_StringPropsNotSetEverywhere(t *testing.T) {
 	graphqlhelper.AssertGraphQL(t, helper.RootAuth, `
 		{
@@ -141,7 +142,7 @@ func localMetaWithWhereAndNearTextFilters(t *testing.T) {
 			typeField := name["type"]
 			topOccurrences := name["topOccurrences"]
 
-			assert.Equal(t, "string", typeField)
+			assert.Equal(t, schema.DataTypeText.String(), typeField)
 
 			expectedTopOccurrences := []interface{}{
 				map[string]interface{}{
@@ -250,7 +251,7 @@ func localMetaWithWhereAndNearTextFilters(t *testing.T) {
 			typeField := name["type"]
 			topOccurrences := name["topOccurrences"]
 
-			assert.Equal(t, "string", typeField)
+			assert.Equal(t, schema.DataTypeText.String(), typeField)
 
 			expectedTopOccurrences := []interface{}{
 				map[string]interface{}{
@@ -361,7 +362,7 @@ func localMetaWithWhereAndNearObjectFilters(t *testing.T) {
 			typeField := name["type"]
 			topOccurrences := name["topOccurrences"]
 
-			assert.Equal(t, "string", typeField)
+			assert.Equal(t, schema.DataTypeText.String(), typeField)
 
 			expectedTopOccurrences := []interface{}{
 				map[string]interface{}{
@@ -470,7 +471,7 @@ func localMetaWithWhereAndNearObjectFilters(t *testing.T) {
 			typeField := name["type"]
 			topOccurrences := name["topOccurrences"]
 
-			assert.Equal(t, "string", typeField)
+			assert.Equal(t, schema.DataTypeText.String(), typeField)
 
 			expectedTopOccurrences := []interface{}{
 				map[string]interface{}{
@@ -522,7 +523,7 @@ func localMetaWithNearVectorFilter(t *testing.T) {
 			typeField := name["type"]
 			topOccurrences := name["topOccurrences"]
 
-			assert.Equal(t, "string", typeField)
+			assert.Equal(t, schema.DataTypeText.String(), typeField)
 
 			expectedTopOccurrences := []interface{}{
 				map[string]interface{}{
@@ -572,7 +573,7 @@ func localMetaWithNearVectorFilter(t *testing.T) {
 			typeField := name["type"]
 			topOccurrences := name["topOccurrences"]
 
-			assert.Equal(t, "string", typeField)
+			assert.Equal(t, schema.DataTypeText.String(), typeField)
 
 			expectedTopOccurrences := []interface{}{
 				map[string]interface{}{
@@ -593,7 +594,7 @@ func localMetaWithWhereAndNearVectorFilters(t *testing.T) {
 				Aggregate {
 					CustomVectorClass(
 						where: {
-							valueString: "Ford"
+							valueText: "Ford"
 							operator: Equal
 							path: ["name"]
 						}
@@ -636,7 +637,7 @@ func localMetaWithWhereAndNearVectorFilters(t *testing.T) {
 				Aggregate {
 					CustomVectorClass(
 						where: {
-							valueString: "Ford"
+							valueText: "Ford"
 							operator: Equal
 							path: ["name"]
 						}
@@ -677,7 +678,7 @@ func localMetaWithWhereAndNearVectorFilters(t *testing.T) {
 				Aggregate {
 					CustomVectorClass(
 						where: {
-							valueString: "Mercedes"
+							valueText: "Mercedes"
 							operator: Equal
 							path: ["name"]
 						}
@@ -721,7 +722,7 @@ func localMetaWithWhereAndNearVectorFilters(t *testing.T) {
 				Aggregate {
 					CustomVectorClass(
 						where: {
-							valueString: "Ford"
+							valueText: "Ford"
 							operator: Equal
 							path: ["name"]
 						}
@@ -764,7 +765,7 @@ func localMetaWithWhereAndNearVectorFilters(t *testing.T) {
 				Aggregate {
 					CustomVectorClass(
 						where: {
-							valueString: "Ford"
+							valueText: "Ford"
 							operator: Equal
 							path: ["name"]
 						}
@@ -805,7 +806,7 @@ func localMetaWithWhereAndNearVectorFilters(t *testing.T) {
 				Aggregate {
 					CustomVectorClass(
 						where: {
-							valueString: "Mercedes"
+							valueText: "Mercedes"
 							operator: Equal
 							path: ["name"]
 						}
@@ -983,7 +984,7 @@ func localMetaWithWhereGroupByNearMediaFilters(t *testing.T) {
 					Company(where: {
 						path: ["name"]
 						operator: Equal
-						valueString: "Google Inc."
+						valueText: "Google Inc."
 					})
 					{
 						_additional {
@@ -1254,7 +1255,7 @@ func localMetaWithObjectLimit(t *testing.T) {
 					Company (
 						groupBy: ["name"]
 						where: {
-							valueString: "Apple*",
+							valueText: "Apple*",
 							operator: Like,
 							path: ["name"]
 						}

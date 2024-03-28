@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 //go:build integrationTest
@@ -16,43 +16,44 @@ package db
 
 import (
 	"context"
-	"math/rand"
 	"testing"
-	"time"
 
-	"github.com/semi-technologies/weaviate/entities/models"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	enthnsw "github.com/semi-technologies/weaviate/entities/vectorindex/hnsw"
-	"github.com/semi-technologies/weaviate/usecases/objects"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/weaviate/weaviate/entities/models"
+	"github.com/weaviate/weaviate/entities/schema"
+	enthnsw "github.com/weaviate/weaviate/entities/vectorindex/hnsw"
+	"github.com/weaviate/weaviate/entities/verbosity"
+	"github.com/weaviate/weaviate/usecases/objects"
 )
 
 func TestNodesAPI_Journey(t *testing.T) {
-	rand.Seed(time.Now().UnixNano())
 	dirName := t.TempDir()
 
 	logger := logrus.New()
-	schemaGetter := &fakeSchemaGetter{shardState: singleShardState()}
-	repo := New(logger, Config{
+	schemaGetter := &fakeSchemaGetter{
+		schema:     schema.Schema{Objects: &models.Schema{Classes: nil}},
+		shardState: singleShardState(),
+	}
+	repo, err := New(logger, Config{
 		ServerVersion:             "server-version",
 		GitHash:                   "git-hash",
-		MemtablesFlushIdleAfter:   60,
+		MemtablesFlushDirtyAfter:  60,
 		RootPath:                  dirName,
 		QueryMaximumResults:       10000,
 		MaxImportGoroutinesFactor: 1,
 		TrackVectorDimensions:     true,
 	}, &fakeRemoteClient{}, &fakeNodeResolver{}, &fakeRemoteNodeClient{}, &fakeReplicationClient{}, nil)
-	repo.SetSchemaGetter(schemaGetter)
-	err := repo.WaitForStartup(testCtx())
 	require.Nil(t, err)
+	repo.SetSchemaGetter(schemaGetter)
+	require.Nil(t, repo.WaitForStartup(testCtx()))
 
 	defer repo.Shutdown(context.Background())
 	migrator := NewMigrator(repo, logger)
 
 	// check nodes api response on empty DB
-	nodeStatues, err := repo.GetNodeStatuses(context.Background())
+	nodeStatues, err := repo.GetNodeStatus(context.Background(), "", verbosity.OutputVerbose)
 	require.Nil(t, err)
 	require.NotNil(t, nodeStatues)
 
@@ -74,8 +75,8 @@ func TestNodesAPI_Journey(t *testing.T) {
 		Properties: []*models.Property{
 			{
 				Name:         "stringProp",
-				DataType:     []string{string(schema.DataTypeString)},
-				Tokenization: "word",
+				DataType:     schema.DataTypeText.PropString(),
+				Tokenization: models.PropertyTokenizationWhitespace,
 			},
 		},
 	}
@@ -113,14 +114,14 @@ func TestNodesAPI_Journey(t *testing.T) {
 			UUID: "86a380e9-cb60-4b2a-bc48-51f52acd72d6",
 		},
 	}
-	batchRes, err := repo.BatchPutObjects(context.Background(), batch)
+	batchRes, err := repo.BatchPutObjects(context.Background(), batch, nil)
 	require.Nil(t, err)
 
 	assert.Nil(t, batchRes[0].Err)
 	assert.Nil(t, batchRes[1].Err)
 
 	// check nodes api after importing 2 objects to DB
-	nodeStatues, err = repo.GetNodeStatuses(context.Background())
+	nodeStatues, err = repo.GetNodeStatus(context.Background(), "", verbosity.OutputVerbose)
 	require.Nil(t, err)
 	require.NotNil(t, nodeStatues)
 
@@ -133,7 +134,11 @@ func TestNodesAPI_Journey(t *testing.T) {
 	assert.Len(t, nodeStatus.Shards, 1)
 	assert.Equal(t, "ClassNodesAPI", nodeStatus.Shards[0].Class)
 	assert.True(t, len(nodeStatus.Shards[0].Name) > 0)
-	assert.Equal(t, int64(2), nodeStatus.Shards[0].ObjectCount)
-	assert.Equal(t, int64(2), nodeStatus.Stats.ObjectCount)
+	// a previous version of this test made assertions on object counts,
+	// however with object count becoming async, we can no longer make exact
+	// assertions here. See https://github.com/weaviate/weaviate/issues/4193
+	// for details.
+	assert.Equal(t, "READY", nodeStatus.Shards[0].VectorIndexingStatus)
+	assert.Equal(t, int64(0), nodeStatus.Shards[0].VectorQueueLength)
 	assert.Equal(t, int64(1), nodeStatus.Stats.ShardCount)
 }

@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package clients
@@ -18,10 +18,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/pkg/errors"
-	"github.com/semi-technologies/weaviate/modules/multi2vec-clip/ent"
 	"github.com/sirupsen/logrus"
+	"github.com/weaviate/weaviate/modules/multi2vec-clip/ent"
 )
 
 type vectorizer struct {
@@ -30,16 +31,18 @@ type vectorizer struct {
 	logger     logrus.FieldLogger
 }
 
-func New(origin string, logger logrus.FieldLogger) *vectorizer {
+func New(origin string, timeout time.Duration, logger logrus.FieldLogger) *vectorizer {
 	return &vectorizer{
-		origin:     origin,
-		httpClient: &http.Client{},
-		logger:     logger,
+		origin: origin,
+		httpClient: &http.Client{
+			Timeout: timeout,
+		},
+		logger: logger,
 	}
 }
 
 func (v *vectorizer) Vectorize(ctx context.Context,
-	texts, images []string,
+	texts, images []string, config ent.VectorizationConfig,
 ) (*ent.VectorizationResult, error) {
 	body, err := json.Marshal(vecRequest{
 		Texts:  texts,
@@ -49,7 +52,7 @@ func (v *vectorizer) Vectorize(ctx context.Context,
 		return nil, errors.Wrapf(err, "marshal body")
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", v.url("/vectorize"),
+	req, err := http.NewRequestWithContext(ctx, "POST", v.url("/vectorize", config.InferenceURL),
 		bytes.NewReader(body))
 	if err != nil {
 		return nil, errors.Wrap(err, "create POST request")
@@ -82,7 +85,10 @@ func (v *vectorizer) Vectorize(ctx context.Context,
 	}, nil
 }
 
-func (v *vectorizer) url(path string) string {
+func (v *vectorizer) url(path string, inferenceURL string) string {
+	if inferenceURL != "" {
+		return fmt.Sprintf("%s%s", inferenceURL, path)
+	}
 	return fmt.Sprintf("%s%s", v.origin, path)
 }
 

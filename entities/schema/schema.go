@@ -4,15 +4,17 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package schema
 
 import (
-	"github.com/semi-technologies/weaviate/entities/models"
+	"strings"
+
+	"github.com/weaviate/weaviate/entities/models"
 )
 
 // Newtype to denote that this string is used as a Class name
@@ -50,4 +52,48 @@ func Empty() Schema {
 // Return one of the semantic schema's
 func (s *Schema) SemanticSchemaFor() *models.Schema {
 	return s.Objects
+}
+
+func UppercaseClassName(name string) string {
+	if len(name) < 1 {
+		return name
+	}
+
+	if len(name) == 1 {
+		return strings.ToUpper(name)
+	}
+
+	return strings.ToUpper(string(name[0])) + name[1:]
+}
+
+func LowercaseAllPropertyNames(props []*models.Property) []*models.Property {
+	for i, prop := range props {
+		props[i].Name = LowercaseFirstLetter(prop.Name)
+	}
+
+	return props
+}
+
+func LowercaseFirstLetter(name string) string {
+	if len(name) < 1 {
+		return name
+	}
+
+	if len(name) == 1 {
+		return strings.ToLower(name)
+	}
+
+	return strings.ToLower(string(name[0])) + name[1:]
+}
+
+func LowercaseFirstLetterOfStrings(in []string) []string {
+	if len(in) < 1 {
+		return in
+	}
+	out := make([]string, len(in))
+	for i, str := range in {
+		out[i] = LowercaseFirstLetter(str)
+	}
+
+	return out
 }

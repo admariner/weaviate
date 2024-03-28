@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package db
@@ -14,16 +14,11 @@ package db
 import (
 	"fmt"
 
-	"github.com/semi-technologies/weaviate/adapters/repos/db/inverted"
-	"github.com/semi-technologies/weaviate/entities/filters"
-	"github.com/semi-technologies/weaviate/entities/schema"
-	"github.com/semi-technologies/weaviate/entities/storobj"
+	"github.com/weaviate/weaviate/adapters/repos/db/inverted"
+	"github.com/weaviate/weaviate/entities/filters"
+	"github.com/weaviate/weaviate/entities/schema"
+	"github.com/weaviate/weaviate/entities/storobj"
 )
-
-type nilProp struct {
-	Name                string
-	AddToPropertyLength bool
-}
 
 func isPropertyForLength(dt schema.DataType) bool {
 	switch dt {
@@ -34,7 +29,7 @@ func isPropertyForLength(dt schema.DataType) bool {
 	}
 }
 
-func (s *Shard) analyzeObject(object *storobj.Object) ([]inverted.Property, []nilProp, error) {
+func (s *Shard) AnalyzeObject(object *storobj.Object) ([]inverted.Property, []inverted.NilProperty, error) {
 	schemaModel := s.index.getSchema.GetSchemaSkipAuth().Objects
 	c, err := schema.GetClassByName(schemaModel, object.Class().String())
 	if err != nil {
@@ -55,7 +50,7 @@ func (s *Shard) analyzeObject(object *storobj.Object) ([]inverted.Property, []ni
 
 	// add nil for all properties that are not part of the object so that they can be added to the inverted index for
 	// the null state (if enabled)
-	var nilProps []nilProp
+	var nilProps []inverted.NilProperty
 	if s.index.invertedIndexConfig.IndexNullState {
 		for _, prop := range c.Properties {
 			dt := schema.DataType(prop.DataType[0])
@@ -63,9 +58,13 @@ func (s *Shard) analyzeObject(object *storobj.Object) ([]inverted.Property, []ni
 			if dt == schema.DataTypeGeoCoordinates || dt == schema.DataTypePhoneNumber || dt == schema.DataTypeBlob {
 				continue
 			}
+
+			// Add props as nil props if
+			// 1. They are not in the schema map ( == nil)
+			// 2. Their inverted index is enabled
 			_, ok := schemaMap[prop.Name]
-			if !ok {
-				nilProps = append(nilProps, nilProp{
+			if !ok && inverted.HasInvertedIndex(prop) {
+				nilProps = append(nilProps, inverted.NilProperty{
 					Name:                prop.Name,
 					AddToPropertyLength: isPropertyForLength(dt),
 				})
@@ -81,6 +80,6 @@ func (s *Shard) analyzeObject(object *storobj.Object) ([]inverted.Property, []ni
 		schemaMap[filters.InternalPropLastUpdateTimeUnix] = object.Object.LastUpdateTimeUnix
 	}
 
-	props, err := inverted.NewAnalyzer(s.index.stopwords).Object(schemaMap, c.Properties, object.ID())
+	props, err := inverted.NewAnalyzer(s.isFallbackToSearchable).Object(schemaMap, c.Properties, object.ID())
 	return props, nilProps, err
 }

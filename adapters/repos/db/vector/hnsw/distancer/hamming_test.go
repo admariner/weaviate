@@ -4,9 +4,9 @@
 //  \ V  V /  __/ (_| |\ V /| | (_| | ||  __/
 //   \_/\_/ \___|\__,_| \_/ |_|\__,_|\__\___|
 //
-//  Copyright © 2016 - 2022 SeMI Technologies B.V. All rights reserved.
+//  Copyright © 2016 - 2024 Weaviate B.V. All rights reserved.
 //
-//  CONTACT: hello@semi.technology
+//  CONTACT: hello@weaviate.io
 //
 
 package distancer
@@ -77,5 +77,25 @@ func TestHammingDistancer(t *testing.T) {
 		require.Nil(t, err)
 		assert.Equal(t, control, dist)
 		assert.Equal(t, expectedDistance, dist)
+	})
+}
+
+func TestHammingDistancerStepbyStep(t *testing.T) {
+	t.Run("step by step equals SingleDist", func(t *testing.T) {
+		vec1 := []float32{10, 11, 15, 25, 31}
+		vec2 := []float32{10, 15, 16, 25, 30}
+
+		expectedDistance, ok, err := NewHammingProvider().New(vec1).Distance(vec2)
+		require.Nil(t, err)
+		require.True(t, ok)
+
+		distanceProvider := NewHammingProvider()
+		sum := float32(0.0)
+		for i := range vec1 {
+			sum += distanceProvider.Step([]float32{vec1[i]}, []float32{vec2[i]})
+		}
+		control := distanceProvider.Wrap(sum)
+
+		assert.Equal(t, control, expectedDistance)
 	})
 }
